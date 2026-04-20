@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: webinar-classroom
+    runtime: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm install && npm run build
+    startCommand: node server/webinar-server.mjs
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PORT
+        value: 10000
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: PYMD_API_KEY
+        sync: false
+      - key: PYMD_DOMAIN
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLW Webinar Platform</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="/static/data.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="topbar">
+        <div>
+          <p class="eyebrow">App 2</p>
+          <h1 style="font-size: 3rem; max-width: none;">LLW Webinar Hosting Platform</h1>
+          <p class="lede">Live classes, attendance, conversion tracking, server routing, and session quality.</p>
+        </div>
+        <div class="pill-nav">
+          <a href="/admin.html">Open Admin Portal</a>
+          <a href="/database.html">Open Database View</a>
+        </div>
+      </div>
+
+      <section class="panel span-12">
+        <p class="label">Realtime operations</p>
+        <div class="metric-grid">
+          <article class="metric">
+            <span class="label">Live Webinar</span>
+            <strong>1</strong>
+            <span class="muted">Indian Market Masterclass is live</span>
+          </article>
+          <article class="metric">
+            <span class="label">Leads</span>
+            <strong>1,984</strong>
+            <span class="muted">Current lead count in active room</span>
+          </article>
+          <article class="metric">
+            <span class="label">Attendees</span>
+            <strong>1,188</strong>
+            <span class="muted">734 stayed for pitch attendance</span>
+          </article>
+          <article class="metric">
+            <span class="label">Connection</span>
+            <strong>96%</strong>
+            <span class="muted">Excellent quality on Livekit-IN-03</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="grid" style="margin-top: 18px;">
+        <section class="panel span-8">
+          <p class="label">Live trend</p>
+          <h2>Attendance curve</h2>
+          <div class="two-col">
+            <article class="card">
+              <strong>Indian Market Masterclass Launch</strong>
+              <p class="muted">Aarav Mehta • 10 Apr 2026, 07:00 PM • Livekit-IN-03</p>
+              <div class="bars">
+                <span style="height:18%"></span>
+                <span style="height:22%"></span>
+                <span style="height:27%"></span>
+                <span style="height:41%"></span>
+                <span style="height:56%"></span>
+                <span style="height:74%"></span>
+                <span style="height:88%"></span>
+                <span style="height:97%"></span>
+                <span style="height:91%"></span>
+                <span style="height:85%"></span>
+                <span style="height:76%"></span>
+                <span style="height:63%"></span>
+              </div>
+            </article>
+
+            <article class="card">
+              <strong>Hosting actions</strong>
+              <div class="card-list">
+                <article class="notice">
+                  <div class="label">Current room</div>
+                  <div>live.llw.academy/rooms/indian-market-live</div>
+                </article>
+                <article class="notice">
+                  <div class="label">Teacher sync</div>
+                  <div>Uses teacher record from admin portal</div>
+                </article>
+                <article class="notice">
+                  <div class="label">Conversion sync</div>
+                  <div>216 conversions written back for admin reporting</div>
+                </article>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel span-4">
+          <p class="label">System notes</p>
+          <h2>What this app handles</h2>
+          <div class="card-list">
+            <article class="card"><strong>Meetings + webinars</strong><p class="muted">Separate UI type and server routing per session.</p></article>
+            <article class="card"><strong>Attendance analytics</strong><p class="muted">Tracks total attendees, peak attendance, pitch attendance, and quality.</p></article>
+            <article class="card"><strong>Linked revenue</strong><p class="muted">Sales events sync into PostgreSQL and become visible in admin payments.</p></article>
+          </div>
+        </section>
+
+        <section class="panel span-12">
+          <p class="label">Scheduled sessions</p>
+          <h2>Webinar queue</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Teacher</th>
+                  <th>Category</th>
+                  <th>Start</th>
+                  <th>Status</th>
+                  <th>Leads</th>
+                  <th>Attendees</th>
+                  <th>Conversions</th>
+                  <th>Server</th>
+                </tr>
+              </thead>
+              <tbody id="webinar-body"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const badgeClass = (status) => {
+        const key = String(status).toLowerCase();
+        if (key === "live") return "badge green";
+        if (key === "upcoming") return "badge amber";
+        return "badge blue";
+      };
+
+      const { webinars } = window.LLW_DATA;
+      document.getElementById("webinar-body").innerHTML = webinars.map((webinar) => `
+        <tr>
+          <td>${webinar[0]}</td>
+          <td>${webinar[1]}</td>
+          <td>${webinar[2]}</td>
+          <td>${webinar[3]}</td>
+          <td><span class="${badgeClass(webinar[4])}">${webinar[4]}</span></td>
+          <td>${webinar[5]}</td>
+          <td>${webinar[6]}</td>
+          <td>${webinar[8]}</td>
+          <td>${webinar[9]}</td>
+        </tr>
+      `).join("");
+    </script>
+  </body>
+</html>

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLW Database View</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="/static/data.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="topbar">
+        <div>
+          <p class="eyebrow">App 3</p>
+          <h1 style="font-size: 3rem; max-width: none;">PostgreSQL Data View</h1>
+          <p class="lede">Shared tables that connect the admin portal and webinar hosting platform.</p>
+        </div>
+        <div class="pill-nav">
+          <a href="/admin.html">Open Admin Portal</a>
+          <a href="/webinar.html">Open Webinar Platform</a>
+        </div>
+      </div>
+
+      <section class="grid">
+        <section class="panel span-7">
+          <p class="label">Database entities</p>
+          <h2>Core tables</h2>
+          <div class="db-grid" id="db-grid"></div>
+        </section>
+        <section class="panel span-5">
+          <p class="label">Schema preview</p>
+          <h2>Connected contract</h2>
+          <pre class="code">teachers -> courses -> cohorts
+teachers -> webinars -> payments
+payments -> refund_requests
+
+Hosting app writes attendance and conversions.
+Admin app reads payments, teachers, and pricing.
+Both use the same PostgreSQL ids.</pre>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const { databaseTables } = window.LLW_DATA;
+      document.getElementById("db-grid").innerHTML = databaseTables.map((table) => `
+        <article class="card">
+          <strong>${table[0]}</strong>
+          <p class="muted">${table[1]}</p>
+          <div class="chip-row">${table[2].map((chip) => `<span class="chip">${chip}</span>`).join("")}</div>
+        </article>
+      `).join("");
+    </script>
+  </body>
+</html>

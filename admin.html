@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLW Admin Portal</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="/static/data.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="topbar">
+        <div>
+          <p class="eyebrow">App 1</p>
+          <h1 style="font-size: 3rem; max-width: none;">LLW Admin Portal</h1>
+          <p class="lede">Teachers, pricing, payments, cohorts, sales, and refunds for all courses.</p>
+        </div>
+        <div class="pill-nav">
+          <a href="/webinar.html">Open Webinar App</a>
+          <a href="/database.html">Open Database View</a>
+        </div>
+      </div>
+
+      <section class="panel span-12">
+        <p class="label">Live business status</p>
+        <div class="metric-grid">
+          <article class="metric">
+            <span class="label">Courses</span>
+            <strong>12</strong>
+            <span class="muted">Online + offline structure loaded</span>
+          </article>
+          <article class="metric">
+            <span class="label">Teachers</span>
+            <strong>10</strong>
+            <span class="muted">Placeholder teachers ready to edit</span>
+          </article>
+          <article class="metric">
+            <span class="label">Live Fee</span>
+            <strong>₹1</strong>
+            <span class="muted">Applied to all course plans</span>
+          </article>
+          <article class="metric">
+            <span class="label">Payments</span>
+            <strong>6</strong>
+            <span class="muted">Seeded payment rows for demo</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="grid" style="margin-top: 18px;">
+        <section class="panel span-7">
+          <p class="label">Teacher directory</p>
+          <h2>Seeded teacher list</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>City</th>
+                  <th>Expertise</th>
+                  <th>Rating</th>
+                  <th>Students</th>
+                </tr>
+              </thead>
+              <tbody id="teacher-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel span-5">
+          <p class="label">Course catalog</p>
+          <h2>All fees reduced to ₹1</h2>
+          <div class="course-grid" id="course-grid"></div>
+        </section>
+
+        <section class="panel span-8">
+          <p class="label">Payments</p>
+          <h2>Sales tracking</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Student</th>
+                  <th>Phone</th>
+                  <th>Course</th>
+                  <th>Source</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="payment-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel span-4">
+          <p class="label">Interlinked architecture</p>
+          <h2>Admin responsibilities</h2>
+          <div class="card-list">
+            <article class="card">
+              <strong>Teacher management</strong>
+              <p class="muted">Create and edit faculty records used by webinar scheduling and course mapping.</p>
+            </article>
+            <article class="card">
+              <strong>Pricing control</strong>
+              <p class="muted">Set original course fees and current live promo fee, now fixed at ₹1.</p>
+            </article>
+            <article class="card">
+              <strong>Sales ops</strong>
+              <p class="muted">Track payments, refunds, and cohorts from the same PostgreSQL-backed records.</p>
+            </article>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const formatINR = (value) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
+      const badgeClass = (status) => {
+        const key = String(status).toLowerCase();
+        if (key === "completed") return "badge green";
+        if (key === "pending" || key === "upcoming") return "badge amber";
+        if (key === "failed") return "badge red";
+        return "badge blue";
+      };
+
+      const { teachers, courses, payments } = window.LLW_DATA;
+
+      document.getElementById("teacher-body").innerHTML = teachers.map((teacher) => `
+        <tr>
+          <td>${teacher[0]}<br><span class="muted">${teacher[1]}</span></td>
+          <td>${teacher[2]}</td>
+          <td>${teacher[3]}</td>
+          <td>${teacher[4]}</td>
+          <td>${teacher[5]}</td>
+        </tr>
+      `).join("");
+
+      document.getElementById("course-grid").innerHTML = courses.map((course) => `
+        <article class="card">
+          <span class="badge blue">${course[1]}</span>
+          <h3 style="margin-top: 12px;">${course[0]}</h3>
+          <div class="price-row">
+            <span class="strike">${formatINR(course[2])}</span>
+            <strong>${formatINR(course[3])}</strong>
+          </div>
+          <div class="chip-row">
+            <span class="chip">${course[4]} sales</span>
+            <span class="chip">${course[5]} cohorts</span>
+          </div>
+        </article>
+      `).join("");
+
+      document.getElementById("payment-body").innerHTML = payments.map((payment) => `
+        <tr>
+          <td>${payment[0]}</td>
+          <td>${payment[1]}</td>
+          <td>${payment[2]}</td>
+          <td>${payment[3]}</td>
+          <td>${formatINR(payment[4])}</td>
+          <td><span class="${badgeClass(payment[5])}">${payment[5]}</span></td>
+          <td>${payment[6]}</td>
+        </tr>
+      `).join("");
+    </script>
+  </body>
+</html>
