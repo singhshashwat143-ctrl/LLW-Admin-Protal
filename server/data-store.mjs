@@ -280,6 +280,14 @@ function normalizeSettings(settings = {}) {
   return {
     ...settings,
     bdm_coupon_limit_inr: Number(settings.bdm_coupon_limit_inr ?? settings.bdmCouponLimitInr ?? 1000000),
+    aisensy_payment_link_campaign:
+      settings.aisensy_payment_link_campaign
+      || settings.aisensyPaymentLinkCampaign
+      || "payment_link_onboarding_2",
+    aisensy_webhook_url:
+      settings.aisensy_webhook_url
+      || settings.aisensyWebhookUrl
+      || "",
     updated_at: settings.updated_at || settings.updatedAt || nowIso(),
   };
 }

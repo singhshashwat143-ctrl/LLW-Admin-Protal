@@ -51,7 +51,18 @@ export function SettingsPage() {
   const [showCoupons, setShowCoupons] = useState(false);
   const [notice, setNotice] = useState("");
   const [couponForm, setCouponForm] = useState(initialCouponForm);
+  const [notificationSettings, setNotificationSettings] = useState({
+    aisensyPaymentLinkCampaign: "",
+    aisensyWebhookUrl: "",
+  });
   const canManageCoupons = isAdminLevel || user?.role === "BDM";
+
+  useEffect(() => {
+    setNotificationSettings({
+      aisensyPaymentLinkCampaign: settings?.aisensyPaymentLinkCampaign || "",
+      aisensyWebhookUrl: settings?.aisensyWebhookUrl || "",
+    });
+  }, [settings?.aisensyPaymentLinkCampaign, settings?.aisensyWebhookUrl]);
 
   async function createCoupon() {
     if (!canManageCoupons) {
@@ -81,6 +92,25 @@ export function SettingsPage() {
     }
   }
 
+  async function saveNotificationSettings() {
+    if (!isAdminLevel) {
+      setNotice("Only admin and super-admin users can update notification settings.");
+      return;
+    }
+    try {
+      await api("/api/settings/notifications", {
+        method: "PATCH",
+        body: JSON.stringify({
+          aisensy_payment_link_campaign: notificationSettings.aisensyPaymentLinkCampaign,
+          aisensy_webhook_url: notificationSettings.aisensyWebhookUrl,
+        }),
+      });
+      setNotice("Notification settings updated.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to update notification settings.");
+    }
+  }
+
   return (
     <div className="page-grid">
       <PageHeader eyebrow="Settings" title="System settings" description="Manage coupon rules and platform controls for the roles that own them." />
@@ -102,6 +132,34 @@ export function SettingsPage() {
                   <p className="mt-2 break-all font-mono text-sm">{String(value)}</p>
                 </div>
               ))}
+          </div>
+        </SectionCard>
+      ) : null}
+
+      {isAdminLevel ? (
+        <SectionCard title="Notification Settings" subtitle="Set the AiSensy API campaign that matches your approved payment-link template.">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">AiSensy payment-link campaign</span>
+              <input
+                className="input-dark"
+                value={notificationSettings.aisensyPaymentLinkCampaign}
+                onChange={(event) => setNotificationSettings((current) => ({ ...current, aisensyPaymentLinkCampaign: event.target.value }))}
+                placeholder="payment_link_onboarding_2"
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">AiSensy webhook URL</span>
+              <input
+                className="input-dark"
+                value={notificationSettings.aisensyWebhookUrl}
+                onChange={(event) => setNotificationSettings((current) => ({ ...current, aisensyWebhookUrl: event.target.value }))}
+                placeholder="https://funnels.livelongwealth.in/webhook/aisensy"
+              />
+            </label>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button className="btn-primary" type="button" onClick={saveNotificationSettings}>Save Notification Settings</button>
           </div>
         </SectionCard>
       ) : null}

@@ -34,6 +34,16 @@ type TeamResponse = {
   bdas: Array<{ id: string; name: string; manager_name?: string }>;
 };
 
+type OnboardingResult = {
+  paymentLink?: string;
+  orderId?: string;
+  transactionId?: string;
+  customerName?: string;
+  phone?: string;
+  productName?: string;
+  senderName?: string;
+};
+
 const initialForm = {
   customer_name: "",
   phone: "",
@@ -66,9 +76,10 @@ export function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const [result, setResult] = useState<{ paymentLink?: string; orderId?: string; transactionId?: string } | null>(null);
+  const [result, setResult] = useState<OnboardingResult | null>(null);
   const [recentCampaigns, setRecentCampaigns] = useState<CampaignRow[]>([]);
   const [campaignOptions, setCampaignOptions] = useState<CampaignRow[]>([]);
+  const [sendingAiSensy, setSendingAiSensy] = useState(false);
 
   useEffect(() => {
     if (!form.bda_id && teamApi.data.bdas.length) {
@@ -146,6 +157,10 @@ export function OnboardingPage() {
   const tokenAmount = Number(form.token_amount || 0) * 100;
   const initialCollection = form.payment_type === "TOKEN" ? tokenAmount : fullAmount;
   const dueAmount = Math.max(fullAmount - initialCollection, 0);
+  const assignedBda = useMemo(
+    () => teamApi.data.bdas.find((entry) => entry.id === form.bda_id) ?? null,
+    [form.bda_id, teamApi.data.bdas],
+  );
 
   function updateField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -191,6 +206,10 @@ export function OnboardingPage() {
         paymentLink: response.link?.short_url || response.payment?.payment_link || "",
         orderId: response.order?.id,
         transactionId: response.payment?.transaction_id,
+        customerName: form.customer_name,
+        phone: form.phone,
+        productName: selectedProduct?.name || "",
+        senderName: user?.role === "ADMIN" || user?.role === "SUPER_ADMIN" ? assignedBda?.name || user?.name || "" : user?.name || "",
       });
       setNotice(
         form.payment_method === "RAZORPAY"
@@ -214,11 +233,38 @@ export function OnboardingPage() {
     setNotice("Payment link copied to clipboard.");
   }
 
+  async function sendAiSensyMessage() {
+    if (!result?.paymentLink || !result.customerName || !result.phone || !result.productName) {
+      setError("Generate the enrollment link first, then send the AiSensy message.");
+      return;
+    }
+    try {
+      setSendingAiSensy(true);
+      setError("");
+      const response = await api<{ message?: string }>("/api/notifications/aisensy/payment-link", {
+        method: "POST",
+        body: JSON.stringify({
+          order_id: result.orderId,
+          customer_name: result.customerName,
+          phone: result.phone,
+          product_name: result.productName,
+          payment_link: result.paymentLink,
+          sender_name: result.senderName || user?.name || "",
+        }),
+      });
+      setNotice(response.message || "AiSensy message sent.");
+    } catch (sendError) {
+      setError(sendError instanceof Error ? sendError.message : "Unable to send AiSensy message.");
+    } finally {
+      setSendingAiSensy(false);
+    }
+  }
+
   return (
     <div className="page-grid compact-canvas">
       <PageHeader
-        eyebrow="BDA Onboarding"
-        title="Customer onboarding form"
+        eyebrow="Ondoarding Form"
+        title="Ondoarding Form"
         description="Create a fresh enrollment for a BDA, choose Razorpay or a manual payment method, and automatically calculate the remaining amount when a token is collected."
         actions={
           <>
@@ -232,7 +278,7 @@ export function OnboardingPage() {
       {error ? <div className="rounded-[22px] border border-[rgba(239,68,68,0.18)] bg-[rgba(239,68,68,0.08)] px-5 py-4 text-sm text-[var(--danger)]">{error}</div> : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
-        <SectionCard title="Enrollment Form" subtitle="A lightweight OMS-style onboarding flow for BDAs and operations.">
+        <SectionCard title="Ondoarding Form" subtitle="A lightweight OMS-style onboarding flow for BDAs and operations.">
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2">
               <span className="text-sm font-medium text-[var(--text-secondary)]">Customer name</span>
@@ -350,6 +396,11 @@ export function OnboardingPage() {
             {result?.paymentLink ? (
               <button className="btn-secondary" type="button" onClick={copyResultLink}>Copy Payment Link</button>
             ) : null}
+            {result?.paymentLink ? (
+              <button className="btn-secondary" type="button" onClick={sendAiSensyMessage} disabled={sendingAiSensy}>
+                {sendingAiSensy ? "Sending AiSensy..." : "Send via AiSensy"}
+              </button>
+            ) : null}
           </div>
         </SectionCard>
 
@@ -384,7 +435,16 @@ export function OnboardingPage() {
                 <div className="font-semibold text-[var(--text-strong)]">Latest result</div>
                 <div className="mt-2 text-[var(--text-secondary)]">Order ID: <span className="font-mono text-[var(--text-strong)]">{result.orderId}</span></div>
                 {result.transactionId ? <div className="mt-1 text-[var(--text-secondary)]">Transaction ID: <span className="font-mono text-[var(--text-strong)]">{result.transactionId}</span></div> : null}
+                {result.senderName ? <div className="mt-1 text-[var(--text-secondary)]">Sender: <span className="text-[var(--text-strong)]">{result.senderName}</span></div> : null}
+                {result.productName ? <div className="mt-1 text-[var(--text-secondary)]">Product: <span className="text-[var(--text-strong)]">{result.productName}</span></div> : null}
                 {result.paymentLink ? <div className="mt-1 break-all text-[var(--text-secondary)]">Link: <span className="text-[var(--accent)]">{result.paymentLink}</span></div> : null}
+                {result.paymentLink ? (
+                  <div className="mt-3 rounded-2xl border border-[rgba(201,168,76,0.16)] bg-[rgba(255,255,255,0.03)] p-3 text-xs leading-6 text-[var(--text-secondary)]">
+                    Hi {result.customerName || "Customer"} ji, I am {result.senderName || user?.name || "Livelong Wealth"}. We just got on a call, and as discussed, here is the payment link for your {result.productName || "program"} enrollment.
+                    Proceed to pay; the window will expire by the end of this day.
+                    Payment Link: {result.paymentLink}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>

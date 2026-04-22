@@ -17,6 +17,7 @@ import { MarketingPage } from "./pages/Marketing";
 import { OrdersPage } from "./pages/Orders";
 import { OperationsPage } from "./pages/Operations";
 import { PaymentCheckoutPage, PaymentsPage } from "./pages/Payments";
+import { PrivacyPolicyPage } from "./pages/PrivacyPolicy";
 import { OnboardingPage } from "./pages/Onboarding";
 import { ProductsPage } from "./pages/Products";
 import { RefundsPage } from "./pages/Refunds";
@@ -80,6 +81,10 @@ export default function App() {
 
   if (route.pattern === "/payment/:id") {
     return <PaymentCheckoutPage id={route.params.id} />;
+  }
+
+  if (route.pattern === "/privacy-policy") {
+    return <PrivacyPolicyPage />;
   }
 
   if (route.pattern === "/masterclass/:slug") {

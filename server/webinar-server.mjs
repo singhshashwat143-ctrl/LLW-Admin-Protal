@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 import { OAuth2Client } from "google-auth-library";
 import { Server } from "socket.io";
+import { AccessToken } from "livekit-server-sdk";
 import { constants, createDashboardStore } from "./data-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,7 +30,13 @@ const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
 const razorpayBaseUrl = "https://api.razorpay.com/v1";
 const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
+const aisensyApiKey = process.env.AISSENSY_API_KEY || process.env.AISENSY_API_KEY || "";
+const aisensyPaymentLinkCampaign = process.env.AISSENSY_PAYMENT_LINK_CAMPAIGN || "payment_link_onboarding_2";
+const aisensyWebhookUrl = process.env.AISSENSY_WEBHOOK_URL || "";
 const sessionSecret = process.env.SESSION_SECRET || "llw-demo-session-secret";
+const livekitUrl = process.env.LIVEKIT_URL || process.env.LIVEKIT_HOST_URL || "";
+const livekitApiKey = process.env.LIVEKIT_API_KEY || "";
+const livekitApiSecret = process.env.LIVEKIT_API_SECRET || "";
 const googleOauthClient = new OAuth2Client(googleClientId, googleClientSecret);
 const roomPresence = new Map();
 const roomChats = new Map();
@@ -203,6 +210,54 @@ async function createRazorpayOrder(order, customer = {}) {
   });
 }
 
+async function fetchRazorpayOrderPayments(razorpayOrderId) {
+  return razorpayRequest(`/orders/${razorpayOrderId}/payments`, {
+    method: "GET",
+  });
+}
+
+function normalizeAiSensyPhone(phone = "") {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("91") && digits.length === 12) return `+${digits}`;
+  if (digits.length === 10) return `+91${digits}`;
+  return digits.startsWith("+") ? digits : `+${digits}`;
+}
+
+async function sendAiSensyCampaign(payload) {
+  const response = await fetch("https://backend.aisensy.com/campaign/t1/api/v2", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const raw = await response.text();
+  let body = null;
+  try {
+    body = raw ? JSON.parse(raw) : null;
+  } catch {
+    body = raw;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      typeof body === "object" && body?.message
+        ? body.message
+        : `AiSensy request failed: ${response.status}${raw ? ` ${raw}` : ""}`,
+    );
+  }
+
+  return body;
+}
+
+function getAiSensyErrorMessage(error) {
+  if (!error) return "";
+  if (error instanceof Error) return error.message || "";
+  return String(error);
+}
+
 function attachRazorpayOrder(order, razorpayOrder) {
   order.razorpay_order_id = razorpayOrder.id;
   order.gateway_provider = "RAZORPAY";
@@ -327,9 +382,7 @@ function createSessionToken(user) {
   return `${payload}.${signature}`;
 }
 
-function getCurrentUser(req) {
-  const authHeader = String(req.get("authorization") || "");
-  const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+function getUserFromSessionToken(token) {
   if (!token) return null;
 
   const [payload, signature] = token.split(".");
@@ -347,6 +400,12 @@ function getCurrentUser(req) {
   } catch {
     return null;
   }
+}
+
+function getCurrentUser(req) {
+  const authHeader = String(req.get("authorization") || "");
+  const token = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  return getUserFromSessionToken(token);
 }
 
 function requireAuthenticatedUser(req, res) {
@@ -380,6 +439,28 @@ function isOperationsUser(user) {
 
 function isMarketingUser(user) {
   return normalizeUserRole(user) === "MARKETING";
+}
+
+function canJoinAsHost(user) {
+  return isAdminUser(user);
+}
+
+async function createLiveKitToken({ roomName, identity, name, canPublish }) {
+  if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
+    return null;
+  }
+  const token = new AccessToken(livekitApiKey, livekitApiSecret, {
+    identity,
+    name,
+  });
+  token.addGrant({
+    roomJoin: true,
+    room: roomName,
+    canPublish,
+    canPublishData: canPublish,
+    canSubscribe: true,
+  });
+  return token.toJwt();
 }
 
 function requireAdminPermission(req, res, message = "This action requires admin approval.") {
@@ -1055,15 +1136,29 @@ app.get("/api/rooms/:roomName", (req, res) => {
   });
 });
 
-app.post("/api/rooms/:roomName/join", (req, res) => {
+app.post("/api/rooms/:roomName/join", async (req, res) => {
   try {
-    const role = String(req.body?.role || "ATTENDEE").toUpperCase();
+    const requestedRole = String(req.body?.role || "ATTENDEE").toUpperCase();
+    const role = requestedRole === "HOST" ? "HOST" : "ATTENDEE";
+    const currentUser = role === "HOST" ? requireAuthenticatedUser(req, res) : null;
+    if (role === "HOST") {
+      if (!currentUser) return;
+      if (!canJoinAsHost(currentUser)) {
+        return res.status(403).json({ ok: false, message: "Only admin or super-admin users can join as host." });
+      }
+    }
     const joined = store.joinRoom({
       roomName: req.params.roomName,
       role,
-      name: req.body?.name,
+      name: role === "HOST" ? String(req.body?.name || currentUser?.name || "Host Console") : req.body?.name,
       phone: req.body?.phone,
-      email: req.body?.email,
+      email: role === "HOST" ? String(currentUser?.email || "") : req.body?.email,
+    });
+    const livekitToken = await createLiveKitToken({
+      roomName: req.params.roomName,
+      identity: joined.attendance.id,
+      name: joined.attendance.name,
+      canPublish: role === "HOST",
     });
 
     res.json({
@@ -1072,6 +1167,12 @@ app.post("/api/rooms/:roomName/join", (req, res) => {
       session: serializeSession(req, joined.session),
       attendance: joined.attendance,
       student: joined.student,
+      livekit: {
+        url: livekitUrl,
+        token: livekitToken,
+        identity: joined.attendance.id,
+        canPublish: role === "HOST",
+      },
     });
   } catch (error) {
     res.status(404).json({ ok: false, message: error instanceof Error ? error.message : "Join failed" });
@@ -1475,6 +1576,75 @@ app.post("/api/orders/mark-payment-failed", (req, res) => {
   }
 });
 
+app.post("/api/orders/reconcile-payment", async (req, res) => {
+  try {
+    const payment = req.body?.payment_id ? store.getPaymentRecord(req.body.payment_id) : null;
+    const order = payment
+      ? store.data.orders.find((item) => item.id === payment.order_id)
+      : store.data.orders.find((item) => item.id === req.body?.order_id || item.order_number === req.body?.order_number);
+    if (!order) {
+      return res.status(404).json({ ok: false, message: "Order not found" });
+    }
+
+    if (payment?.status === "PAID" || order.status === "ACTIVE" || order.status === "OPERATIONS_IN_PROGRESS") {
+      return res.json({ ok: true, paid: true, order: store.attachOrder(order), payment: payment || store.getLatestPaymentForOrder(order.id, { preferOpen: true }) });
+    }
+
+    const openPayment = payment || store.getLatestPaymentForOrder(order.id, { preferOpen: true });
+    if (!openPayment?.razorpay_order_id) {
+      return res.status(400).json({ ok: false, paid: false, message: "Razorpay order not initialized yet." });
+    }
+
+    const response = await fetchRazorpayOrderPayments(openPayment.razorpay_order_id);
+    const payments = Array.isArray(response?.items) ? response.items : [];
+    const orderedPayments = [...payments].sort((left, right) => Number(right.created_at || 0) - Number(left.created_at || 0));
+    const paidPayment = orderedPayments.find((item) => ["captured", "authorized"].includes(String(item.status || "").toLowerCase()));
+
+    if (!paidPayment) {
+      const failedPayment = orderedPayments.find((item) => String(item.status || "").toLowerCase() === "failed");
+      if (failedPayment) {
+        openPayment.razorpay_payment_id = failedPayment.id || openPayment.razorpay_payment_id;
+        openPayment.updated_at = new Date().toISOString();
+        const failureMessage = failedPayment.error_description || failedPayment.error_reason || "Payment failed on Razorpay.";
+        const result = store.markPaymentFailed({
+          payment_id: openPayment.id,
+          order_id: order.id,
+          failure_code: failedPayment.error_code,
+          failure_reason: failureMessage,
+        });
+        return res.json({ ok: true, paid: false, failed: true, message: failureMessage, ...result });
+      }
+      return res.json({ ok: true, paid: false, order: store.attachOrder(order), payment: openPayment });
+    }
+
+    const result = store.markPaymentPaid({
+      payment_id: openPayment.id,
+      order_id: order.id,
+      razorpay_order_id: paidPayment.order_id || openPayment.razorpay_order_id,
+      razorpay_payment_id: paidPayment.id,
+      razorpay_signature: openPayment.razorpay_signature || "",
+    });
+
+    if (result?.order?.webinar_id) {
+      const webinar = store.data.webinars.find((item) => item.id === result.order.webinar_id);
+      if (webinar?.livekit_room_name) {
+        addRoomMessage(webinar.livekit_room_name, {
+          role: "SYSTEM",
+          name: "Enrollment",
+          text: `Congratulations! ${result.order.student?.name || result.order.student_name || "A learner"} has enrolled.`,
+          target: "ALL",
+          messageType: "TOAST",
+          highlight: true,
+        });
+      }
+    }
+
+    return res.json({ ok: true, paid: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, paid: false, message: error instanceof Error ? error.message : "Unable to reconcile payment." });
+  }
+});
+
 app.post("/api/orders/checkout-session", async (req, res) => {
   try {
     const payment = req.body?.payment_id
@@ -1612,10 +1782,12 @@ app.get("/api/team", (req, res) => {
 app.get("/api/settings", (req, res) => {
   const user = requireSettingsPermission(req, res);
   if (!user) return;
+  const systemSettings = store.getSystemSettings();
   const sharedSettings = {
     couponPolicy: {
       bdm_max_coupon_percent: 20,
     },
+    aisensyPaymentLinkCampaign: systemSettings.aisensy_payment_link_campaign || aisensyPaymentLinkCampaign,
   };
   if (!isAdminUser(user)) {
     return res.json({ ok: true, settings: sharedSettings });
@@ -1631,7 +1803,9 @@ app.get("/api/settings", (req, res) => {
       razorpayKeySecret: `${razorpayKeySecret.slice(0, 4)}••••${razorpayKeySecret.slice(-4)}`,
       googleClientId,
       googleClientSecret: maskSecret(googleClientSecret),
-      aisensyApiKey: "ais_demo_key",
+      aisensyApiKey: aisensyApiKey ? `${aisensyApiKey.slice(0, 8)}••••${aisensyApiKey.slice(-6)}` : "",
+      aisensyWebhookUrl: systemSettings.aisensy_webhook_url || aisensyWebhookUrl,
+      aisensyPaymentLinkCampaign: systemSettings.aisensy_payment_link_campaign || aisensyPaymentLinkCampaign,
       tinyurlToken: "tiny_demo_token",
       defaultWhatsAppTemplateIds: "enrollment_confirmation, webinar_reminder",
       platformName: "Livelong Wealth",
@@ -1639,6 +1813,125 @@ app.get("/api/settings", (req, res) => {
       liveServers: constants.serverOptions,
     },
   });
+});
+
+app.patch("/api/settings/notifications", (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can update notification settings.");
+  if (!user) return;
+  try {
+    const settings = store.updateSystemSettings({
+      aisensy_payment_link_campaign: String(req.body?.aisensy_payment_link_campaign || aisensyPaymentLinkCampaign || "").trim(),
+      aisensy_webhook_url: String(req.body?.aisensy_webhook_url || "").trim(),
+    });
+    res.json({ ok: true, settings });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to update notification settings." });
+  }
+});
+
+app.post("/api/notifications/aisensy/payment-link", async (req, res) => {
+  const user = requireAuthenticatedUser(req, res);
+  if (!user) return;
+  try {
+    const systemSettings = store.getSystemSettings();
+    const campaignName = String(systemSettings.aisensy_payment_link_campaign || aisensyPaymentLinkCampaign || "").trim();
+    if (!aisensyApiKey) {
+      return res.status(400).json({ ok: false, message: "AiSensy API key is not configured." });
+    }
+    if (!campaignName) {
+      return res.status(400).json({ ok: false, message: "AiSensy payment-link campaign name is missing." });
+    }
+
+    const paymentRecord = req.body?.payment_id
+      ? store.getPaymentRecord(req.body.payment_id)
+      : req.body?.order_id
+        ? store.getLatestPaymentForOrder(req.body.order_id, { preferOpen: true })
+        : null;
+    const linkedOrder = paymentRecord
+      ? store.data.orders.find((item) => item.id === paymentRecord.order_id)
+      : req.body?.order_id
+        ? store.data.orders.find((item) => item.id === req.body.order_id)
+        : null;
+
+    const customerName = String(req.body?.customer_name || "").trim();
+    const rawPhone = String(req.body?.phone || "").trim();
+    const destination = normalizeAiSensyPhone(rawPhone);
+    const productName = String(req.body?.product_name || "").trim();
+    let paymentLink = String(req.body?.payment_link || "").trim();
+    const orderId = String(req.body?.order_id || "").trim();
+    const senderName = String(req.body?.sender_name || user.name || user.email || "Livelong Wealth").trim();
+
+    if (!customerName || !destination || !productName || !paymentLink) {
+      return res.status(400).json({ ok: false, message: "Customer name, phone, product name, and payment link are required." });
+    }
+
+    if (paymentRecord && !String(paymentLink).includes("py.md/")) {
+      try {
+        const target = String(paymentRecord.payment_link || "").startsWith("http")
+          ? String(paymentRecord.payment_link)
+          : withPublicAbsolute(req, paymentRecord.payment_link || `/payment/${paymentRecord.id}`);
+        const external = await createPyMdShortLink({
+          target,
+          label: `Payment ${linkedOrder?.offer_title || linkedOrder?.order_number || productName || customerName || paymentRecord.id}`,
+          preferredSlug: createEditableAlias(
+            "",
+            linkedOrder?.offer_title || productName || customerName || paymentRecord.id,
+          ),
+        });
+        updatePaymentLinkRecord(paymentRecord.id, external.short_url);
+        paymentLink = external.short_url;
+      } catch {
+        // If PyMD upgrade fails here, continue with the current link rather than blocking the message.
+      }
+    }
+
+    const basePayload = {
+      apiKey: aisensyApiKey,
+      campaignName,
+      destination,
+      userName: customerName,
+      source: "Ondoarding Form",
+      tags: ["payment-link", "onboarding"],
+      attributes: {
+        order_id: orderId || "",
+        product_name: productName,
+        payment_link: paymentLink,
+        assigned_rep: senderName,
+      },
+    };
+
+    let result = null;
+    let templateParamsUsed = [];
+    try {
+      templateParamsUsed = [customerName, senderName, productName, paymentLink];
+      result = await sendAiSensyCampaign({
+        ...basePayload,
+        templateParams: templateParamsUsed,
+      });
+    } catch (error) {
+      const message = getAiSensyErrorMessage(error).toLowerCase();
+      if (!message.includes("template params")) {
+        throw error;
+      }
+
+      templateParamsUsed = [senderName, productName, paymentLink];
+      result = await sendAiSensyCampaign({
+        ...basePayload,
+        templateParams: templateParamsUsed,
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: `AiSensy message sent to ${customerName}.`,
+      campaignName,
+      templateParamsUsed,
+      webhookUrl: systemSettings.aisensy_webhook_url || aisensyWebhookUrl || "",
+      result,
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to send AiSensy message." });
+  }
 });
 
 app.patch("/api/settings/coupon-policy", (req, res) => {
@@ -1655,13 +1948,7 @@ app.patch("/api/settings/coupon-policy", (req, res) => {
 });
 
 app.post("/api/livekit/attendee-token", (req, res) => {
-  const { roomName, participantName, participantPhone } = req.body ?? {};
-  res.json({
-    ok: true,
-    token: `attendee-${roomName}-${participantPhone}`,
-    participantName,
-    participantPhone,
-  });
+  res.status(501).json({ ok: false, message: "Use the room join endpoint to receive a LiveKit token." });
 });
 
 app.get("/:slug", (req, res, next) => {
@@ -1687,15 +1974,35 @@ io.on("connection", (socket) => {
   const auth = socket.handshake.auth || {};
   const roomName = String(auth.roomName || "");
   const attendanceId = String(auth.attendanceId || "");
-  const role = String(auth.role || "ATTENDEE").toUpperCase();
-  const name = String(auth.name || "Guest");
-  const phone = String(auth.phone || "");
-  const email = String(auth.email || "");
+  const sessionUser = getUserFromSessionToken(String(auth.token || ""));
 
-  if (!roomName) {
+  if (!roomName || !attendanceId) {
     socket.disconnect(true);
     return;
   }
+
+  const attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId);
+  if (!attendance) {
+    socket.disconnect(true);
+    return;
+  }
+  const room = store.getRoomByName(roomName);
+  if (!room?.session || attendance.session_id !== room.session.id) {
+    socket.disconnect(true);
+    return;
+  }
+
+  const role = String(attendance.role || "ATTENDEE").toUpperCase();
+  if (role === "HOST") {
+    if (!sessionUser || !canJoinAsHost(sessionUser) || String(sessionUser.email || "").toLowerCase() !== String(attendance.email || "").toLowerCase()) {
+      socket.disconnect(true);
+      return;
+    }
+  }
+
+  const name = String(attendance.name || auth.name || "Guest");
+  const phone = String(attendance.phone || auth.phone || "");
+  const email = String(attendance.email || auth.email || "");
 
   socketRoomMeta.set(socket.id, { roomName, attendanceId, role, name, phone, email });
   socket.join(roomName);
@@ -1731,6 +2038,9 @@ io.on("connection", (socket) => {
   });
 
   socket.on("participant:media", (payload) => {
+    if (role !== "HOST") {
+      return;
+    }
     const participants = roomPresence.get(roomName) || [];
     const nextParticipants = participants.map((item) => {
       if (item.socketId !== socket.id) return item;

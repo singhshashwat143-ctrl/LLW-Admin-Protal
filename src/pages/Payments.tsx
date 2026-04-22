@@ -416,7 +416,7 @@ export function PaymentsPage() {
         description="Track webinar, BDA, and manual payments from one desk with payment-only status, token recovery links, and detailed source filters."
         actions={
           <div className="page-actions">
-            <button className="btn-secondary" type="button" onClick={() => navigate("/onboarding")}>BDA Onboarding</button>
+            <button className="btn-secondary" type="button" onClick={() => navigate("/onboarding")}>Ondoarding Form</button>
             {hasPermission(user, "export_data") ? <button className="btn-secondary" type="button" onClick={() => navigate("/exports")}>Data Export</button> : null}
             <button className="btn-secondary" type="button" onClick={() => navigate("/operations")}>Operations Queue</button>
             <button className="btn-secondary" type="button" onClick={() => setShowForm((value) => !value)}>
@@ -725,6 +725,7 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [customerForm, setCustomerForm] = useState({ name: "", phone: "", email: "" });
+  const [reconciling, setReconciling] = useState(false);
 
   useEffect(() => {
     if (!data.order) return;
@@ -746,6 +747,55 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
     script.async = true;
     document.body.appendChild(script);
   }, []);
+
+  async function reconcilePaymentStatus() {
+    if (!data.order?.id || !data.payment?.id || reconciling || paid) return false;
+    try {
+      setReconciling(true);
+      const response = await api<{ paid?: boolean; failed?: boolean; message?: string; order?: CheckoutResponse["order"]; payment?: CheckoutResponse["payment"] }>("/api/orders/reconcile-payment", {
+        method: "POST",
+        body: JSON.stringify({
+          order_id: data.order.id,
+          payment_id: data.payment.id,
+        }),
+      });
+      if (response.paid) {
+        setPaid(true);
+        setNotice("Payment completed successfully.");
+        refresh();
+        return true;
+      }
+      if (response.failed) {
+        setNotice(response.message || "Payment failed. Please try again.");
+        refresh();
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      setReconciling(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!data.order?.id || !data.payment?.id || paid) return;
+
+    const onFocus = () => {
+      reconcilePaymentStatus().catch(() => undefined);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        reconcilePaymentStatus().catch(() => undefined);
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [data.order?.id, data.payment?.id, paid]);
 
   async function payNow() {
     try {
@@ -812,8 +862,11 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
           refresh();
         },
         modal: {
-          ondismiss: () => {
-            setNotice("Checkout was closed before payment completion.");
+          ondismiss: async () => {
+            const reconciled = await reconcilePaymentStatus();
+            if (!reconciled) {
+              setNotice((current) => current || "Checkout was closed before payment completion.");
+            }
           },
         },
       });
@@ -938,6 +991,10 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
             </div>
           )}
         </SectionCard>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 px-1 text-xs text-slate-500">
+          <span>Secure payments are processed through Razorpay.</span>
+          <a href="/privacy-policy" className="text-slate-700 underline underline-offset-4">Privacy Policy</a>
+        </div>
       </div>
     </div>
   );

@@ -8,7 +8,7 @@ import { ThemeToggle } from "./ThemeToggle";
 const sections = [
   { label: "Primary", items: [{ path: "/", name: "Dashboard" }, { path: "/sales", name: "Sale Stats" }, { path: "/tracker", name: "Tracker" }, { path: "/live", name: "Live Classes" }, { path: "/webinars", name: "Webinars" }] },
   { label: "Catalog", items: [{ path: "/teachers", name: "Teachers" }, { path: "/products", name: "Products" }, { path: "/bootcamps", name: "Bootcamps" }] },
-  { label: "Operations", items: [{ path: "/students", name: "Students" }, { path: "/orders", name: "Orders" }, { path: "/payments", name: "Payments" }, { path: "/exports", name: "Exports" }, { path: "/marketing", name: "Marketing" }, { path: "/operations", name: "Operations" }, { path: "/onboarding", name: "BDA Onboarding" }, { path: "/refunds", name: "Refunds" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
+  { label: "Operations", items: [{ path: "/students", name: "Students" }, { path: "/orders", name: "Orders" }, { path: "/payments", name: "Payments" }, { path: "/exports", name: "Exports" }, { path: "/marketing", name: "Marketing" }, { path: "/operations", name: "Operations" }, { path: "/onboarding", name: "Ondoarding Form" }, { path: "/refunds", name: "Refunds" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
 ];
 
 export function Sidebar({

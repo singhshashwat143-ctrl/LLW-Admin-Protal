@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { Room as LiveKitRoom, RoomEvent, Track } from "livekit-client";
 import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
 import { navigate } from "../lib/router";
 
@@ -93,6 +95,13 @@ type CheckoutResponse = {
   razorpayKeyId?: string;
 };
 
+type LiveKitJoinInfo = {
+  url: string;
+  token: string | null;
+  identity: string;
+  canPublish: boolean;
+};
+
 declare global {
   interface Window {
     Razorpay?: new (options: Record<string, unknown>) => { open: () => void; on?: (event: string, handler: (payload: any) => void) => void };
@@ -127,6 +136,17 @@ function useRazorpayScript() {
     script.async = true;
     document.body.appendChild(script);
   }, []);
+}
+
+function getStoredAuthToken() {
+  try {
+    const raw = window.localStorage.getItem("llw-auth-session");
+    if (!raw) return "";
+    const parsed = JSON.parse(raw) as { token?: string };
+    return parsed?.token || "";
+  } catch {
+    return "";
+  }
 }
 
 function WebinarPromoCard({
@@ -659,6 +679,10 @@ function PublicShell({ title, description, children }: { title: string; descript
           <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--text-secondary)]">{description}</p>
         </div>
         <div className="mt-5">{children}</div>
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 px-2 text-xs text-white/55">
+          <span>Payments on this site are processed through Razorpay.</span>
+          <a href="/privacy-policy" className="text-[var(--accent)] underline underline-offset-4">Privacy Policy</a>
+        </div>
       </div>
     </div>
   );
@@ -675,6 +699,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   const [meetingEndedMessage, setMeetingEndedMessage] = useState("");
   const [unmutePrompt, setUnmutePrompt] = useState("");
   const [forceMuteSignal, setForceMuteSignal] = useState(0);
+  const [livekit, setLivekit] = useState<LiveKitJoinInfo | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const attendanceIdRef = useRef("");
 
@@ -691,7 +716,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     let active = true;
     let localAttendanceId = "";
 
-    api<{ webinar: Webinar; session: Session; attendance: Attendance }>(`/api/rooms/${roomName}/join`, {
+    api<{ webinar: Webinar; session: Session; attendance: Attendance; livekit?: LiveKitJoinInfo | null }>(`/api/rooms/${roomName}/join`, {
       method: "POST",
       body: JSON.stringify({ ...joinPayload, role }),
     }).then((response) => {
@@ -701,6 +726,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       setAttendanceId(response.attendance.id);
       attendanceIdRef.current = response.attendance.id;
       localAttendanceId = response.attendance.id;
+      setLivekit(response.livekit || null);
 
       const socket = io(window.location.origin, {
         transports: ["websocket", "polling"],
@@ -711,6 +737,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
           name: joinPayload.name,
           phone: joinPayload.phone,
           email: joinPayload.email,
+          token: getStoredAuthToken(),
         },
       });
 
@@ -747,6 +774,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       socket?.disconnect();
       setSocketInstance(null);
       setOwnSocketId("");
+      setLivekit(null);
     };
   }, [joinPayload, role, roomName]);
 
@@ -820,6 +848,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     meetingEndedMessage,
     unmutePrompt,
     forceMuteSignal,
+    livekit,
     clearMeetingEndedMessage,
     clearUnmutePrompt,
   };
@@ -831,10 +860,12 @@ function VideoStream({ stream, muted, label, isCameraOn }: { stream: MediaStream
   useEffect(() => {
     if (!videoRef.current) return;
     videoRef.current.srcObject = stream;
+    videoRef.current.play().catch(() => undefined);
   }, [stream]);
 
   return (
     <div className="relative min-h-[220px] overflow-hidden rounded-[24px] border border-[rgba(201,168,76,0.18)] bg-[linear-gradient(135deg,rgba(255,255,255,0.08),rgba(0,0,0,0.34))]">
+      {stream && !muted && !isCameraOn ? <AudioStream stream={stream} /> : null}
       {stream && isCameraOn ? (
         <video ref={videoRef} autoPlay playsInline muted={muted} className="h-full min-h-[220px] w-full object-cover" />
       ) : (
@@ -849,6 +880,18 @@ function VideoStream({ stream, muted, label, isCameraOn }: { stream: MediaStream
       </div>
     </div>
   );
+}
+
+function AudioStream({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.srcObject = stream;
+    audioRef.current.play().catch(() => undefined);
+  }, [stream]);
+
+  return <audio ref={audioRef} autoPlay playsInline muted={muted} className="hidden" />;
 }
 
 function StageVideo({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
@@ -893,17 +936,13 @@ function ControlIcon({ name }: { name: string }) {
 
 function useClassMedia({
   joined,
-  role,
-  socket,
-  ownSocketId,
-  participants,
+  canPublish,
+  livekit,
   sendMediaState,
 }: {
   joined: boolean;
-  role: "HOST" | "ATTENDEE";
-  socket: Socket | null;
-  ownSocketId: string;
-  participants: RoomSnapshot["participants"];
+  canPublish: boolean;
+  livekit: LiveKitJoinInfo | null;
   sendMediaState: (isMicOn: boolean, isCameraOn: boolean, isScreenSharing?: boolean) => void;
 }) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -911,235 +950,176 @@ function useClassMedia({
   const [isMicOn, setIsMicOn] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const peerRefs = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const cameraStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
-  const currentAudioTrackRef = useRef<MediaStreamTrack | null>(null);
-  const currentVideoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const roomRef = useRef<LiveKitRoom | null>(null);
+  const remoteTrackStateRef = useRef<Map<string, { audio: MediaStreamTrack | null; camera: MediaStreamTrack | null; screen: MediaStreamTrack | null }>>(new Map());
 
-  useEffect(() => {
-    if (!joined) return;
-    let active = true;
+  const getPublicationTrack = useCallback((publication: any) => {
+    return publication?.track?.mediaStreamTrack || publication?.videoTrack?.mediaStreamTrack || publication?.audioTrack?.mediaStreamTrack || null;
+  }, []);
 
-    if (!navigator.mediaDevices?.getUserMedia) {
+  const buildLocalPreview = useCallback((room: LiveKitRoom | null) => {
+    if (!room || !canPublish) {
       setLocalStream(null);
       return;
     }
+    const stream = new MediaStream();
+    const publications = Array.from(room.localParticipant.trackPublications.values()) as any[];
+    const micPublication = publications.find((publication) => publication.source === Track.Source.Microphone);
+    const screenPublication = publications.find((publication) => publication.source === Track.Source.ScreenShare);
+    const cameraPublication = publications.find((publication) => publication.source === Track.Source.Camera);
+    const audioTrack = getPublicationTrack(micPublication);
+    const videoTrack = getPublicationTrack(screenPublication) || getPublicationTrack(cameraPublication);
+    if (audioTrack) stream.addTrack(audioTrack);
+    if (videoTrack) stream.addTrack(videoTrack);
+    setLocalStream(stream.getTracks().length ? stream : null);
+    setIsMicOn(Boolean(audioTrack) && room.localParticipant.isMicrophoneEnabled);
+    setIsCameraOn(Boolean(getPublicationTrack(cameraPublication)) && room.localParticipant.isCameraEnabled);
+    setIsScreenSharing(Boolean(getPublicationTrack(screenPublication)) && room.localParticipant.isScreenShareEnabled);
+  }, [canPublish, getPublicationTrack]);
 
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        if (!active) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
+  const syncRemoteStream = useCallback((identity: string) => {
+    const state = remoteTrackStateRef.current.get(identity);
+    setRemoteStreams((current) => {
+      const next = new Map(current);
+      if (!state || (!state.audio && !state.camera && !state.screen)) {
+        next.delete(identity);
+        return next;
+      }
+      const stream = new MediaStream();
+      if (state.audio) stream.addTrack(state.audio);
+      if (state.screen || state.camera) {
+        stream.addTrack(state.screen || state.camera || null);
+      }
+      next.set(identity, stream);
+      return next;
+    });
+  }, []);
+
+  const updateRemoteTrack = useCallback((identity: string, source: string | undefined, mediaStreamTrack: MediaStreamTrack | null) => {
+    const current = remoteTrackStateRef.current.get(identity) || { audio: null, camera: null, screen: null };
+    if (source === Track.Source.Microphone) {
+      current.audio = mediaStreamTrack;
+    } else if (source === Track.Source.ScreenShare) {
+      current.screen = mediaStreamTrack;
+    } else {
+      current.camera = mediaStreamTrack;
+    }
+    remoteTrackStateRef.current.set(identity, current);
+    syncRemoteStream(identity);
+  }, [syncRemoteStream]);
+
+  useEffect(() => {
+    if (!joined || !livekit?.url || !livekit?.token) {
+      setLocalStream(null);
+      setRemoteStreams(new Map());
+      setIsMicOn(false);
+      setIsCameraOn(false);
+      setIsScreenSharing(false);
+      return;
+    }
+
+    let active = true;
+    const room = new LiveKitRoom({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+    roomRef.current = room;
+
+    const syncExistingParticipant = (participant: any) => {
+      participant.trackPublications.forEach((publication: any) => {
+        const mediaTrack = getPublicationTrack(publication);
+        if (mediaTrack) {
+          updateRemoteTrack(participant.identity, publication.source, mediaTrack);
         }
-        cameraStreamRef.current = stream;
-        stream.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-          currentAudioTrackRef.current = track;
-        });
-        stream.getVideoTracks().forEach((track) => {
-          track.enabled = false;
-          currentVideoTrackRef.current = track;
-        });
-        setLocalStream(stream);
+      });
+    };
+
+    const onTrackSubscribed = (track: any, publication: any, participant: any) => {
+      if (participant.identity === livekit.identity) return;
+      const mediaTrack = track?.mediaStreamTrack || null;
+      updateRemoteTrack(participant.identity, publication?.source, mediaTrack);
+    };
+
+    const onTrackUnsubscribed = (_track: any, publication: any, participant: any) => {
+      if (participant.identity === livekit.identity) return;
+      updateRemoteTrack(participant.identity, publication?.source, null);
+    };
+
+    const onParticipantDisconnected = (participant: any) => {
+      remoteTrackStateRef.current.delete(participant.identity);
+      setRemoteStreams((current) => {
+        const next = new Map(current);
+        next.delete(participant.identity);
+        return next;
+      });
+    };
+
+    room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
+    room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+    room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    room.on(RoomEvent.LocalTrackPublished, () => buildLocalPreview(room));
+    room.on(RoomEvent.LocalTrackUnpublished, () => buildLocalPreview(room));
+
+    room.connect(livekit.url, livekit.token, { autoSubscribe: true })
+      .then(() => {
+        if (!active) return;
+        room.remoteParticipants.forEach((participant) => syncExistingParticipant(participant));
+        buildLocalPreview(room);
       })
       .catch(() => {
+        if (!active) return;
         setLocalStream(null);
+        setRemoteStreams(new Map());
       });
 
     return () => {
       active = false;
-      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      peerRefs.current.forEach((peer) => peer.close());
-      peerRefs.current.clear();
+      room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
+      room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
+      room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+      room.disconnect();
+      roomRef.current = null;
+      remoteTrackStateRef.current.clear();
+      setRemoteStreams(new Map());
+      setLocalStream(null);
+      setIsMicOn(false);
+      setIsCameraOn(false);
+      setIsScreenSharing(false);
     };
-  }, [joined]);
+  }, [buildLocalPreview, getPublicationTrack, joined, livekit, updateRemoteTrack]);
 
   useEffect(() => {
     sendMediaState(isMicOn, isCameraOn || isScreenSharing, isScreenSharing);
   }, [isCameraOn, isMicOn, isScreenSharing, sendMediaState]);
 
-  function replaceVideoTrack(nextTrack: MediaStreamTrack | null) {
-    currentVideoTrackRef.current = nextTrack;
-    peerRefs.current.forEach((peer) => {
-      const sender = peer.getSenders().find((item) => item.track?.kind === "video");
-      sender?.replaceTrack(nextTrack).catch(() => undefined);
-    });
-  }
-
-  function getPeer(remoteSocketId: string) {
-    const existing = peerRefs.current.get(remoteSocketId);
-    if (existing) return existing;
-
-    const peer = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
-
-    if (currentAudioTrackRef.current) {
-      peer.addTrack(currentAudioTrackRef.current, new MediaStream([currentAudioTrackRef.current]));
-    }
-    if (currentVideoTrackRef.current) {
-      peer.addTrack(currentVideoTrackRef.current, new MediaStream([currentVideoTrackRef.current]));
-    }
-
-    peer.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket?.emit("webrtc:signal", {
-          targetSocketId: remoteSocketId,
-          signal: { type: "ice", candidate: event.candidate },
-        });
-      }
-    };
-
-    peer.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (!stream) return;
-      setRemoteStreams((current) => {
-        const next = new Map(current);
-        next.set(remoteSocketId, stream);
-        return next;
-      });
-    };
-
-    peer.onconnectionstatechange = () => {
-      if (["failed", "closed", "disconnected"].includes(peer.connectionState)) {
-        peerRefs.current.delete(remoteSocketId);
-        setRemoteStreams((current) => {
-          const next = new Map(current);
-          next.delete(remoteSocketId);
-          return next;
-        });
-      }
-    };
-
-    peerRefs.current.set(remoteSocketId, peer);
-    return peer;
-  }
-
-  useEffect(() => {
-    if (!socket || !ownSocketId || !localStream) return;
-
-    const remoteParticipants = participants.filter((participant) => {
-      if (participant.socketId === ownSocketId) return false;
-      return role === "HOST" ? true : participant.role === "HOST";
-    });
-    for (const participant of remoteParticipants) {
-      const peer = getPeer(participant.socketId);
-      const shouldInitiate = ownSocketId.localeCompare(participant.socketId) < 0;
-      if (shouldInitiate && peer.signalingState === "stable") {
-        peer.createOffer()
-          .then((offer) => peer.setLocalDescription(offer).then(() => offer))
-          .then((offer) => {
-            socket.emit("webrtc:signal", {
-              targetSocketId: participant.socketId,
-              signal: { type: "offer", description: offer },
-            });
-          })
-          .catch(() => undefined);
-      }
-    }
-
-    const participantIds = new Set(remoteParticipants.map((participant) => participant.socketId));
-    peerRefs.current.forEach((peer, socketId) => {
-      if (participantIds.has(socketId)) return;
-      peer.close();
-      peerRefs.current.delete(socketId);
-      setRemoteStreams((current) => {
-        const next = new Map(current);
-        next.delete(socketId);
-        return next;
-      });
-    });
-  }, [localStream, ownSocketId, participants, role, socket]);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    const onSignal = async (payload: { fromSocketId: string; signal: { type: string; description?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } }) => {
-      const peer = getPeer(payload.fromSocketId);
-      const signal = payload.signal;
-      try {
-        if (signal.type === "offer" && signal.description) {
-          await peer.setRemoteDescription(signal.description);
-          const answer = await peer.createAnswer();
-          await peer.setLocalDescription(answer);
-          socket.emit("webrtc:signal", {
-            targetSocketId: payload.fromSocketId,
-            signal: { type: "answer", description: answer },
-          });
-        }
-        if (signal.type === "answer" && signal.description) {
-          await peer.setRemoteDescription(signal.description);
-        }
-        if (signal.type === "ice" && signal.candidate) {
-          await peer.addIceCandidate(signal.candidate);
-        }
-      } catch {
-        // Keep the classroom usable even if one peer negotiation fails.
-      }
-    };
-
-    socket.on("webrtc:signal", onSignal);
-    return () => {
-      socket.off("webrtc:signal", onSignal);
-    };
-  }, [socket]);
-
-  function toggleMic() {
+  async function toggleMic() {
     const next = !isMicOn;
-    cameraStreamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = next;
-    });
+    const room = roomRef.current;
+    if (!room || !canPublish) return;
+    const publication = await room.localParticipant.setMicrophoneEnabled(next);
     setIsMicOn(next);
+    if (!next && publication) {
+      setIsMicOn(false);
+    }
+    buildLocalPreview(room);
   }
 
-  function toggleCamera() {
-    if (isScreenSharing) return;
+  async function toggleCamera() {
     const next = !isCameraOn;
-    cameraStreamRef.current?.getVideoTracks().forEach((track) => {
-      track.enabled = next;
-    });
+    const room = roomRef.current;
+    if (!room || !canPublish || isScreenSharing) return;
+    await room.localParticipant.setCameraEnabled(next);
     setIsCameraOn(next);
+    buildLocalPreview(room);
   }
 
   async function toggleScreenShare() {
-    if (isScreenSharing) {
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      screenStreamRef.current = null;
-      const cameraTrack = cameraStreamRef.current?.getVideoTracks()[0] || null;
-      if (cameraTrack) {
-        cameraTrack.enabled = isCameraOn;
-      }
-      replaceVideoTrack(cameraTrack);
-      setLocalStream(cameraStreamRef.current);
-      setIsScreenSharing(false);
-      return;
-    }
-
-    if (!navigator.mediaDevices?.getDisplayMedia) return;
-
-    try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const displayTrack = displayStream.getVideoTracks()[0] || null;
-      if (!displayTrack) return;
-      screenStreamRef.current = displayStream;
-      displayTrack.onended = () => {
-        screenStreamRef.current = null;
-        const cameraTrack = cameraStreamRef.current?.getVideoTracks()[0] || null;
-        if (cameraTrack) {
-          cameraTrack.enabled = isCameraOn;
-        }
-        replaceVideoTrack(cameraTrack);
-        setLocalStream(cameraStreamRef.current);
-        setIsScreenSharing(false);
-      };
-      replaceVideoTrack(displayTrack);
-      setLocalStream(displayStream);
-      setIsScreenSharing(true);
-    } catch {
-      // User cancelled screen share; keep the room stable.
-    }
+    const room = roomRef.current;
+    if (!room || !canPublish) return;
+    const next = !isScreenSharing;
+    await room.localParticipant.setScreenShareEnabled(next);
+    setIsScreenSharing(next);
+    buildLocalPreview(room);
   }
 
   return {
@@ -1151,12 +1131,13 @@ function useClassMedia({
     toggleMic,
     toggleCamera,
     toggleScreenShare,
-    hasMediaAccess: Boolean(localStream),
+    hasMediaAccess: canPublish ? Boolean(livekit?.token) : true,
   };
 }
 
 function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomName: string }) {
   useRazorpayScript();
+  const { user } = useAuth();
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -1169,6 +1150,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [paymentNotice, setPaymentNotice] = useState("");
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentComplete, setPaymentComplete] = useState(false);
+  const [pendingCheckout, setPendingCheckout] = useState<{ orderId: string; paymentId?: string } | null>(null);
+  const [reconcilingPayment, setReconcilingPayment] = useState(false);
   const [sidePanel, setSidePanel] = useState<null | "chat" | "people">(null);
   const [handRaised, setHandRaised] = useState(false);
   const [currentTime, setCurrentTime] = useState("");
@@ -1177,13 +1160,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [hostFullAmount, setHostFullAmount] = useState("9999");
   const [hostTokenAmount, setHostTokenAmount] = useState("499");
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const canHostRoom = role === "HOST" && ["ADMIN", "SUPER_ADMIN"].includes(String(user?.role || "").toUpperCase());
   const connection = useRoomConnection(role, roomName, joined ? form : null);
   const media = useClassMedia({
     joined,
-    role,
-    socket: connection.socket,
-    ownSocketId: connection.ownSocketId,
-    participants: connection.room.participants,
+    canPublish: canHostRoom,
+    livekit: connection.livekit,
     sendMediaState: connection.sendMediaState,
   });
 
@@ -1191,6 +1173,10 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const remoteParticipants = useMemo(
     () => connection.room.participants.filter((participant) => participant.socketId !== connection.ownSocketId),
     [connection.ownSocketId, connection.room.participants],
+  );
+  const hostParticipants = useMemo(
+    () => remoteParticipants.filter((participant) => participant.role === "HOST"),
+    [remoteParticipants],
   );
   const enrollEnabled = Boolean(connection.webinar?.payment_required && connection.webinar?.enroll_button_enabled);
 
@@ -1214,9 +1200,67 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }, [connection.webinar]);
 
   useEffect(() => {
+    if (role !== "HOST") return;
+    setForm((current) => ({
+      name: current.name || user?.name || "",
+      phone: current.phone,
+      email: user?.email || current.email,
+    }));
+  }, [role, user?.email, user?.name]);
+
+  useEffect(() => {
     if (!connection.forceMuteSignal || !media.isMicOn) return;
     media.toggleMic();
   }, [connection.forceMuteSignal, media]);
+
+  const reconcileLivePaymentStatus = useCallback(async () => {
+    if (!pendingCheckout || reconcilingPayment || paymentComplete) return false;
+    try {
+      setReconcilingPayment(true);
+      const response = await api<{ paid?: boolean; failed?: boolean; message?: string }>("/api/orders/reconcile-payment", {
+        method: "POST",
+        body: JSON.stringify({
+          order_id: pendingCheckout.orderId,
+          payment_id: pendingCheckout.paymentId,
+        }),
+      });
+      if (response.paid) {
+        setPaymentComplete(true);
+        setPaymentNotice("Payment completed successfully.");
+        setPendingCheckout(null);
+        return true;
+      }
+      if (response.failed) {
+        setPaymentNotice(response.message || "Payment failed. Please try again.");
+        setPendingCheckout(null);
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      setReconcilingPayment(false);
+    }
+  }, [paymentComplete, pendingCheckout, reconcilingPayment]);
+
+  useEffect(() => {
+    if (!pendingCheckout || paymentComplete) return;
+
+    const onFocus = () => {
+      reconcileLivePaymentStatus().catch(() => undefined);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        reconcileLivePaymentStatus().catch(() => undefined);
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [paymentComplete, pendingCheckout, reconcileLivePaymentStatus]);
 
   useEffect(() => {
     if (!connection.meetingEndedMessage) return;
@@ -1260,6 +1304,10 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }, [connection.room.messages, sidePanel]);
 
   function submitJoin() {
+    if (role === "HOST" && !canHostRoom) {
+      setPaymentNotice("Sign in as an admin or super-admin account to join as host.");
+      return;
+    }
     if (!form.name.trim() || !form.phone.trim()) return;
     setJoined(true);
   }
@@ -1303,12 +1351,18 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       if (session.already_paid || session.payment?.status === "PAID") {
         setPaymentComplete(true);
         setPaymentNotice("Payment already completed for this attendee.");
+        setPendingCheckout(null);
         return;
       }
 
       if (!window.Razorpay || !session.payment?.razorpay_order_id || !session.razorpayKeyId) {
         throw new Error("Razorpay checkout could not be initialized.");
       }
+
+      setPendingCheckout({
+        orderId: created.order.id,
+        paymentId: session.payment?.id,
+      });
 
       const checkout = new window.Razorpay({
         key: session.razorpayKeyId,
@@ -1335,10 +1389,14 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
           });
           setPaymentComplete(true);
           setPaymentNotice("Payment completed successfully.");
+          setPendingCheckout(null);
         },
         modal: {
-          ondismiss: () => {
-            setPaymentNotice("Checkout was closed before payment completion.");
+          ondismiss: async () => {
+            const reconciled = await reconcileLivePaymentStatus();
+            if (!reconciled) {
+              setPaymentNotice((current) => current || "Checkout was closed before payment completion.");
+            }
           },
         },
       });
@@ -1357,6 +1415,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
         } catch {
           // Ignore failure logging errors and keep the user-visible error path simple.
         }
+        setPendingCheckout(null);
         setPaymentNotice(response?.error?.description || "Payment failed. Please try again.");
       });
 
@@ -1489,9 +1548,10 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }
 
   if (role === "ATTENDEE" && joined) {
-    const showRemoteVideo = Boolean(remoteParticipants.length);
-    const leadRemote = remoteParticipants[0];
-    const hostLabel = connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
+    const leadRemote = hostParticipants[0] || null;
+    const leadRemoteStream = leadRemote ? media.remoteStreams.get(leadRemote.attendanceId) || null : null;
+    const showRemoteVideo = Boolean(leadRemoteStream && (leadRemote?.isCameraOn || leadRemote?.isScreenSharing));
+    const hostLabel = leadRemote?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
 
     return (
       <div className="gm-root">
@@ -1502,8 +1562,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             </div>
           ) : null}
           <div className="gm-stage">
+            {leadRemoteStream && !showRemoteVideo ? <AudioStream stream={leadRemoteStream} /> : null}
             {showRemoteVideo ? (
-              <StageVideo stream={media.remoteStreams.get(leadRemote.socketId) || null} />
+              <StageVideo stream={leadRemoteStream} />
             ) : (
               <div className="gm-avatar-stage">
                 <div className="gm-avatar-circle">{hostLabel.slice(0, 1).toUpperCase()}</div>
@@ -1557,8 +1618,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             <div className="gm-bar-center">
               <div className="gm-ctrl-group">
-                <button className={`gm-btn ${media.isMicOn ? "" : "gm-btn-off"}`} type="button" title="Microphone" onClick={media.toggleMic}><ControlIcon name={media.isMicOn ? "mic" : "mic-off"} /></button>
-                <button className={`gm-btn ${media.isCameraOn ? "" : "gm-btn-off"}`} type="button" title="Camera" onClick={media.toggleCamera}><ControlIcon name={media.isCameraOn ? "cam" : "cam-off"} /></button>
                 {enrollEnabled ? (
                   <button className={`gm-enroll-btn ${paymentComplete ? "gm-enroll-btn-done" : ""}`} type="button" onClick={launchEnrollNow} disabled={paymentLoading || paymentComplete}>
                     <ControlIcon name="offer" />
@@ -1693,7 +1752,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             {leadRemote ? (
               <div className="gm-host-pip">
                 <VideoStream
-                  stream={media.remoteStreams.get(leadRemote.socketId) || null}
+                  stream={media.remoteStreams.get(leadRemote.attendanceId) || null}
                   label={leadRemote.name}
                   isCameraOn={leadRemote.isCameraOn}
                 />
@@ -1832,12 +1891,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                     {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
                     {participant.socketId !== connection.ownSocketId ? (
                       <div className="ml-auto flex flex-wrap gap-2">
-                        {participant.role === "ATTENDEE" ? (
-                          <>
-                            <button className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/80" type="button" onClick={() => connection.requestUnmute(participant.socketId, participant.name)}>Ask to unmute</button>
-                            <button className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/80" type="button" onClick={() => connection.muteParticipant(participant.socketId)}>Mute</button>
-                          </>
-                        ) : null}
                         <button className="rounded-full border border-rose-400/30 px-3 py-1 text-xs text-rose-200" type="button" onClick={() => connection.removeParticipant(participant.socketId)}>Remove</button>
                       </div>
                     ) : null}
@@ -1908,12 +1961,18 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button className={media.isMicOn ? "btn-primary" : "btn-secondary"} type="button" onClick={media.toggleMic}>
-                      {media.isMicOn ? "Mic On" : "Mic Off"}
-                    </button>
-                    <button className={media.isCameraOn ? "btn-primary" : "btn-secondary"} type="button" onClick={media.toggleCamera}>
-                      {media.isCameraOn ? "Camera On" : "Camera Off"}
-                    </button>
+                    {role === "HOST" ? (
+                      <>
+                        <button className={media.isMicOn ? "btn-primary" : "btn-secondary"} type="button" onClick={media.toggleMic}>
+                          {media.isMicOn ? "Mic On" : "Mic Off"}
+                        </button>
+                        <button className={media.isCameraOn ? "btn-primary" : "btn-secondary"} type="button" onClick={media.toggleCamera}>
+                          {media.isCameraOn ? "Camera On" : "Camera Off"}
+                        </button>
+                      </>
+                    ) : (
+                      <Badge tone="gold">View-only audio/video</Badge>
+                    )}
                   </div>
                 </div>
 
@@ -1928,7 +1987,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   {remoteParticipants.length ? remoteParticipants.map((participant) => (
                     <VideoStream
                       key={participant.socketId}
-                      stream={media.remoteStreams.get(participant.socketId) || null}
+                      stream={media.remoteStreams.get(participant.attendanceId) || null}
                       label={`${participant.name} ${participant.isMicOn ? "Mic on" : "Mic off"}`}
                       isCameraOn={participant.isCameraOn}
                     />

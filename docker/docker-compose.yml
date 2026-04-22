@@ -1,0 +1,29 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: llw-webinar-app:local
+    container_name: llw_webinar_app
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./app.env
+    ports:
+      - "8080:8080"
+    volumes:
+      - llw_webinar_db:/app/db
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8080/health').then((res)=>process.exit(res.ok?0:1)).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  llw_webinar_db:
+    name: llw_webinar_db
