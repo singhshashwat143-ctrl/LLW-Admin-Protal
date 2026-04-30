@@ -75,6 +75,7 @@ type PaymentRow = {
     welcome_kit_sent: boolean;
   };
   token_due?: { due_date?: string | null } | null;
+  bdm_name?: string;
   manager_name?: string;
   collect_customer_details_on_checkout?: boolean;
   created_at: string;
@@ -567,7 +568,8 @@ export function PaymentsPage() {
               <tr>
                 <th>Customer</th>
                 <th>Source</th>
-                <th>BDA / Manager</th>
+                <th>BDA</th>
+                <th>BDM</th>
                 <th>Payment / Offer</th>
                 <th>Value / Paid / Due</th>
                 <th>Transaction History</th>
@@ -595,10 +597,10 @@ export function PaymentsPage() {
                     </div>
                   </td>
                   <td>
-                    <div className="cell-stack">
-                      <div>{row.bda?.name || "—"}</div>
-                      <div className="text-xs text-[var(--text-secondary)]">{row.manager_name || "Unassigned manager"}</div>
-                    </div>
+                    <div>{row.bda?.name || "—"}</div>
+                  </td>
+                  <td>
+                    <div>{row.bdm_name || row.manager_name || "Unassigned BDM"}</div>
                   </td>
                   <td>
                     <div className="cell-stack">
@@ -700,7 +702,7 @@ export function PaymentsPage() {
               })}
               {!filteredPayments.length ? (
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-sm text-[var(--text-secondary)]">
+                  <td colSpan={9} className="py-10 text-center text-sm text-[var(--text-secondary)]">
                     No payments matched the current source, state, mode, or date filters.
                   </td>
                 </tr>

@@ -9,6 +9,7 @@ import { createHmac } from "node:crypto";
 import { OAuth2Client } from "google-auth-library";
 import { Server } from "socket.io";
 import { AccessToken } from "livekit-server-sdk";
+import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -57,6 +58,8 @@ function serializeWebinar(req, webinar) {
     ...webinar,
     host_url: withAbsolute(req, webinar.host_url),
     attendee_url: withAbsolute(req, webinar.attendee_url),
+    short_host_url: withAbsolute(req, webinar.short_host_url),
+    short_attendee_url: withAbsolute(req, webinar.short_attendee_url),
   };
 }
 
@@ -66,6 +69,8 @@ function serializeSession(req, session) {
     ...session,
     host_url: withAbsolute(req, session.host_url),
     attendee_url: withAbsolute(req, session.attendee_url),
+    short_host_url: withAbsolute(req, session.short_host_url),
+    short_attendee_url: withAbsolute(req, session.short_attendee_url),
   };
 }
 
@@ -445,7 +450,7 @@ function canJoinAsHost(user) {
   return isAdminUser(user);
 }
 
-async function createLiveKitToken({ roomName, identity, name, canPublish }) {
+async function createLiveKitToken({ roomName, identity, name, canPublish, canPublishData = false, canPublishSources }) {
   if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
     return null;
   }
@@ -457,7 +462,8 @@ async function createLiveKitToken({ roomName, identity, name, canPublish }) {
     roomJoin: true,
     room: roomName,
     canPublish,
-    canPublishData: canPublish,
+    canPublishData,
+    canPublishSources,
     canSubscribe: true,
   });
   return token.toJwt();
@@ -1154,11 +1160,17 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
       phone: req.body?.phone,
       email: role === "HOST" ? String(currentUser?.email || "") : req.body?.email,
     });
+    const hostCanPublish = role === "HOST";
+    const canPublishAudio = true;
+    const canPublishVideo = hostCanPublish;
+    const canShareScreen = hostCanPublish;
     const livekitToken = await createLiveKitToken({
       roomName: req.params.roomName,
       identity: joined.attendance.id,
       name: joined.attendance.name,
-      canPublish: role === "HOST",
+      canPublish: hostCanPublish || undefined,
+      canPublishData: hostCanPublish,
+      canPublishSources: hostCanPublish ? undefined : [TrackSource.MICROPHONE],
     });
 
     res.json({
@@ -1171,7 +1183,10 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
         url: livekitUrl,
         token: livekitToken,
         identity: joined.attendance.id,
-        canPublish: role === "HOST",
+        canPublish: canPublishAudio || canPublishVideo || canShareScreen,
+        canPublishAudio,
+        canPublishVideo,
+        canShareScreen,
       },
     });
   } catch (error) {

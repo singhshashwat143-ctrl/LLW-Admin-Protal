@@ -22,6 +22,7 @@ type OperationRow = {
   bda?: { id?: string; name?: string } | null;
   product?: { id?: string; name?: string } | null;
   status: string;
+  bdm_name?: string;
   manager_name?: string;
   payment_mode: string;
   product_value_inr: number;
@@ -178,7 +179,8 @@ export function OperationsPage() {
             <thead>
               <tr>
                 <th>Customer</th>
-                <th>BDA / Manager</th>
+                <th>BDA</th>
+                <th>BDM</th>
                 <th>Product</th>
                 <th>Payment Audit</th>
                 <th>Operations</th>
@@ -196,10 +198,10 @@ export function OperationsPage() {
                     </div>
                   </td>
                   <td>
-                    <div className="cell-stack">
-                      <div>{row.bda?.name || "—"}</div>
-                      <div className="text-xs text-[var(--text-secondary)]">{row.manager_name || "Unassigned manager"}</div>
-                    </div>
+                    <div>{row.bda?.name || "—"}</div>
+                  </td>
+                  <td>
+                    <div>{row.bdm_name || row.manager_name || "Unassigned BDM"}</div>
                   </td>
                   <td>
                     <div className="cell-stack">
@@ -281,7 +283,7 @@ export function OperationsPage() {
               ))}
               {!filteredRows.length ? (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-sm text-[var(--text-secondary)]">
+                  <td colSpan={7} className="py-10 text-center text-sm text-[var(--text-secondary)]">
                     No fully paid orders match the current filters.
                   </td>
                 </tr>

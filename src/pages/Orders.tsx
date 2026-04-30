@@ -8,6 +8,8 @@ type OrderRow = {
   student?: { name?: string } | null;
   product?: { name?: string } | null;
   bda?: { name?: string } | null;
+  bdm_name?: string;
+  manager_name?: string;
   original_product_value_inr?: number;
   discount_inr?: number;
   coupon_code?: string;
@@ -41,6 +43,7 @@ export function OrdersPage() {
                 <th>Student</th>
                 <th>Product</th>
                 <th>BDA</th>
+                <th>BDM</th>
                 <th>Order Value</th>
                 <th>Cash Audit</th>
                 <th>Due</th>
@@ -60,6 +63,7 @@ export function OrdersPage() {
                     {row.coupon_code ? <div className="text-xs text-[var(--text-secondary)]">Coupon {row.coupon_code}</div> : null}
                   </td>
                   <td>{row.bda?.name || "-"}</td>
+                  <td>{row.bdm_name || row.manager_name || "-"}</td>
                   <td>
                     <div>Net {formatCurrency((row.product_value_inr || 0) / 100)}</div>
                     {row.discount_inr ? <div className="text-xs text-[var(--text-secondary)]">Discount {formatCurrency((row.discount_inr || 0) / 100)}</div> : null}

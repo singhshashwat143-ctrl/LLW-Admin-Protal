@@ -1011,6 +1011,26 @@ a:hover {
   box-shadow: 0 0 0 6px rgba(234, 67, 53, 0.18);
 }
 
+.gm-stage-toast {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 30;
+  transform: translate(-50%, -50%);
+  max-width: min(72%, 620px);
+  border-radius: 24px;
+  border: 1px solid rgba(244, 197, 66, 0.32);
+  background: rgba(20, 17, 10, 0.86);
+  color: #fff;
+  padding: 16px 20px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  box-shadow: 0 26px 60px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(18px);
+}
+
 .gm-offer-banner {
   position: absolute;
   left: 50%;
@@ -1162,6 +1182,34 @@ a:hover {
   justify-content: center;
 }
 
+.gm-bar-attendee {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 92px;
+  padding-bottom: 6px;
+}
+
+.gm-bar-attendee-top,
+.gm-bar-attendee-bottom {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.gm-bar-attendee-top {
+  justify-content: space-between;
+}
+
+.gm-bar-attendee-top .gm-bar-left,
+.gm-bar-attendee-top .gm-bar-right {
+  flex: 1;
+}
+
+.gm-bar-attendee-bottom {
+  justify-content: center;
+}
+
 .gm-btn,
 .gm-icon-btn,
 .gm-btn-hangup {
@@ -1265,6 +1313,119 @@ a:hover {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+.gm-camera-panel {
+  width: min(100%, 380px);
+  background: #171717;
+  border-left: 1px solid #3c4043;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 10px 0;
+  gap: 10px;
+}
+
+.gm-camera-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gm-camera-panel-kicker,
+.gm-camera-fallback-name {
+  margin: 0;
+}
+
+.gm-camera-panel-kicker {
+  color: #9aa0a6;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.gm-camera-panel-title {
+  margin: 4px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e8eaed;
+}
+
+.gm-camera-panel-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eaed;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.gm-camera-frame {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(42, 45, 54, 0.95), rgba(17, 17, 17, 0.96));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gm-camera-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #111318;
+}
+
+.gm-camera-fallback {
+  text-align: center;
+  padding: 24px;
+}
+
+.gm-camera-fallback-avatar {
+  width: 104px;
+  height: 104px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 14px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 40px;
+  font-weight: 700;
+}
+
+.gm-camera-fallback-name {
+  color: #e8eaed;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.gm-camera-frame-label {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: inline-flex;
+  width: fit-content;
+  max-width: calc(100% - 28px);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(17, 17, 17, 0.72);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  backdrop-filter: blur(12px);
 }
 
 .gm-panel-header {
@@ -1438,6 +1599,14 @@ a:hover {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.gm-person-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .gm-person-host-av {
   background: #f9ab00;
   color: #202124;
@@ -1455,6 +1624,20 @@ a:hover {
   color: #ffb3b3;
   font-size: 11px;
   font-weight: 700;
+}
+
+.gm-mini-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gm-mini-btn-accent {
+  background: rgba(244, 197, 66, 0.18);
+  color: #f4c542;
 }
 
 .gm-offer-config {
@@ -1504,6 +1687,64 @@ a:hover {
   border-color: #f4c542;
 }
 
+.gm-link-stack {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.gm-link-card {
+  border-radius: 18px;
+  border: 1px solid rgba(201, 168, 76, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 12px;
+}
+
+.gm-link-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gm-link-card-label {
+  color: #e8eaed;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gm-link-card-url {
+  margin-top: 10px;
+}
+
+.gm-link-copy-btn {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(244, 197, 66, 0.16);
+  color: #f4c542;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gm-link-copy-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gm-link-copy-notice {
+  margin-top: 12px;
+  border-radius: 14px;
+  background: rgba(244, 197, 66, 0.12);
+  color: #f9e39b;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 @media (min-width: 1024px) {
   .gm-prejoin-shell {
     grid-template-columns: 1fr 1fr;
@@ -1533,11 +1774,27 @@ a:hover {
     flex-direction: column;
   }
 
+  .gm-main {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .gm-stage {
+    border-radius: 18px;
+  }
+
   .gm-panel {
     width: 100%;
     border-left: 0;
     border-top: 1px solid #3c4043;
     min-height: 36vh;
+  }
+
+  .gm-camera-panel {
+    width: 100%;
+    border-left: 0;
+    border-top: 1px solid #3c4043;
+    min-height: 34vh;
   }
 
   .gm-bar {
@@ -1549,6 +1806,18 @@ a:hover {
   .gm-bar-center,
   .gm-bar-right {
     justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .gm-bar-attendee-top,
+  .gm-bar-attendee-bottom {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .gm-bar-attendee-top .gm-bar-left,
+  .gm-bar-attendee-top .gm-bar-right {
+    flex: 0 1 auto;
   }
 
   .gm-offer-banner {
@@ -1564,6 +1833,222 @@ a:hover {
     width: 140px;
     min-width: 140px;
     height: 110px;
+  }
+
+  .gm-offer-config {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+    border-radius: 20px;
+  }
+
+  .gm-camera-frame {
+    min-height: 240px;
+  }
+
+  .gm-stage-toast {
+    max-width: min(84%, 520px);
+    padding: 14px 16px;
+    font-size: 14px;
+  }
+
+  .gm-camera-panel-header,
+  .gm-link-card-top {
+    flex-wrap: wrap;
+  }
+
+  .gm-name-pill,
+  .gm-live-badge,
+  .gm-screen-badge,
+  .gm-host-offer-status,
+  .gm-hand-alert {
+    padding: 7px 12px;
+    font-size: 11px;
+  }
+
+  .gm-payment-note {
+    left: 16px;
+    right: 16px;
+    top: 64px;
+    max-width: none;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .gm-stage {
+    border-radius: 16px;
+  }
+
+  .gm-live-badge,
+  .gm-screen-badge,
+  .gm-host-offer-status {
+    top: 12px;
+  }
+
+  .gm-live-badge,
+  .gm-name-pill {
+    left: 12px;
+  }
+
+  .gm-screen-badge,
+  .gm-host-offer-status,
+  .gm-hand-alert {
+    right: 12px;
+  }
+
+  .gm-hand-alert {
+    top: 52px;
+  }
+
+  .gm-payment-note {
+    top: 96px;
+    left: 12px;
+    right: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+  }
+
+  .gm-offer-banner {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .gm-offer-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 12px;
+  }
+
+  .gm-offer-btn {
+    width: 100%;
+    justify-content: center;
+    padding: 0.78rem 1rem;
+  }
+
+  .gm-host-pip {
+    right: 12px;
+    bottom: 12px;
+    width: 112px;
+    min-width: 112px;
+    height: 84px;
+    border-radius: 14px;
+  }
+
+  .gm-bar-left {
+    gap: 6px;
+    text-align: center;
+  }
+
+  .gm-bar-attendee {
+    gap: 8px;
+  }
+
+  .gm-bar-divider {
+    display: none;
+  }
+
+  .gm-meeting-code,
+  .gm-duration,
+  .gm-time {
+    width: 100%;
+  }
+
+  .gm-ctrl-group {
+    width: 100%;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 20px;
+  }
+
+  .gm-stage-toast {
+    max-width: calc(100% - 28px);
+    padding: 12px 14px;
+    font-size: 13px;
+  }
+
+  .gm-btn,
+  .gm-icon-btn {
+    min-width: 44px;
+    height: 42px;
+    padding: 0 11px;
+  }
+
+  .gm-enroll-btn {
+    flex: 1 1 100%;
+    min-width: 0;
+    height: 44px;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+
+  .gm-btn-hangup {
+    height: 44px;
+    min-width: 58px;
+    padding: 0 16px;
+  }
+
+  .gm-bar-right {
+    gap: 8px;
+  }
+
+  .gm-icon-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .gm-offer-config {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .gm-offer-toggle,
+  .gm-price-box {
+    width: 100%;
+  }
+
+  .gm-offer-toggle button {
+    flex: 1;
+  }
+
+  .gm-price-box {
+    min-height: 40px;
+  }
+
+  .gm-panel-header,
+  .gm-panel-body {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .gm-person-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+    padding-left: 46px;
+  }
+}
+
+@media (min-width: 901px) and (max-width: 1200px) {
+  .gm-bar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .gm-bar-left,
+  .gm-bar-center,
+  .gm-bar-right {
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .gm-offer-config {
+    flex-wrap: wrap;
+    justify-content: center;
   }
 }
 

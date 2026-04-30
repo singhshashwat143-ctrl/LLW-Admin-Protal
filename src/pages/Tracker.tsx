@@ -24,6 +24,7 @@ type TrackerResponse = {
       order_number: string;
       student?: { name?: string; phone?: string; email?: string } | null;
       bda?: { name?: string } | null;
+      bdm_name?: string;
       manager_name?: string;
       product?: { name?: string } | null;
       source?: string;
@@ -98,7 +99,8 @@ export function DailyTrackerPage() {
               <thead>
                 <tr>
                   <th>Customer</th>
-                  <th>BDA / Manager</th>
+                  <th>BDA</th>
+                  <th>BDM</th>
                   <th>Product</th>
                   <th>Paid / Due</th>
                   <th>Latest Transactions</th>
@@ -116,10 +118,10 @@ export function DailyTrackerPage() {
                       </div>
                     </td>
                     <td>
-                      <div className="cell-stack">
-                        <span>{row.bda?.name || "—"}</span>
-                        <span className="text-xs text-[var(--text-secondary)]">{row.manager_name || "Unassigned manager"}</span>
-                      </div>
+                      <span>{row.bda?.name || "—"}</span>
+                    </td>
+                    <td>
+                      <span>{row.bdm_name || row.manager_name || "Unassigned BDM"}</span>
                     </td>
                     <td>{row.product?.name || "—"}</td>
                     <td>
