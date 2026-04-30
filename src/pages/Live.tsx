@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Room as LiveKitRoom, RoomEvent, Track } from "livekit-client";
+import { Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track } from "livekit-client";
 import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
@@ -100,6 +100,9 @@ type LiveKitJoinInfo = {
   token: string | null;
   identity: string;
   canPublish: boolean;
+  canPublishAudio?: boolean;
+  canPublishVideo?: boolean;
+  canShareScreen?: boolean;
 };
 
 declare global {
@@ -112,6 +115,21 @@ type RoomSnapshot = {
   participants: Array<{ socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string }>;
   messages: Array<{ id: string; role: string; name: string; text: string; createdAt: string; target?: "ALL" | "HOST"; messageType?: "CHAT" | "TOAST"; highlight?: boolean; attendanceId?: string }>;
 };
+
+function describeMediaError(kind: "microphone" | "camera" | "screen share" | "room connection", error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  const lowered = message.toLowerCase();
+  if (lowered.includes("permission") || lowered.includes("denied") || lowered.includes("notallowed")) {
+    return `Allow ${kind} access in the browser and try again.`;
+  }
+  if (lowered.includes("notfound") || lowered.includes("device")) {
+    return `No ${kind} device is available right now.`;
+  }
+  if (kind === "room connection") {
+    return "Could not connect to the webinar media server.";
+  }
+  return `Could not start ${kind}. ${message || "Please try again."}`;
+}
 
 const defaultMeetingForm = {
   title: "",
@@ -679,10 +697,6 @@ function PublicShell({ title, description, children }: { title: string; descript
           <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--text-secondary)]">{description}</p>
         </div>
         <div className="mt-5">{children}</div>
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 px-2 text-xs text-white/55">
-          <span>Payments on this site are processed through Razorpay.</span>
-          <a href="/privacy-policy" className="text-[var(--accent)] underline underline-offset-4">Privacy Policy</a>
-        </div>
       </div>
     </div>
   );
@@ -894,6 +908,16 @@ function AudioStream({ stream, muted = false }: { stream: MediaStream | null; mu
   return <audio ref={audioRef} autoPlay playsInline muted={muted} className="hidden" />;
 }
 
+function composeMediaStream(...tracks: Array<MediaStreamTrack | null | undefined>) {
+  const stream = new MediaStream();
+  tracks.forEach((track) => {
+    if (track) {
+      stream.addTrack(track);
+    }
+  });
+  return stream.getTracks().length ? stream : null;
+}
+
 function StageVideo({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -904,6 +928,61 @@ function StageVideo({ stream, muted = false }: { stream: MediaStream | null; mut
   }, [stream]);
 
   return <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-video-fill" />;
+}
+
+function StageToast({ text }: { text: string }) {
+  return (
+    <div className="gm-stage-toast" role="status" aria-live="polite">
+      {text}
+    </div>
+  );
+}
+
+function SideCameraRail({
+  stream,
+  label,
+  eyebrow,
+  muted,
+  isCameraOn,
+}: {
+  stream: MediaStream | null;
+  label: string;
+  eyebrow: string;
+  muted?: boolean;
+  isCameraOn?: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    videoRef.current.srcObject = stream;
+    videoRef.current.play().catch(() => undefined);
+  }, [stream]);
+
+  return (
+    <aside className="gm-camera-panel">
+      <div className="gm-camera-panel-header">
+        <div>
+          <p className="gm-camera-panel-kicker">{eyebrow}</p>
+          <h3 className="gm-camera-panel-title">{label}</h3>
+        </div>
+        <span className="gm-camera-panel-status">{isCameraOn ? "Live" : "Audio only"}</span>
+      </div>
+
+      <div className="gm-camera-frame">
+        {stream && !muted && !isCameraOn ? <AudioStream stream={stream} /> : null}
+        {stream && isCameraOn ? (
+          <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-camera-video" />
+        ) : (
+          <div className="gm-camera-fallback">
+            <div className="gm-camera-fallback-avatar">{label.slice(0, 1).toUpperCase()}</div>
+            <p className="gm-camera-fallback-name">{label}</p>
+          </div>
+        )}
+        <div className="gm-camera-frame-label">{label}</div>
+      </div>
+    </aside>
+  );
 }
 
 function ControlIcon({ name }: { name: string }) {
@@ -936,20 +1015,30 @@ function ControlIcon({ name }: { name: string }) {
 
 function useClassMedia({
   joined,
-  canPublish,
+  canPublishAudio,
+  canPublishVideo,
+  canShareScreen,
   livekit,
   sendMediaState,
 }: {
   joined: boolean;
-  canPublish: boolean;
+  canPublishAudio: boolean;
+  canPublishVideo: boolean;
+  canShareScreen: boolean;
   livekit: LiveKitJoinInfo | null;
   sendMediaState: (isMicOn: boolean, isCameraOn: boolean, isScreenSharing?: boolean) => void;
 }) {
+  const canPublish = canPublishAudio || canPublishVideo || canShareScreen;
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteCameraStreams, setRemoteCameraStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
   const [isMicOn, setIsMicOn] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [mediaError, setMediaError] = useState("");
   const roomRef = useRef<LiveKitRoom | null>(null);
   const remoteTrackStateRef = useRef<Map<string, { audio: MediaStreamTrack | null; camera: MediaStreamTrack | null; screen: MediaStreamTrack | null }>>(new Map());
 
@@ -968,13 +1057,17 @@ function useClassMedia({
     const screenPublication = publications.find((publication) => publication.source === Track.Source.ScreenShare);
     const cameraPublication = publications.find((publication) => publication.source === Track.Source.Camera);
     const audioTrack = getPublicationTrack(micPublication);
-    const videoTrack = getPublicationTrack(screenPublication) || getPublicationTrack(cameraPublication);
+    const cameraTrack = getPublicationTrack(cameraPublication);
+    const screenTrack = getPublicationTrack(screenPublication);
+    const videoTrack = screenTrack || cameraTrack;
     if (audioTrack) stream.addTrack(audioTrack);
     if (videoTrack) stream.addTrack(videoTrack);
     setLocalStream(stream.getTracks().length ? stream : null);
+    setLocalCameraStream(composeMediaStream(cameraTrack));
+    setLocalScreenStream(composeMediaStream(screenTrack));
     setIsMicOn(Boolean(audioTrack) && room.localParticipant.isMicrophoneEnabled);
-    setIsCameraOn(Boolean(getPublicationTrack(cameraPublication)) && room.localParticipant.isCameraEnabled);
-    setIsScreenSharing(Boolean(getPublicationTrack(screenPublication)) && room.localParticipant.isScreenShareEnabled);
+    setIsCameraOn(Boolean(cameraTrack) && room.localParticipant.isCameraEnabled);
+    setIsScreenSharing(Boolean(screenTrack) && room.localParticipant.isScreenShareEnabled);
   }, [canPublish, getPublicationTrack]);
 
   const syncRemoteStream = useCallback((identity: string) => {
@@ -985,19 +1078,39 @@ function useClassMedia({
         next.delete(identity);
         return next;
       }
-      const stream = new MediaStream();
-      if (state.audio) stream.addTrack(state.audio);
-      if (state.screen || state.camera) {
-        stream.addTrack(state.screen || state.camera || null);
+      const stream = composeMediaStream(state.audio, state.screen || state.camera);
+      if (stream) {
+        next.set(identity, stream);
+      } else {
+        next.delete(identity);
       }
-      next.set(identity, stream);
+      return next;
+    });
+    setRemoteCameraStreams((current) => {
+      const next = new Map(current);
+      const stream = state ? composeMediaStream(state.camera) : null;
+      if (stream) {
+        next.set(identity, stream);
+      } else {
+        next.delete(identity);
+      }
+      return next;
+    });
+    setRemoteScreenStreams((current) => {
+      const next = new Map(current);
+      const stream = state ? composeMediaStream(state.screen) : null;
+      if (stream) {
+        next.set(identity, stream);
+      } else {
+        next.delete(identity);
+      }
       return next;
     });
   }, []);
 
   const updateRemoteTrack = useCallback((identity: string, source: string | undefined, mediaStreamTrack: MediaStreamTrack | null) => {
     const current = remoteTrackStateRef.current.get(identity) || { audio: null, camera: null, screen: null };
-    if (source === Track.Source.Microphone) {
+    if (source === Track.Source.Microphone || source === Track.Source.ScreenShareAudio) {
       current.audio = mediaStreamTrack;
     } else if (source === Track.Source.ScreenShare) {
       current.screen = mediaStreamTrack;
@@ -1011,10 +1124,15 @@ function useClassMedia({
   useEffect(() => {
     if (!joined || !livekit?.url || !livekit?.token) {
       setLocalStream(null);
+      setLocalCameraStream(null);
+      setLocalScreenStream(null);
       setRemoteStreams(new Map());
+      setRemoteCameraStreams(new Map());
+      setRemoteScreenStreams(new Map());
       setIsMicOn(false);
       setIsCameraOn(false);
       setIsScreenSharing(false);
+      setMediaError("");
       return;
     }
 
@@ -1063,13 +1181,19 @@ function useClassMedia({
     room.connect(livekit.url, livekit.token, { autoSubscribe: true })
       .then(() => {
         if (!active) return;
+        setMediaError("");
         room.remoteParticipants.forEach((participant) => syncExistingParticipant(participant));
         buildLocalPreview(room);
       })
-      .catch(() => {
+      .catch((error) => {
         if (!active) return;
+        setMediaError(describeMediaError("room connection", error));
         setLocalStream(null);
+        setLocalCameraStream(null);
+        setLocalScreenStream(null);
         setRemoteStreams(new Map());
+        setRemoteCameraStreams(new Map());
+        setRemoteScreenStreams(new Map());
       });
 
     return () => {
@@ -1081,50 +1205,90 @@ function useClassMedia({
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
       setRemoteStreams(new Map());
+      setRemoteCameraStreams(new Map());
+      setRemoteScreenStreams(new Map());
       setLocalStream(null);
+      setLocalCameraStream(null);
+      setLocalScreenStream(null);
       setIsMicOn(false);
       setIsCameraOn(false);
       setIsScreenSharing(false);
+      setMediaError("");
     };
   }, [buildLocalPreview, getPublicationTrack, joined, livekit, updateRemoteTrack]);
 
   useEffect(() => {
-    sendMediaState(isMicOn, isCameraOn || isScreenSharing, isScreenSharing);
+    sendMediaState(isMicOn, isCameraOn, isScreenSharing);
   }, [isCameraOn, isMicOn, isScreenSharing, sendMediaState]);
 
   async function toggleMic() {
     const next = !isMicOn;
     const room = roomRef.current;
-    if (!room || !canPublish) return;
-    const publication = await room.localParticipant.setMicrophoneEnabled(next);
-    setIsMicOn(next);
-    if (!next && publication) {
-      setIsMicOn(false);
+    if (!room || !canPublishAudio) return;
+    try {
+      setMediaError("");
+      const publication = await room.localParticipant.setMicrophoneEnabled(next);
+      setIsMicOn(next);
+      if (!next && publication) {
+        setIsMicOn(false);
+      }
+      buildLocalPreview(room);
+    } catch (error) {
+      setMediaError(describeMediaError("microphone", error));
     }
-    buildLocalPreview(room);
   }
 
   async function toggleCamera() {
     const next = !isCameraOn;
     const room = roomRef.current;
-    if (!room || !canPublish || isScreenSharing) return;
-    await room.localParticipant.setCameraEnabled(next);
-    setIsCameraOn(next);
-    buildLocalPreview(room);
+    if (!room || !canPublishVideo) return;
+    try {
+      setMediaError("");
+      await room.localParticipant.setCameraEnabled(next);
+      setIsCameraOn(next);
+      buildLocalPreview(room);
+    } catch (error) {
+      setMediaError(describeMediaError("camera", error));
+    }
   }
 
   async function toggleScreenShare() {
     const room = roomRef.current;
-    if (!room || !canPublish) return;
+    if (!room || !canShareScreen) return;
     const next = !isScreenSharing;
-    await room.localParticipant.setScreenShareEnabled(next);
-    setIsScreenSharing(next);
-    buildLocalPreview(room);
+    try {
+      setMediaError("");
+      await room.localParticipant.setScreenShareEnabled(
+        next,
+        next
+          ? {
+              video: true,
+              resolution: ScreenSharePresets.h1080fps30.resolution,
+              contentHint: "detail",
+            }
+          : undefined,
+        next
+          ? {
+              screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
+              screenShareSimulcastLayers: [ScreenSharePresets.h720fps15],
+              degradationPreference: "maintain-resolution",
+            }
+          : undefined,
+      );
+      setIsScreenSharing(next);
+      buildLocalPreview(room);
+    } catch (error) {
+      setMediaError(describeMediaError("screen share", error));
+    }
   }
 
   return {
     localStream,
+    localCameraStream,
+    localScreenStream,
     remoteStreams,
+    remoteCameraStreams,
+    remoteScreenStreams,
     isMicOn,
     isCameraOn,
     isScreenSharing,
@@ -1132,6 +1296,7 @@ function useClassMedia({
     toggleCamera,
     toggleScreenShare,
     hasMediaAccess: canPublish ? Boolean(livekit?.token) : true,
+    mediaError,
   };
 }
 
@@ -1148,6 +1313,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [draftMessageTarget, setDraftMessageTarget] = useState<"ALL" | "HOST">("ALL");
   const [draftMessageType, setDraftMessageType] = useState<"CHAT" | "TOAST">("CHAT");
   const [paymentNotice, setPaymentNotice] = useState("");
+  const [linkCopyNotice, setLinkCopyNotice] = useState("");
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentComplete, setPaymentComplete] = useState(false);
   const [pendingCheckout, setPendingCheckout] = useState<{ orderId: string; paymentId?: string } | null>(null);
@@ -1160,11 +1326,13 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [hostFullAmount, setHostFullAmount] = useState("9999");
   const [hostTokenAmount, setHostTokenAmount] = useState("499");
   const chatRef = useRef<HTMLDivElement | null>(null);
-  const canHostRoom = role === "HOST" && ["ADMIN", "SUPER_ADMIN"].includes(String(user?.role || "").toUpperCase());
   const connection = useRoomConnection(role, roomName, joined ? form : null);
+  const canHostRoom = role === "HOST" && ["ADMIN", "SUPER_ADMIN"].includes(String(user?.role || "").toUpperCase());
   const media = useClassMedia({
     joined,
-    canPublish: canHostRoom,
+    canPublishAudio: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canPublishAudio),
+    canPublishVideo: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canPublishVideo),
+    canShareScreen: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canShareScreen),
     livekit: connection.livekit,
     sendMediaState: connection.sendMediaState,
   });
@@ -1198,6 +1366,11 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     setHostFullAmount(String(Math.round((connection.webinar.price_inr || 0) / 100) || 9999));
     setHostTokenAmount(String(Math.round((connection.webinar.token_price_inr || 0) / 100) || 499));
   }, [connection.webinar]);
+
+  useEffect(() => {
+    if (!media.mediaError) return;
+    setPaymentNotice(media.mediaError);
+  }, [media.mediaError]);
 
   useEffect(() => {
     if (role !== "HOST") return;
@@ -1302,6 +1475,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       chatRef.current.scrollTop = chatRef.current.scrollHeight;
     }
   }, [connection.room.messages, sidePanel]);
+
+  useEffect(() => {
+    if (!linkCopyNotice) return;
+    const timer = window.setTimeout(() => setLinkCopyNotice(""), 2200);
+    return () => window.clearTimeout(timer);
+  }, [linkCopyNotice]);
 
   function submitJoin() {
     if (role === "HOST" && !canHostRoom) {
@@ -1506,6 +1685,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     setPaymentNotice(connection.webinar?.enroll_button_enabled ? "Enroll Now hidden for attendees." : "Enroll Now is now visible to attendees.");
   }
 
+  async function copySessionLink(label: string, value: string) {
+    if (!value) return;
+    await navigator.clipboard?.writeText(value);
+    setLinkCopyNotice(`${label} link copied.`);
+  }
+
   if (!joined) {
     return (
       <div className="gm-prejoin-shell">
@@ -1550,27 +1735,33 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   if (role === "ATTENDEE" && joined) {
     const leadRemote = hostParticipants[0] || null;
     const leadRemoteStream = leadRemote ? media.remoteStreams.get(leadRemote.attendanceId) || null : null;
-    const showRemoteVideo = Boolean(leadRemoteStream && (leadRemote?.isCameraOn || leadRemote?.isScreenSharing));
+    const leadRemoteScreenStream = leadRemote ? media.remoteScreenStreams.get(leadRemote.attendanceId) || null : null;
+    const leadRemoteCameraStream = leadRemote ? media.remoteCameraStreams.get(leadRemote.attendanceId) || null : null;
+    const leadRemoteStageStream = leadRemoteScreenStream || leadRemoteStream;
+    const showRemoteVideo = Boolean(leadRemoteStageStream && (leadRemote?.isCameraOn || leadRemote?.isScreenSharing));
+    const showHostCameraPreview = Boolean(leadRemoteScreenStream && leadRemote?.isCameraOn && leadRemoteCameraStream);
     const hostLabel = leadRemote?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
+    const showHostCameraRail = !sidePanel && showHostCameraPreview;
 
     return (
       <div className="gm-root">
         <div className="gm-main">
-          {connection.activeToast ? (
-            <div className="fixed left-1/2 top-6 z-[70] -translate-x-1/2 rounded-full border border-amber-300/35 bg-amber-500/95 px-5 py-3 text-sm font-semibold text-white shadow-2xl backdrop-blur">
-              {connection.activeToast.text}
-            </div>
-          ) : null}
           <div className="gm-stage">
-            {leadRemoteStream && !showRemoteVideo ? <AudioStream stream={leadRemoteStream} /> : null}
+            {leadRemoteStageStream && !showRemoteVideo ? <AudioStream stream={leadRemoteStageStream} /> : null}
             {showRemoteVideo ? (
-              <StageVideo stream={leadRemoteStream} />
+              <StageVideo stream={leadRemoteStageStream} />
             ) : (
               <div className="gm-avatar-stage">
                 <div className="gm-avatar-circle">{hostLabel.slice(0, 1).toUpperCase()}</div>
                 <p className="gm-avatar-name">{hostLabel}</p>
               </div>
             )}
+
+            {!showHostCameraRail && showHostCameraPreview ? (
+              <div className="gm-host-pip">
+                <VideoStream stream={leadRemoteCameraStream} label={`${hostLabel} camera`} isCameraOn />
+              </div>
+            ) : null}
 
             <div className="gm-name-pill">
               <span>{hostLabel}</span>
@@ -1582,6 +1773,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             </div>
 
             {leadRemote?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
+
+            {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
 
             {enrollEnabled && !paymentComplete ? (
               <div className="gm-offer-banner">
@@ -1607,17 +1800,34 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             {paymentNotice ? <div className="gm-payment-note">{paymentNotice}</div> : null}
           </div>
 
-          <div className="gm-bar">
-            <div className="gm-bar-left">
-              <span className="gm-time">{currentTime}</span>
-              <span className="gm-bar-divider">|</span>
-              <span className="gm-meeting-code">{roomName}</span>
-              <span className="gm-bar-divider">·</span>
-              <span className="gm-duration">{duration}</span>
+          <div className="gm-bar gm-bar-attendee">
+            <div className="gm-bar-attendee-top">
+              <div className="gm-bar-left">
+                <span className="gm-time">{currentTime}</span>
+                <span className="gm-bar-divider">|</span>
+                <span className="gm-meeting-code">{roomName}</span>
+                <span className="gm-bar-divider">·</span>
+                <span className="gm-duration">{duration}</span>
+              </div>
+
+              <div className="gm-bar-right">
+                <button onClick={() => togglePanel("people")} className={`gm-icon-btn ${sidePanel === "people" ? "gm-icon-btn-active" : ""}`} type="button">
+                  <ControlIcon name="people" />
+                  <span className="gm-people-count">{connection.room.participants.length}</span>
+                </button>
+                <button onClick={() => togglePanel("chat")} className={`gm-icon-btn ${sidePanel === "chat" ? "gm-icon-btn-active" : ""}`} type="button">
+                  <ControlIcon name="chat" />
+                </button>
+              </div>
             </div>
 
-            <div className="gm-bar-center">
+            <div className="gm-bar-attendee-bottom">
               <div className="gm-ctrl-group">
+                {connection.livekit?.canPublishAudio ? (
+                  <button className={`gm-btn ${media.isMicOn ? "" : "gm-btn-off"}`} type="button" onClick={media.toggleMic} title="Microphone">
+                    <ControlIcon name={media.isMicOn ? "mic" : "mic-off"} />
+                  </button>
+                ) : null}
                 {enrollEnabled ? (
                   <button className={`gm-enroll-btn ${paymentComplete ? "gm-enroll-btn-done" : ""}`} type="button" onClick={launchEnrollNow} disabled={paymentLoading || paymentComplete}>
                     <ControlIcon name="offer" />
@@ -1628,16 +1838,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
               <button onClick={() => leaveCurrentRoom("You left the webinar.")} className="gm-btn-hangup" type="button" title="Leave">
                 <ControlIcon name="end" />
-              </button>
-            </div>
-
-            <div className="gm-bar-right">
-              <button onClick={() => togglePanel("people")} className={`gm-icon-btn ${sidePanel === "people" ? "gm-icon-btn-active" : ""}`} type="button">
-                <ControlIcon name="people" />
-                <span className="gm-people-count">{connection.room.participants.length}</span>
-              </button>
-              <button onClick={() => togglePanel("chat")} className={`gm-icon-btn ${sidePanel === "chat" ? "gm-icon-btn-active" : ""}`} type="button">
-                <ControlIcon name="chat" />
               </button>
             </div>
           </div>
@@ -1711,6 +1911,13 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
             )}
           </div>
+        ) : showHostCameraRail ? (
+          <SideCameraRail
+            stream={leadRemoteCameraStream}
+            label={`${hostLabel} camera`}
+            eyebrow="Host camera"
+            isCameraOn
+          />
         ) : null}
       </div>
     );
@@ -1718,19 +1925,29 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
   if (role === "HOST") {
     const leadRemote = remoteParticipants[0];
+    const leadRemoteStream = leadRemote ? media.remoteStreams.get(leadRemote.attendanceId) || null : null;
+    const localStageStream = media.localScreenStream || media.localStream;
+    const localCameraPreviewStream = media.isScreenSharing ? media.localCameraStream : null;
     const raisedHands = connection.room.participants.filter((participant) => participant.role === "ATTENDEE" && participant.isHandRaised);
+    const hostSidePreview = localCameraPreviewStream
+      ? { stream: localCameraPreviewStream, label: `${form.name || "Host"} camera`, eyebrow: "Your camera", muted: true, isCameraOn: true }
+      : leadRemote
+        ? {
+            stream: leadRemoteStream,
+            label: leadRemote.name,
+            eyebrow: leadRemote.role === "HOST" ? "Host feed" : "Attendee feed",
+            muted: false,
+            isCameraOn: leadRemote.isCameraOn || leadRemote.isScreenSharing,
+          }
+        : null;
+    const showHostCameraRail = Boolean(!sidePanel && hostSidePreview);
 
     return (
       <div className="gm-root">
         <div className="gm-main">
-          {connection.activeToast ? (
-            <div className="fixed left-1/2 top-6 z-[70] -translate-x-1/2 rounded-full border border-amber-300/35 bg-amber-500/95 px-5 py-3 text-sm font-semibold text-white shadow-2xl backdrop-blur">
-              {connection.activeToast.text}
-            </div>
-          ) : null}
           <div className="gm-stage">
             {media.isCameraOn || media.isScreenSharing ? (
-              <StageVideo stream={media.localStream} muted />
+              <StageVideo stream={localStageStream} muted />
             ) : (
               <div className="gm-avatar-stage">
                 <div className="gm-avatar-circle">{(form.name || "Host").slice(0, 1).toUpperCase()}</div>
@@ -1749,12 +1966,15 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {media.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
-            {leadRemote ? (
+            {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
+
+            {hostSidePreview && !showHostCameraRail ? (
               <div className="gm-host-pip">
                 <VideoStream
-                  stream={media.remoteStreams.get(leadRemote.attendanceId) || null}
-                  label={leadRemote.name}
-                  isCameraOn={leadRemote.isCameraOn}
+                  stream={hostSidePreview.stream}
+                  muted={hostSidePreview.muted}
+                  label={hostSidePreview.label}
+                  isCameraOn={hostSidePreview.isCameraOn}
                 />
               </div>
             ) : null}
@@ -1890,7 +2110,10 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                     </div>
                     {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
                     {participant.socketId !== connection.ownSocketId ? (
-                      <div className="ml-auto flex flex-wrap gap-2">
+                      <div className="gm-person-actions">
+                        {participant.role === "ATTENDEE" && !participant.isMicOn ? (
+                          <button className="gm-mini-btn gm-mini-btn-accent" type="button" onClick={() => connection.requestUnmute(participant.socketId, participant.name)}>Ask to unmute</button>
+                        ) : null}
                         <button className="rounded-full border border-rose-400/30 px-3 py-1 text-xs text-rose-200" type="button" onClick={() => connection.removeParticipant(participant.socketId)}>Remove</button>
                       </div>
                     ) : null}
@@ -1899,10 +2122,21 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
             )}
           </div>
+        ) : showHostCameraRail && hostSidePreview ? (
+          <SideCameraRail
+            stream={hostSidePreview.stream}
+            label={hostSidePreview.label}
+            eyebrow={hostSidePreview.eyebrow}
+            muted={hostSidePreview.muted}
+            isCameraOn={hostSidePreview.isCameraOn}
+          />
         ) : null}
       </div>
     );
   }
+
+  const hostSessionLink = connection.session?.short_host_url || connection.webinar?.short_host_url || connection.session?.host_url || connection.webinar?.host_url || "";
+  const attendeeSessionLink = connection.session?.short_attendee_url || connection.webinar?.short_attendee_url || connection.session?.attendee_url || connection.webinar?.attendee_url || "";
 
   return (
     <PublicShell
@@ -1983,13 +2217,13 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 ) : null}
 
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <VideoStream stream={media.localStream} muted label={`${form.name || role} (You)`} isCameraOn={media.isCameraOn} />
+                  <VideoStream stream={media.localScreenStream || media.localStream} muted label={`${form.name || role} (You)`} isCameraOn={media.isCameraOn || media.isScreenSharing} />
                   {remoteParticipants.length ? remoteParticipants.map((participant) => (
                     <VideoStream
                       key={participant.socketId}
                       stream={media.remoteStreams.get(participant.attendanceId) || null}
                       label={`${participant.name} ${participant.isMicOn ? "Mic on" : "Mic off"}`}
-                      isCameraOn={participant.isCameraOn}
+                      isCameraOn={participant.isCameraOn || participant.isScreenSharing}
                     />
                   )) : (
                     <div className="flex min-h-[220px] items-center justify-center rounded-[24px] border border-dashed border-[rgba(201,168,76,0.2)] bg-[rgba(255,255,255,0.04)] p-6 text-center text-sm text-[var(--text-secondary)]">
@@ -2068,8 +2302,23 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             </div>
             <div className="rounded-2xl border border-[rgba(201,168,76,0.14)] p-4 text-sm">
               <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Links</div>
-              <a className="text-link mt-2 block break-all" href={connection.session?.host_url} target="_blank" rel="noreferrer">Host URL</a>
-              <a className="text-link mt-2 block break-all" href={connection.session?.attendee_url} target="_blank" rel="noreferrer">Attendee URL</a>
+              <div className="gm-link-stack">
+                <div className="gm-link-card">
+                  <div className="gm-link-card-top">
+                    <span className="gm-link-card-label">Host URL</span>
+                    <button className="gm-link-copy-btn" type="button" onClick={() => copySessionLink("Host", hostSessionLink)} disabled={!hostSessionLink}>Copy</button>
+                  </div>
+                  <a className="text-link gm-link-card-url" href={hostSessionLink} target="_blank" rel="noreferrer">{hostSessionLink || "-"}</a>
+                </div>
+                <div className="gm-link-card">
+                  <div className="gm-link-card-top">
+                    <span className="gm-link-card-label">Attendee URL</span>
+                    <button className="gm-link-copy-btn" type="button" onClick={() => copySessionLink("Attendee", attendeeSessionLink)} disabled={!attendeeSessionLink}>Copy</button>
+                  </div>
+                  <a className="text-link gm-link-card-url" href={attendeeSessionLink} target="_blank" rel="noreferrer">{attendeeSessionLink || "-"}</a>
+                </div>
+              </div>
+              {linkCopyNotice ? <div className="gm-link-copy-notice">{linkCopyNotice}</div> : null}
             </div>
             <div className="rounded-2xl border border-[rgba(201,168,76,0.14)] p-4 text-sm">
               <div className="text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Participants</div>

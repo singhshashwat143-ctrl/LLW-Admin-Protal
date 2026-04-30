@@ -18,9 +18,11 @@ export function LinksPage() {
   const [label, setLabel] = useState("Manual LLW link");
   const [aliasSuffix, setAliasSuffix] = useState("xyz-abc");
   const [copied, setCopied] = useState("");
+  const [creating, setCreating] = useState(false);
 
   async function createLink() {
     try {
+      setCreating(true);
       const response = await api<{ link: LinkRow }>("/api/links/shorten", {
         method: "POST",
         body: JSON.stringify({ original_url: originalUrl, label, alias_suffix: aliasSuffix }),
@@ -30,6 +32,8 @@ export function LinksPage() {
       setCopied(`Created and copied ${response.link.short_url}`);
     } catch (error) {
       setCopied(error instanceof Error ? error.message : "Unable to create PyMD link.");
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -47,13 +51,26 @@ export function LinksPage() {
       />
       {copied ? <div className="rounded-[22px] border border-[rgba(34,197,94,0.2)] bg-[rgba(34,197,94,0.08)] px-5 py-4 text-sm text-[var(--success)]">{copied}</div> : null}
       <SectionCard title="Create PyMD Link" subtitle="Enter the real destination URL exactly as PyMD should open it, like py.md/hello-razorpay does.">
-        <div className="grid gap-3 md:grid-cols-[220px_180px_1fr_auto]">
-          <input className="input-dark" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Label" />
-          <input className="input-dark" value={aliasSuffix} onChange={(event) => setAliasSuffix(event.target.value)} placeholder="xyz-abc" />
-          <input className="input-dark" value={originalUrl} onChange={(event) => setOriginalUrl(event.target.value)} placeholder="https://your-final-url.com/page" />
-          <button className="btn-primary shrink-0" type="button" onClick={createLink}>Create PyMD Link</button>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,220px)_minmax(0,180px)_minmax(0,1fr)]">
+          <input className="input-dark min-w-0" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Label" />
+          <input className="input-dark min-w-0" value={aliasSuffix} onChange={(event) => setAliasSuffix(event.target.value)} placeholder="xyz-abc" />
+          <input
+            className="input-dark min-w-0"
+            value={originalUrl}
+            onChange={(event) => setOriginalUrl(event.target.value)}
+            placeholder="https://your-final-url.com/page"
+            onKeyDown={(event) => event.key === "Enter" && createLink()}
+          />
         </div>
-        <p className="mt-3 text-sm text-[var(--text-secondary)]">Preview alias: <span className="font-mono text-[var(--text-strong)]">llw-{aliasSuffix || "xyz-abc"}</span></p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm text-[var(--text-secondary)]">Preview alias: <span className="font-mono text-[var(--text-strong)]">llw-{aliasSuffix || "xyz-abc"}</span></p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">This button creates the short link and copies it immediately.</p>
+          </div>
+          <button className="btn-primary w-full sm:w-auto sm:min-w-[220px]" type="button" onClick={createLink} disabled={creating}>
+            {creating ? "Publishing..." : "Publish PyMD Link"}
+          </button>
+        </div>
       </SectionCard>
       <SectionCard title="All Links">
         <div className="table-shell table-scroll">

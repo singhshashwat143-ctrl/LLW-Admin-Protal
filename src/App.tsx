@@ -4,8 +4,8 @@ import { LoginGate } from "./components/LoginGate";
 import { Sidebar } from "./components/Sidebar";
 import type { ThemeMode } from "./lib/theme";
 import { useAuth } from "./lib/auth";
-import { canAccessRoute, getRouteRestrictionCopy } from "./lib/permissions";
-import { useRoute } from "./lib/router";
+import { canAccessRoute, getRouteRestrictionCopy, hasPermission } from "./lib/permissions";
+import { navigate, useRoute } from "./lib/router";
 import { persistTheme, resolvePreferredTheme } from "./lib/theme";
 import { BootcampLandingPage, BootcampListPage, BootcampFormPage } from "./pages/Bootcamps";
 import { DashboardPage } from "./pages/Dashboard";
@@ -32,10 +32,14 @@ function AdminLayout({
   children,
   theme,
   onToggleTheme,
+  showLinksShortcut,
+  linksShortcutActive,
 }: {
   children: ReactNode;
   theme: ThemeMode;
   onToggleTheme: () => void;
+  showLinksShortcut: boolean;
+  linksShortcutActive: boolean;
 }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -49,7 +53,27 @@ function AdminLayout({
           onToggleTheme={onToggleTheme}
         />
         <main className="min-w-0 flex-1 overflow-hidden">
-          <div className="admin-content-scroll h-full">{children}</div>
+          <div className="flex h-full min-h-0 flex-col">
+            {showLinksShortcut ? (
+              <div className="pb-3">
+                <div className="glass-card flex flex-col gap-4 rounded-2xl px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">Quick Access</p>
+                    <p className="mt-1 text-base font-semibold text-[var(--text-strong)]">PyMD link publishing</p>
+                    <p className="mt-1 text-sm text-[var(--text-secondary)]">Open the link manager and create a short link from one clear button.</p>
+                  </div>
+                  <button
+                    className={linksShortcutActive ? "btn-secondary shrink-0" : "btn-primary shrink-0"}
+                    type="button"
+                    onClick={() => navigate("/links")}
+                  >
+                    {linksShortcutActive ? "PyMD Links Open" : "Open PyMD Links"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            <div className="admin-content-scroll min-h-0 flex-1">{children}</div>
+          </div>
         </main>
       </div>
     </div>
@@ -104,9 +128,15 @@ export default function App() {
   }
 
   const routeRestriction = canAccessRoute(user, route.pattern) ? null : getRouteRestrictionCopy(route.pattern);
+  const showLinksShortcut = hasPermission(user, "view_links_admin");
 
   return (
-    <AdminLayout theme={theme} onToggleTheme={toggleTheme}>
+    <AdminLayout
+      theme={theme}
+      onToggleTheme={toggleTheme}
+      showLinksShortcut={showLinksShortcut}
+      linksShortcutActive={route.pattern === "/links"}
+    >
       {routeRestriction ? <AccessDenied title={routeRestriction.title} description={routeRestriction.description} /> : null}
       {!routeRestriction && (
         <>

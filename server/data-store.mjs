@@ -24,6 +24,9 @@ const requiredTeamMembers = [
   { name: "Shreya Sarvade", email: "shreya@livelongwealth.com", role: "BDA", manager_name: "Saravana Kumar", team_name: "Saravana Kumar Team" },
   { name: "Bibin", email: "bibin@livelongwealth.com", role: "OPERATIONS", manager_name: "", team_name: "Operations" },
   { name: "Abhinav", email: "abhinav@livelongwealth.com", role: "OPERATIONS", manager_name: "", team_name: "Operations" },
+  { name: "Vaisakh V S", email: "vaisakh.vs@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
+  { name: "Drisya", email: "drisya@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
+  { name: "Sravani", email: "sravani@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
 ];
 const requiredTeamMemberByEmail = new Map(requiredTeamMembers.map((member) => [member.email.toLowerCase(), member]));
 
@@ -1108,6 +1111,7 @@ function withComputedPayment(order, data) {
     },
     operations_completed: isOperationsComplete(order),
     manager_name: order.manager_name || bda?.manager_name || "",
+    bdm_name: order.manager_name || bda?.manager_name || "",
     team_name: order.team_name || bda?.team_name || "",
     created_by_user_id: order.created_by_user_id || null,
     created_by_name: order.created_by_name || "",
