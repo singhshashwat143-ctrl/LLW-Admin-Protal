@@ -17,27 +17,6 @@ This application must run as a single Node service that serves:
 6. Put Nginx in front of the Node process.
 7. Enable HTTPS.
 
-## Git Push -> Deploy automation
-
-This repo includes [`.github/workflows/render-deploy.yml`](./.github/workflows/render-deploy.yml).
-
-To make every GitHub push trigger a site deploy:
-
-1. In Render, open the `webinar-classroom` service.
-2. Go to `Settings -> Deploy Hook`.
-3. Copy the service deploy hook URL.
-4. In GitHub, open `Settings -> Secrets and variables -> Actions`.
-5. Add a repository secret named `RENDER_DEPLOY_HOOK_URL`.
-6. Paste the Render deploy hook URL as the secret value.
-
-The workflow sends Render the exact pushed commit SHA with `?ref=<sha>`, so branch names like `codex/post-deploy-webinar-admin-updates` work too.
-
-Important:
-
-- This workflow deploys every pushed branch to the same Render site.
-- The most recently pushed branch wins and becomes the live site.
-- If you want safer production behavior later, restrict the workflow trigger to `main` only.
-
 ## Important
 
 - Do not deploy this as static-only hosting.
