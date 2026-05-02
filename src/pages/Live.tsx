@@ -1096,6 +1096,8 @@ function useClassMedia({
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [mediaError, setMediaError] = useState("");
   const roomRef = useRef<LiveKitRoom | null>(null);
+  const desiredMicEnabledRef = useRef(false);
+  const micRecoveryTimeoutsRef = useRef<number[]>([]);
   const remoteTrackStateRef = useRef<Map<string, {
     micAudio: MediaStreamTrack | null;
     screenAudio: MediaStreamTrack | null;
@@ -1105,6 +1107,11 @@ function useClassMedia({
 
   const getPublicationTrack = useCallback((publication: any) => {
     return publication?.track?.mediaStreamTrack || publication?.videoTrack?.mediaStreamTrack || publication?.audioTrack?.mediaStreamTrack || null;
+  }, []);
+
+  const clearMicRecoveryTimers = useCallback(() => {
+    micRecoveryTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    micRecoveryTimeoutsRef.current = [];
   }, []);
 
   const buildLocalPreview = useCallback((room: LiveKitRoom | null) => {
@@ -1132,6 +1139,33 @@ function useClassMedia({
     setIsCameraOn(Boolean(cameraTrack) && room.localParticipant.isCameraEnabled);
     setIsScreenSharing(Boolean(screenTrack) && room.localParticipant.isScreenShareEnabled);
   }, [canPublish, getPublicationTrack]);
+
+  const restoreMicrophoneIfNeeded = useCallback(async (room: LiveKitRoom | null) => {
+    if (!room || !canPublishAudio || !desiredMicEnabledRef.current) return;
+    try {
+      const micPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      if (!micPublication || micPublication.isMuted || !room.localParticipant.isMicrophoneEnabled) {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
+      setMediaError("");
+    } catch (error) {
+      setMediaError(describeMediaError("microphone", error));
+    } finally {
+      buildLocalPreview(room);
+    }
+  }, [buildLocalPreview, canPublishAudio]);
+
+  const scheduleMicrophoneRecovery = useCallback((room: LiveKitRoom | null) => {
+    if (!room) return;
+    clearMicRecoveryTimers();
+    [0, 180, 600, 1400].forEach((delay) => {
+      const timeoutId = window.setTimeout(() => {
+        if (!room.localParticipant.isScreenShareEnabled || !desiredMicEnabledRef.current) return;
+        void restoreMicrophoneIfNeeded(room);
+      }, delay);
+      micRecoveryTimeoutsRef.current.push(timeoutId);
+    });
+  }, [clearMicRecoveryTimers, restoreMicrophoneIfNeeded]);
 
   const syncRemoteStream = useCallback((identity: string) => {
     const state = remoteTrackStateRef.current.get(identity);
@@ -1195,6 +1229,8 @@ function useClassMedia({
       setRemoteCameraStreams(new Map());
       setRemoteScreenStreams(new Map());
       setActiveSpeakerIds([]);
+      clearMicRecoveryTimers();
+      desiredMicEnabledRef.current = false;
       setIsMicOn(false);
       setIsCameraOn(false);
       setIsScreenSharing(false);
@@ -1253,12 +1289,38 @@ function useClassMedia({
       setActiveSpeakerIds(speakers.map((participant) => participant.identity).filter(Boolean));
     };
 
+    const onTrackMuted = (publication: any, participant: any) => {
+      if (participant?.identity !== livekit.identity) return;
+      buildLocalPreview(room);
+      if (publication?.source === Track.Source.Microphone && desiredMicEnabledRef.current && room.localParticipant.isScreenShareEnabled) {
+        scheduleMicrophoneRecovery(room);
+      }
+    };
+
+    const onTrackUnmuted = (_publication: any, participant: any) => {
+      if (participant?.identity !== livekit.identity) return;
+      buildLocalPreview(room);
+    };
+
+    const onLocalTrackPublished = () => {
+      buildLocalPreview(room);
+    };
+
+    const onLocalTrackUnpublished = (publication: any) => {
+      buildLocalPreview(room);
+      if (publication?.source === Track.Source.Microphone && desiredMicEnabledRef.current && room.localParticipant.isScreenShareEnabled) {
+        scheduleMicrophoneRecovery(room);
+      }
+    };
+
     room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
     room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
     room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
-    room.on(RoomEvent.LocalTrackPublished, () => buildLocalPreview(room));
-    room.on(RoomEvent.LocalTrackUnpublished, () => buildLocalPreview(room));
+    room.on(RoomEvent.TrackMuted, onTrackMuted);
+    room.on(RoomEvent.TrackUnmuted, onTrackUnmuted);
+    room.on(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
+    room.on(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
 
     room.connect(livekit.url, livekit.token, { autoSubscribe: true })
       .then(() => {
@@ -1285,6 +1347,10 @@ function useClassMedia({
       room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
       room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
+      room.off(RoomEvent.TrackMuted, onTrackMuted);
+      room.off(RoomEvent.TrackUnmuted, onTrackUnmuted);
+      room.off(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
+      room.off(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
       room.disconnect();
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
@@ -1292,6 +1358,8 @@ function useClassMedia({
       setRemoteCameraStreams(new Map());
       setRemoteScreenStreams(new Map());
       setActiveSpeakerIds([]);
+      clearMicRecoveryTimers();
+      desiredMicEnabledRef.current = false;
       setLocalStream(null);
       setLocalCameraStream(null);
       setLocalScreenStream(null);
@@ -1300,7 +1368,7 @@ function useClassMedia({
       setIsScreenSharing(false);
       setMediaError("");
     };
-  }, [buildLocalPreview, getPublicationTrack, joined, livekit, updateRemoteTrack]);
+  }, [buildLocalPreview, clearMicRecoveryTimers, getPublicationTrack, joined, livekit, scheduleMicrophoneRecovery, updateRemoteTrack]);
 
   useEffect(() => {
     sendMediaState(isMicOn, isCameraOn, isScreenSharing);
@@ -1310,6 +1378,8 @@ function useClassMedia({
     const next = !isMicOn;
     const room = roomRef.current;
     if (!room || !canPublishAudio) return;
+    const previousDesiredMicState = desiredMicEnabledRef.current;
+    desiredMicEnabledRef.current = next;
     try {
       setMediaError("");
       const publication = await room.localParticipant.setMicrophoneEnabled(next);
@@ -1317,8 +1387,12 @@ function useClassMedia({
       if (!next && publication) {
         setIsMicOn(false);
       }
+      if (!next) {
+        clearMicRecoveryTimers();
+      }
       buildLocalPreview(room);
     } catch (error) {
+      desiredMicEnabledRef.current = previousDesiredMicState;
       setMediaError(describeMediaError("microphone", error));
     }
   }
@@ -1348,6 +1422,7 @@ function useClassMedia({
         next,
         next
           ? {
+              audio: false,
               video: true,
               resolution: ScreenSharePresets.h1080fps30.resolution,
               contentHint: "detail",
@@ -1361,8 +1436,11 @@ function useClassMedia({
             }
           : undefined,
       );
-      if (next && micWasOn && !room.localParticipant.isMicrophoneEnabled) {
-        await room.localParticipant.setMicrophoneEnabled(true);
+      if (next && micWasOn) {
+        desiredMicEnabledRef.current = true;
+        scheduleMicrophoneRecovery(room);
+      } else if (!next) {
+        clearMicRecoveryTimers();
       }
       setIsScreenSharing(next);
       buildLocalPreview(room);
