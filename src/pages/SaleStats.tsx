@@ -2,12 +2,33 @@ import { PageHeader, SectionCard } from "../components/UI";
 import { useApi } from "../lib/api";
 import { formatCurrency } from "../lib/format";
 
+type SalesSummaryResponse = {
+  summary: Array<{
+    label: string;
+    amount: number;
+    count: number;
+  }>;
+  monthlyRevenue: Array<{
+    label: string;
+    amount: number;
+  }>;
+  podSales: Array<{
+    product: string;
+    today: number;
+    yesterday: number;
+    week: number;
+    month: number;
+    lastMonth: number;
+  }>;
+};
+
 export function SaleStatsPage() {
-  const { data } = useApi<any>("/api/sales/summary", { summary: [], monthlyRevenue: [], podSales: [] });
+  const { data } = useApi<SalesSummaryResponse>("/api/sales/summary", { summary: [], monthlyRevenue: [], podSales: [] });
+  const maxMonthlyAmount = Math.max(1, ...data.monthlyRevenue.map((item) => item.amount || 0));
 
   return (
     <div className="page-grid">
-      <PageHeader eyebrow="Sales" title="Revenue atlas" description="Replicates the LLW sale-stats view with time-boxed totals, yearly monthly patterns, and POD-wise sales output." />
+      <PageHeader eyebrow="Sales" title="Revenue atlas" description="Time-boxed revenue totals, monthly patterns, and product-wise sales for the scope allowed by your role." />
 
       <SectionCard title="Summary Table">
         <div className="table-shell">
@@ -20,7 +41,7 @@ export function SaleStatsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.summary.map((row: any) => (
+              {data.summary.map((row) => (
                 <tr key={row.label}>
                   <td>{row.label}</td>
                   <td>{formatCurrency(row.amount)}</td>
@@ -32,11 +53,11 @@ export function SaleStatsPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Revenue by Month" subtitle="Three-year trend scaffold">
+      <SectionCard title="Revenue by Month" subtitle="Rolling 12-month net revenue trend">
         <div className="chart-bars">
-          {data.monthlyRevenue.map((item: any) => (
+          {data.monthlyRevenue.map((item) => (
             <div className="chart-bar" key={item.label}>
-              <span style={{ height: `${item.value}%` }} />
+              <span style={{ height: `${Math.max(((item.amount || 0) / maxMonthlyAmount) * 100, 4)}%` }} title={formatCurrency(item.amount)} />
               <strong className="text-xs">{item.label}</strong>
             </div>
           ))}
@@ -48,7 +69,7 @@ export function SaleStatsPage() {
           <table>
             <thead>
               <tr>
-                <th>Product Category</th>
+                <th>Products</th>
                 <th>Today</th>
                 <th>Yesterday</th>
                 <th>This Week</th>
@@ -57,9 +78,9 @@ export function SaleStatsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.podSales.map((row: any) => (
-                <tr key={row.category}>
-                  <td>{row.category}</td>
+              {data.podSales.map((row) => (
+                <tr key={row.product}>
+                  <td>{row.product}</td>
                   <td>{formatCurrency(row.today)}</td>
                   <td>{formatCurrency(row.yesterday)}</td>
                   <td>{formatCurrency(row.week)}</td>

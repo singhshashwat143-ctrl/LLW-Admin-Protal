@@ -3,12 +3,20 @@ import { PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency } from "../lib/format";
+import { normalizeRole } from "../lib/permissions";
 import { navigate } from "../lib/router";
+
+type ProductBatch = {
+  key: string;
+  label: string;
+  is_active: boolean;
+};
 
 type ProductRow = {
   id: string;
   name: string;
   discounted_price: number;
+  batches: ProductBatch[];
 };
 
 type CouponRow = {
@@ -32,6 +40,7 @@ type CampaignRow = {
 
 type TeamResponse = {
   bdas: Array<{ id: string; name: string; manager_name?: string }>;
+  salesOwners: Array<{ id: string; name: string; manager_name?: string; role?: string }>;
 };
 
 type OnboardingResult = {
@@ -41,6 +50,7 @@ type OnboardingResult = {
   customerName?: string;
   phone?: string;
   productName?: string;
+  batchName?: string;
   senderName?: string;
 };
 
@@ -50,6 +60,7 @@ const initialForm = {
   email: "",
   source: "",
   product_id: "",
+  batch_month_key: "",
   bda_id: "",
   payment_type: "FULL",
   payment_method: "RAZORPAY",
@@ -70,7 +81,7 @@ function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: numbe
 export function OnboardingPage() {
   const { user } = useAuth();
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
-  const teamApi = useApi<TeamResponse>("/api/team", { bdas: [] });
+  const teamApi = useApi<TeamResponse>("/api/team", { bdas: [], salesOwners: [] });
   const couponsApi = useApi<{ coupons: CouponRow[] }>("/api/coupons", { coupons: [] });
   const [form, setForm] = useState(initialForm);
   const [loading, setLoading] = useState(false);
@@ -82,12 +93,15 @@ export function OnboardingPage() {
   const [sendingAiSensy, setSendingAiSensy] = useState(false);
 
   useEffect(() => {
-    if (!form.bda_id && teamApi.data.bdas.length) {
+    if (!form.bda_id && teamApi.data.salesOwners.length) {
+      const role = normalizeRole(user?.role);
       const preferred =
-        user?.role === "BDA" ? teamApi.data.bdas.find((entry) => entry.id === user.id)?.id || user.id : teamApi.data.bdas[0]?.id || "";
+        role === "BDA" || role === "BDM"
+          ? teamApi.data.salesOwners.find((entry) => entry.id === user?.id)?.id || user?.id || ""
+          : teamApi.data.salesOwners[0]?.id || "";
       setForm((current) => ({ ...current, bda_id: preferred }));
     }
-  }, [form.bda_id, teamApi.data.bdas, user]);
+  }, [form.bda_id, teamApi.data.salesOwners, user]);
 
   useEffect(() => {
     let active = true;
@@ -139,6 +153,27 @@ export function OnboardingPage() {
     () => productsApi.data.products.find((product) => product.id === form.product_id) ?? null,
     [form.product_id, productsApi.data.products],
   );
+  const availableBatches = useMemo(
+    () => (selectedProduct?.batches || []).filter((batch) => batch.is_active),
+    [selectedProduct],
+  );
+  const selectedBatch = useMemo(
+    () => availableBatches.find((batch) => batch.key === form.batch_month_key) ?? null,
+    [availableBatches, form.batch_month_key],
+  );
+
+  useEffect(() => {
+    if (!selectedProduct) {
+      if (form.batch_month_key) {
+        setForm((current) => ({ ...current, batch_month_key: "" }));
+      }
+      return;
+    }
+    const nextBatchKey = availableBatches[0]?.key || "";
+    if (!availableBatches.some((batch) => batch.key === form.batch_month_key) && nextBatchKey !== form.batch_month_key) {
+      setForm((current) => ({ ...current, batch_month_key: nextBatchKey }));
+    }
+  }, [availableBatches, form.batch_month_key, selectedProduct]);
 
   const visibleCoupons = useMemo(() => {
     return couponsApi.data.coupons.filter((coupon) => (
@@ -158,8 +193,8 @@ export function OnboardingPage() {
   const initialCollection = form.payment_type === "TOKEN" ? tokenAmount : fullAmount;
   const dueAmount = Math.max(fullAmount - initialCollection, 0);
   const assignedBda = useMemo(
-    () => teamApi.data.bdas.find((entry) => entry.id === form.bda_id) ?? null,
-    [form.bda_id, teamApi.data.bdas],
+    () => teamApi.data.salesOwners.find((entry) => entry.id === form.bda_id) ?? null,
+    [form.bda_id, teamApi.data.salesOwners],
   );
 
   function updateField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
@@ -167,8 +202,8 @@ export function OnboardingPage() {
   }
 
   async function handleSubmit() {
-    if (!form.customer_name || !form.phone || !form.product_id) {
-      setError("Customer name, phone, and product are required.");
+    if (!form.customer_name || !form.phone || !form.product_id || !form.batch_month_key) {
+      setError("Customer name, phone, product, and batch are required.");
       return;
     }
     if (form.payment_type === "TOKEN" && (!tokenAmount || tokenAmount >= fullAmount)) {
@@ -194,6 +229,7 @@ export function OnboardingPage() {
         body: JSON.stringify({
           ...form,
           coupon_code: form.coupon_code.trim().toUpperCase(),
+          batch_month_key: form.batch_month_key,
           amount_inr: form.payment_type === "TOKEN" ? tokenAmount : fullAmount,
           original_product_value_inr: grossAmount,
           token_amount: form.payment_type === "TOKEN" ? tokenAmount : 0,
@@ -209,6 +245,7 @@ export function OnboardingPage() {
         customerName: form.customer_name,
         phone: form.phone,
         productName: selectedProduct?.name || "",
+        batchName: selectedBatch?.label || "",
         senderName: user?.role === "ADMIN" || user?.role === "SUPER_ADMIN" ? assignedBda?.name || user?.name || "" : user?.name || "",
       });
       setNotice(
@@ -263,9 +300,9 @@ export function OnboardingPage() {
   return (
     <div className="page-grid compact-canvas">
       <PageHeader
-        eyebrow="Ondoarding Form"
-        title="Ondoarding Form"
-        description="Create a fresh enrollment for a BDA, choose Razorpay or a manual payment method, and automatically calculate the remaining amount when a token is collected."
+        eyebrow="Onboarding Form"
+        title="Onboarding Form"
+        description="Create a fresh enrollment for a sales owner, choose the product batch, and automatically calculate the remaining amount when a token is collected."
         actions={
           <>
             <button className="btn-secondary" type="button" onClick={() => navigate("/tracker")}>Open Tracker</button>
@@ -278,7 +315,7 @@ export function OnboardingPage() {
       {error ? <div className="rounded-[22px] border border-[rgba(239,68,68,0.18)] bg-[rgba(239,68,68,0.08)] px-5 py-4 text-sm text-[var(--danger)]">{error}</div> : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
-        <SectionCard title="Ondoarding Form" subtitle="A lightweight OMS-style onboarding flow for BDAs and operations.">
+        <SectionCard title="Onboarding Form" subtitle="A lightweight OMS-style onboarding flow for revenue and operations teams.">
           <div className="grid gap-4 md:grid-cols-2">
             <label className="grid gap-2">
               <span className="text-sm font-medium text-[var(--text-secondary)]">Customer name</span>
@@ -310,12 +347,12 @@ export function OnboardingPage() {
               </datalist>
             </label>
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Assign BDA</span>
+              <span className="text-sm font-medium text-[var(--text-secondary)]">Assign Sales Owner</span>
               <select className="input-dark" value={form.bda_id} onChange={(event) => updateField("bda_id", event.target.value)}>
-                <option value="">Select BDA</option>
-                {teamApi.data.bdas.map((entry) => (
+                <option value="">Select sales owner</option>
+                {teamApi.data.salesOwners.map((entry) => (
                   <option key={entry.id} value={entry.id}>
-                    {entry.name}{entry.manager_name ? ` • ${entry.manager_name}` : ""}
+                    {entry.name}{entry.role ? ` • ${entry.role}` : ""}{entry.manager_name ? ` • ${entry.manager_name}` : ""}
                   </option>
                 ))}
               </select>
@@ -327,6 +364,22 @@ export function OnboardingPage() {
                 {productsApi.data.products.map((product) => (
                   <option key={product.id} value={product.id}>
                     {product.name} • {formatCurrency(product.discounted_price / 100)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">Batch</span>
+              <select
+                className="input-dark"
+                value={form.batch_month_key}
+                onChange={(event) => updateField("batch_month_key", event.target.value)}
+                disabled={!selectedProduct || !availableBatches.length}
+              >
+                <option value="">{selectedProduct ? (availableBatches.length ? "Select batch" : "No active batches") : "Select product first"}</option>
+                {availableBatches.map((batch) => (
+                  <option key={batch.key} value={batch.key}>
+                    {batch.label}
                   </option>
                 ))}
               </select>
@@ -437,10 +490,11 @@ export function OnboardingPage() {
                 {result.transactionId ? <div className="mt-1 text-[var(--text-secondary)]">Transaction ID: <span className="font-mono text-[var(--text-strong)]">{result.transactionId}</span></div> : null}
                 {result.senderName ? <div className="mt-1 text-[var(--text-secondary)]">Sender: <span className="text-[var(--text-strong)]">{result.senderName}</span></div> : null}
                 {result.productName ? <div className="mt-1 text-[var(--text-secondary)]">Product: <span className="text-[var(--text-strong)]">{result.productName}</span></div> : null}
+                {result.batchName ? <div className="mt-1 text-[var(--text-secondary)]">Batch: <span className="text-[var(--text-strong)]">{result.batchName}</span></div> : null}
                 {result.paymentLink ? <div className="mt-1 break-all text-[var(--text-secondary)]">Link: <span className="text-[var(--accent)]">{result.paymentLink}</span></div> : null}
                 {result.paymentLink ? (
                   <div className="mt-3 rounded-2xl border border-[rgba(201,168,76,0.16)] bg-[rgba(255,255,255,0.03)] p-3 text-xs leading-6 text-[var(--text-secondary)]">
-                    Hi {result.customerName || "Customer"} ji, I am {result.senderName || user?.name || "Livelong Wealth"}. We just got on a call, and as discussed, here is the payment link for your {result.productName || "program"} enrollment.
+                    Hi {result.customerName || "Customer"} ji, I am {result.senderName || user?.name || "Livelong Wealth"}. We just got on a call, and as discussed, here is the payment link for your {result.productName || "program"}{result.batchName ? ` ${result.batchName} batch` : ""} enrollment.
                     Proceed to pay; the window will expire by the end of this day.
                     Payment Link: {result.paymentLink}
                   </div>

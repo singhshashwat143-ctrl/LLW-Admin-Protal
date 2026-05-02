@@ -29,6 +29,21 @@ const requiredTeamMembers = [
   { name: "Sravani", email: "sravani@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
 ];
 const requiredTeamMemberByEmail = new Map(requiredTeamMembers.map((member) => [member.email.toLowerCase(), member]));
+const productBatchMonths = [
+  { key: "JAN", label: "Jan" },
+  { key: "FEB", label: "Feb" },
+  { key: "MAR", label: "Mar" },
+  { key: "APR", label: "Apr" },
+  { key: "MAY", label: "May" },
+  { key: "JUN", label: "Jun" },
+  { key: "JUL", label: "Jul" },
+  { key: "AUG", label: "Aug" },
+  { key: "SEP", label: "Sep" },
+  { key: "OCT", label: "Oct" },
+  { key: "NOV", label: "Nov" },
+  { key: "DEC", label: "Dec" },
+];
+const productBatchMonthByKey = new Map(productBatchMonths.map((month) => [month.key, month]));
 
 function nowIso() {
   return new Date().toISOString();
@@ -445,6 +460,62 @@ function normalizeRefundRecord(record, index = 0) {
   };
 }
 
+function normalizeBatchKey(value = "") {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase()
+    .slice(0, 3);
+  return productBatchMonthByKey.has(normalized) ? normalized : "";
+}
+
+function normalizeProductBatches(batches = []) {
+  const batchMap = new Map();
+
+  (Array.isArray(batches) ? batches : []).forEach((batch) => {
+    const key = normalizeBatchKey(batch?.key || batch?.month || batch?.value || batch?.label);
+    if (!key) return;
+    batchMap.set(key, {
+      key,
+      label: productBatchMonthByKey.get(key)?.label || key,
+      is_active: batch?.is_active ?? batch?.isActive ?? batch?.active ?? true,
+    });
+  });
+
+  return productBatchMonths.map((month) => {
+    const existing = batchMap.get(month.key);
+    return {
+      key: month.key,
+      label: month.label,
+      is_active: existing?.is_active ?? true,
+    };
+  });
+}
+
+function normalizeProductRecord(record, index = 0) {
+  const createdAt = record.created_at || record.createdAt || nowIso();
+  return {
+    ...record,
+    id: record.id || `product-${String(index + 1).padStart(3, "0")}`,
+    name: String(record.name || `Product ${index + 1}`).trim(),
+    slug: record.slug || slugify(record.name || `product-${index + 1}`),
+    mode: String(record.mode || "ONLINE").toUpperCase(),
+    category: String(record.category || "GENERAL").toUpperCase(),
+    price: Number(record.price ?? 0),
+    discounted_price: Number(record.discounted_price ?? record.discountedPrice ?? record.price ?? 0),
+    duration_months: Number(record.duration_months ?? record.durationMonths ?? 6),
+    short_description: String(record.short_description || record.shortDescription || "").trim(),
+    long_description: String(record.long_description || record.longDescription || "").trim(),
+    onboarding_form_url: record.onboarding_form_url || record.onboardingFormUrl || "",
+    whatsapp_group_url: record.whatsapp_group_url || record.whatsappGroupUrl || "",
+    welcome_kit_url: record.welcome_kit_url || record.welcomeKitUrl || "",
+    razorpay_plan_id: record.razorpay_plan_id || record.razorpayPlanId || "",
+    is_active: record.is_active ?? record.isActive ?? true,
+    batches: normalizeProductBatches(record.batches || record.batch_availability || record.batchAvailability),
+    created_at: createdAt,
+    updated_at: record.updated_at || record.updatedAt || createdAt,
+  };
+}
+
 function buildRefundApprovalFlow(data, requester = {}) {
   const role = String(requester.role || "ADMIN").toUpperCase();
   const adminFallback =
@@ -508,6 +579,15 @@ function getProductValue(order, data) {
 function normalizeOrderRecord(order, data) {
   const productValue = getProductValue(order, data);
   const initialAmount = Number(order.amount_inr || 0);
+  const batchKey = normalizeBatchKey(
+    order.batch_month_key
+    || order.batchMonthKey
+    || order.batch_key
+    || order.batchKey
+    || order.batch
+    || order.batch_month_label
+    || order.batchMonthLabel,
+  );
   const paymentMode =
     String(order.payment_mode || order.paymentMode || "").toUpperCase() === "TOKEN" ||
     (productValue > 0 && initialAmount > 0 && initialAmount < productValue)
@@ -531,6 +611,8 @@ function normalizeOrderRecord(order, data) {
     created_by_role: order.created_by_role || order.createdByRole || "",
     manager_name: order.manager_name || order.managerName || "",
     team_name: order.team_name || order.teamName || "",
+    batch_month_key: batchKey || "",
+    batch_month_label: batchKey ? productBatchMonthByKey.get(batchKey)?.label || batchKey : "",
     access_revocation_requested: Boolean(order.access_revocation_requested ?? order.accessRevocationRequested),
     access_revocation_requested_at: order.access_revocation_requested_at || order.accessRevocationRequestedAt || null,
     access_revocation_requested_by: order.access_revocation_requested_by || order.accessRevocationRequestedBy || "",
@@ -671,7 +753,7 @@ function buildPersistentData(data) {
     webinarAttendance: data.webinarAttendance ?? data.webinar_attendance ?? [],
     refunds: (data.refunds ?? []).map(normalizeRefundRecord),
     links: data.links ?? [],
-    products: data.products ?? [],
+    products: (data.products ?? []).map(normalizeProductRecord),
     orders: data.orders ?? [],
     students: data.students ?? [],
     webinars: data.webinars ?? [],
@@ -999,21 +1081,50 @@ function buildManagerSummary(data, leaderboard) {
   managerPeople.forEach((manager) => {
     const key = manager.name;
     if (!grouped.has(key)) {
-        grouped.set(key, {
-          manager_name: key,
-          totalRevenue: 0,
-          grossRevenue: 0,
-          netRevenue: 0,
-          refundedAmount: 0,
-          newRevenue: 0,
-          recoveryRevenue: 0,
-          soldValue: 0,
+      grouped.set(key, {
+        manager_name: key,
+        totalRevenue: 0,
+        grossRevenue: 0,
+        netRevenue: 0,
+        refundedAmount: 0,
+        newRevenue: 0,
+        recoveryRevenue: 0,
+        soldValue: 0,
         recoveryPipeline: 0,
         teamMembers: 0,
         top_bda: "—",
         top_bda_revenue: 0,
       });
     }
+
+    const current = grouped.get(key);
+    const directOrders = data.orders.filter((order) => order.bda_id === manager.id);
+    const directPayments = data.payment_records.filter((payment) => {
+      if (!isPaidStatus(payment.status)) return false;
+      const order = data.orders.find((entry) => entry.id === payment.order_id);
+      return order?.bda_id === manager.id;
+    });
+    const directRefunds = getApprovedRefunds(data)
+      .filter((refund) => data.orders.find((order) => order.id === refund.order_id)?.bda_id === manager.id)
+      .reduce((sum, refund) => sum + Number(refund.amount_inr || 0), 0);
+    const directGrossRevenue = directPayments.reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+    const directRecoveryPipeline = data.due_promises
+      .filter((promise) => !promise.fulfilled)
+      .filter((promise) => data.orders.find((order) => order.id === promise.order_id)?.bda_id === manager.id)
+      .reduce((sum, promise) => sum + Number(promise.amount_inr || 0), 0);
+
+    current.grossRevenue += directGrossRevenue;
+    current.totalRevenue += directGrossRevenue;
+    current.netRevenue += Math.max(directGrossRevenue - directRefunds, 0);
+    current.refundedAmount += directRefunds;
+    current.newRevenue += directPayments
+      .filter((payment) => payment.type === "ENROLLMENT")
+      .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+    current.recoveryRevenue += directPayments
+      .filter((payment) => payment.type === "RECOVERY")
+      .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+    current.soldValue += directOrders.reduce((sum, order) => sum + getProductValue(order, data), 0);
+    current.recoveryPipeline += directRecoveryPipeline;
   });
 
   return [...grouped.values()].sort((left, right) => right.totalRevenue - left.totalRevenue);
@@ -1092,6 +1203,8 @@ function withComputedPayment(order, data) {
     recovery_installments_used: recoveryInstallments.usable,
     recovery_installments_paid: recoveryInstallments.paid,
     recovery_installments_remaining: recoveryInstallments.remaining,
+    batch_month_key: order.batch_month_key || "",
+    batch_month_label: order.batch_month_label || "",
     token_due:
       amountDue > 0
         ? {
@@ -1140,6 +1253,7 @@ function buildExportRows(data) {
       phone: order?.student?.phone || "",
       product_id: order?.product?.id || "",
       product_name: order?.offer_title || order?.product?.name || "",
+      batch_month_label: order?.batch_month_label || "",
       source_type: order?.source_type || "",
       source_label: order?.source_label || "",
       payment_mode: order?.payment_mode || "FULL",
@@ -1172,6 +1286,7 @@ function buildExportRows(data) {
     phone: order.student?.phone || "",
     product_id: order.product?.id || "",
     product_name: order.offer_title || order.product?.name || "",
+    batch_month_label: order.batch_month_label || "",
     source_type: order.source_type || "",
     source_label: order.source_label || "",
     original_product_value_inr: order.original_product_value_inr,
@@ -1199,6 +1314,7 @@ function buildExportRows(data) {
       phone: order.student?.phone || "",
       product_id: order.product?.id || "",
       product_name: order.offer_title || order.product?.name || "",
+      batch_month_label: order.batch_month_label || "",
       source_type: order.source_type || "",
       source_label: order.source_label || "",
       coupon_code: order.coupon_code || "",
@@ -1225,6 +1341,7 @@ function buildExportRows(data) {
       phone: refund.phone || order?.student?.phone || "",
       product_id: order?.product?.id || "",
       product_name: order?.offer_title || order?.product?.name || refund.course_name || "",
+      batch_month_label: order?.batch_month_label || "",
       source_type: order?.source_type || "",
       source_label: order?.source_label || "",
       payment_mode: order?.payment_mode || "",
@@ -1489,29 +1606,106 @@ export function createDashboardStore() {
       };
     },
     getSalesSummary() {
-      const paidPayments = store.data.payment_records.filter((payment) => isPaidStatus(payment.status));
-      const total = paidPayments.reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+      return store.getSalesSummaryForOrders(store.getOrders());
+    },
+    getSalesSummaryForOrders(orders = []) {
+      const todayStart = startOfToday();
+      const tomorrowStart = new Date(todayStart);
+      tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+      const yesterdayStart = new Date(todayStart);
+      yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+
+      const weekStart = daysAgo(6);
+
+      const monthStart = new Date(todayStart);
+      monthStart.setDate(1);
+
+      const lastMonthStart = new Date(monthStart);
+      lastMonthStart.setMonth(lastMonthStart.getMonth() - 1);
+
+      const windowSummary = (start, end, predicate = () => true) => {
+        let gross = 0;
+        let refunded = 0;
+        const orderIds = new Set();
+
+        orders.forEach((order) => {
+          if (!predicate(order)) return;
+          (order.payment_history || []).forEach((payment) => {
+            const paidAt = payment.paid_at || payment.created_at;
+            const time = paidAt ? new Date(paidAt).getTime() : Number.NaN;
+            if (payment.status !== "PAID" || !Number.isFinite(time) || time < start.getTime() || time >= end.getTime()) return;
+            gross += Number(payment.amount_inr || 0);
+            orderIds.add(order.id);
+          });
+          (order.refund_history || []).forEach((refund) => {
+            const approvedAt = refund.approved_at || refund.updated_at || refund.created_at;
+            const time = approvedAt ? new Date(approvedAt).getTime() : Number.NaN;
+            if (refund.status !== "APPROVED" || !Number.isFinite(time) || time < start.getTime() || time >= end.getTime()) return;
+            refunded += Number(refund.amount_inr || 0);
+          });
+        });
+
+        return {
+          amount: Math.round(Math.max(gross - refunded, 0) / 100),
+          count: orderIds.size,
+        };
+      };
+
+      const productBucketKey = (order) => {
+        if (order.product?.id || order.product_id) return order.product?.id || order.product_id;
+        return `offer:${order.offer_title || order.source_label || order.source || "Manual Entry"}`;
+      };
+
+      const productBucketLabel = (order) => order.product?.name || order.offer_title || order.source_label || order.source || "Manual Entry";
+
+      const productBuckets = new Map();
+      store.data.products.forEach((product) => {
+        productBuckets.set(product.id, { key: product.id, label: product.name });
+      });
+      orders.forEach((order) => {
+        const key = productBucketKey(order);
+        if (!productBuckets.has(key)) {
+          productBuckets.set(key, { key, label: productBucketLabel(order) });
+        }
+      });
+
+      const monthlyRevenue = Array.from({ length: 12 }, (_, index) => {
+        const start = new Date(monthStart);
+        start.setMonth(start.getMonth() - (11 - index));
+        const end = new Date(start);
+        end.setMonth(end.getMonth() + 1);
+        return {
+          label: start.toLocaleDateString("en-IN", { month: "short" }),
+          amount: windowSummary(start, end).amount,
+        };
+      });
+
+      const podSales = [...productBuckets.values()]
+        .map((bucket) => ({
+          product: bucket.label,
+          today: windowSummary(todayStart, tomorrowStart, (order) => productBucketKey(order) === bucket.key).amount,
+          yesterday: windowSummary(yesterdayStart, todayStart, (order) => productBucketKey(order) === bucket.key).amount,
+          week: windowSummary(weekStart, tomorrowStart, (order) => productBucketKey(order) === bucket.key).amount,
+          month: windowSummary(monthStart, tomorrowStart, (order) => productBucketKey(order) === bucket.key).amount,
+          lastMonth: windowSummary(lastMonthStart, monthStart, (order) => productBucketKey(order) === bucket.key).amount,
+        }))
+        .filter((row) => row.today || row.yesterday || row.week || row.month || row.lastMonth || store.data.products.some((product) => product.name === row.product))
+        .sort((left, right) => {
+          const monthDiff = right.month - left.month;
+          return monthDiff !== 0 ? monthDiff : left.product.localeCompare(right.product);
+        });
+
       return {
         summary: [
-          { label: "Today", amount: total * 0.08, count: Math.max(1, Math.round(paidPayments.length * 0.18)) },
-          { label: "Yesterday", amount: total * 0.14, count: Math.max(1, Math.round(paidPayments.length * 0.25)) },
-          { label: "This Week", amount: total * 0.41, count: Math.max(1, Math.round(paidPayments.length * 0.72)) },
-          { label: "This Month", amount: total, count: paidPayments.length },
-          { label: "Last Month", amount: total * 0.68, count: Math.max(1, Math.round(paidPayments.length * 0.8)) },
+          { label: "Today", ...windowSummary(todayStart, tomorrowStart) },
+          { label: "Yesterday", ...windowSummary(yesterdayStart, todayStart) },
+          { label: "This Week", ...windowSummary(weekStart, tomorrowStart) },
+          { label: "This Month", ...windowSummary(monthStart, tomorrowStart) },
+          { label: "Last Month", ...windowSummary(lastMonthStart, monthStart) },
         ],
-        monthlyRevenue: ["May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr"].map(
-          (label, index) => ({ label, value: 1200000 + index * 460000 }),
-        ),
-        podSales: ["Finance", "Business", "Healoved", "Beauty", "Spirituality"].map((category, index) => ({
-          category,
-          today: index === 0 ? 599600 : 0,
-          yesterday: index === 0 ? 1420139 : 0,
-          week: (index + 1) * 1829165,
-          lastWeek: (index + 1) * 879102,
-          thisMonth: (index + 1) * 2543634,
-          lastMonth: (index + 1) * 2014453,
-          lifetime: (index + 1) * 717695263,
-        })),
+        monthlyRevenue,
+        podSales,
       };
     },
     getTracker(teacher) {
@@ -1551,6 +1745,7 @@ export function createDashboardStore() {
         team: store.data.team,
         admins: store.data.team.filter((member) => ["ADMIN", "SUPER_ADMIN", "OPERATIONS"].includes(member.role)),
         bdas: store.data.team.filter((member) => member.role === "BDA"),
+        salesOwners: store.data.team.filter((member) => ["BDA", "BDM"].includes(member.role)),
         managers,
         leaderboard,
       };
@@ -2296,6 +2491,13 @@ export function createDashboardStore() {
         throw new Error("Coupon code not found");
       }
       validateCouponForOrder(store.data, coupon, product, actor);
+      const batchMonthKey = normalizeBatchKey(input.batch_month_key || input.batchMonthKey || input.batch || "");
+      if (product && batchMonthKey) {
+        const selectedBatch = (product.batches || []).find((batch) => batch.key === batchMonthKey) ?? null;
+        if (!selectedBatch?.is_active) {
+          throw new Error("The selected batch is not operational for this product.");
+        }
+      }
       const discountInr = coupon ? calculateCouponDiscount(coupon, originalProductValue) : 0;
       const productValue = Math.max(originalProductValue - discountInr, 0);
       if (productValue <= 0) {
@@ -2346,6 +2548,8 @@ export function createDashboardStore() {
         manager_name: managerName,
         team_name: teamName,
         promise_date: promiseDate,
+        batch_month_key: batchMonthKey,
+        batch_month_label: batchMonthKey ? productBatchMonthByKey.get(batchMonthKey)?.label || batchMonthKey : "",
         collect_customer_details_on_checkout: collectCustomerDetailsOnCheckout,
         portal_access_done: false,
         broker_setup_done: false,

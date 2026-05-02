@@ -59,6 +59,17 @@ const routePermissions: Partial<Record<string, AppPermission>> = {
   "/operations": "manage_operations",
   "/marketing": "manage_marketing",
 };
+const revenueRestrictedRoutes = new Set([
+  "/live",
+  "/live/:id",
+  "/webinars",
+  "/webinars/new",
+  "/teachers",
+  "/products",
+  "/bootcamps",
+  "/bootcamps/new",
+  "/bootcamps/:id/edit",
+]);
 
 export function normalizeRole(role?: string | null): AppRole {
   const normalized = String(role || "BDA").toUpperCase();
@@ -72,12 +83,22 @@ export function hasPermission(user: UserLike | null | undefined, permission: App
 }
 
 export function canAccessRoute(user: UserLike | null | undefined, path: string) {
+  const role = normalizeRole(user?.role);
+  if (revenueRestrictedRoutes.has(path) && (role === "BDA" || role === "BDM")) {
+    return false;
+  }
   const requiredPermission = routePermissions[path];
   if (!requiredPermission) return true;
   return hasPermission(user, requiredPermission);
 }
 
 export function getRouteRestrictionCopy(path: string) {
+  if (revenueRestrictedRoutes.has(path)) {
+    return {
+      title: "Program management is restricted",
+      description: "Live classes, webinars, teachers, products, and bootcamps are available only to the admin and operations teams.",
+    };
+  }
   if (path === "/exports") {
     return {
       title: "Data exports are restricted",

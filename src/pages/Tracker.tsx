@@ -1,6 +1,9 @@
+import { useMemo } from "react";
 import { PageHeader, SectionCard } from "../components/UI";
 import { useApi } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
+import { normalizeRole } from "../lib/permissions";
 import { navigate } from "../lib/router";
 
 type TrackerResponse = {
@@ -27,6 +30,7 @@ type TrackerResponse = {
       bdm_name?: string;
       manager_name?: string;
       product?: { name?: string } | null;
+      batch_month_label?: string;
       source?: string;
       product_value_inr: number;
       amount_paid_inr: number;
@@ -55,6 +59,10 @@ type TrackerResponse = {
 };
 
 export function DailyTrackerPage() {
+  const { user } = useAuth();
+  const role = normalizeRole(user?.role);
+  const canViewProgramOps = role === "ADMIN" || role === "SUPER_ADMIN" || role === "OPERATIONS";
+  const isRevenueScopedRole = role === "BDA" || role === "BDM";
   const { data, refresh } = useApi<TrackerResponse>("/api/tracker?teacher=ALL", {
     rows: [],
     salesTracker: {
@@ -69,14 +77,55 @@ export function DailyTrackerPage() {
     },
   });
 
-  const dueRows = data.salesTracker.enrollments.filter((row) => row.amount_due_inr > 0);
+  const dueRows = useMemo(
+    () => data.salesTracker.enrollments.filter((row) => row.amount_due_inr > 0),
+    [data.salesTracker.enrollments],
+  );
+  const todayStart = useMemo(() => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    return date;
+  }, []);
+  const dueTodayRows = useMemo(
+    () => dueRows.filter((row) => {
+      if (!row.token_due?.due_date) return false;
+      const dueTime = new Date(row.token_due.due_date).getTime();
+      return dueTime >= todayStart.getTime() && dueTime < todayStart.getTime() + 24 * 60 * 60 * 1000;
+    }),
+    [dueRows, todayStart],
+  );
+  const overdueRows = useMemo(
+    () => dueRows.filter((row) => row.token_due?.due_date && new Date(row.token_due.due_date).getTime() < todayStart.getTime()),
+    [dueRows, todayStart],
+  );
+  const dueTodayAmount = dueTodayRows.reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0);
+  const overdueAmount = overdueRows.reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0);
+  const oldestOverdue = overdueRows.reduce<string | null>((oldest, row) => {
+    const value = row.token_due?.due_date || "";
+    if (!value) return oldest;
+    if (!oldest) return value;
+    return new Date(value).getTime() < new Date(oldest).getTime() ? value : oldest;
+  }, null);
+  const recoveryAlertVisible = isRevenueScopedRole && (dueTodayRows.length > 0 || overdueRows.length > 0);
+  const trackerTitle = role === "BDA" ? "My recovery tracker" : role === "BDM" ? "Team recovery tracker" : "Revenue recovery tracker";
+  const trackerDescription = role === "BDA"
+    ? "Track your customer enrollments, recoveries, and due dates in one place."
+    : role === "BDM"
+      ? "Track your team’s enrollments, recoveries, and due dates in one place."
+      : "Track customer enrollments, pending recoveries, and manager ownership inside the revenue workspace.";
+  const recoveryAlertTitle = dueTodayRows.length > 0
+    ? `Today’s recovery ${formatCurrency(dueTodayAmount / 100)} across ${dueTodayRows.length} account${dueTodayRows.length === 1 ? "" : "s"}`
+    : `Missed recovery follow-up on ${overdueRows.length} account${overdueRows.length === 1 ? "" : "s"}`;
+  const recoveryAlertCopy = overdueRows.length > 0
+    ? `Missed due date ${formatCurrency(overdueAmount / 100)} across ${overdueRows.length} account${overdueRows.length === 1 ? "" : "s"}.${oldestOverdue ? ` Oldest missed date ${new Date(oldestOverdue).toLocaleDateString("en-IN")}.` : ""}`
+    : "No missed due dates right now. Keep today’s recoveries moving.";
 
   return (
     <div className="page-grid compact-canvas">
       <PageHeader
         eyebrow="Tracker"
-        title="BDA and manager tracker"
-        description="Track customer enrollments, pending token recoveries, manager ownership, and keep the webinar schedule visible in the same workspace."
+        title={trackerTitle}
+        description={trackerDescription}
         actions={
           <>
             <button className="btn-secondary" type="button" onClick={refresh}>Refresh</button>
@@ -85,15 +134,30 @@ export function DailyTrackerPage() {
         }
       />
 
+      {recoveryAlertVisible ? (
+        <div className={`tracker-alert ${overdueRows.length ? "tracker-alert-urgent" : "tracker-alert-active"}`}>
+          <div className="tracker-alert-eyebrow">Recovery Alert</div>
+          <div className="tracker-alert-title">{recoveryAlertTitle}</div>
+          <div className="tracker-alert-copy">{recoveryAlertCopy}</div>
+        </div>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <TrackerMetric label="Outstanding Amount" value={formatCurrency((data.salesTracker.summary.outstandingAmount || 0) / 100)} meta="Total remaining collection" />
         <TrackerMetric label="Due Today" value={String(data.salesTracker.summary.dueToday || 0)} meta="Promises landing today" />
         <TrackerMetric label="Overdue" value={String(data.salesTracker.summary.overdue || 0)} meta="Promises past the due date" />
-        <TrackerMetric label="This Month" value={formatCurrency((data.salesTracker.summary.thisMonthCollections || 0) / 100)} meta="Collections across all BDAs" />
+        <TrackerMetric label="This Month" value={formatCurrency((data.salesTracker.summary.thisMonthCollections || 0) / 100)} meta="Collections in your visible scope" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.45fr_0.95fr]">
-        <SectionCard title="Customer Tracker" subtitle="Per-enrollment tracker for BDAs with paid vs due, latest transaction ID, and next follow-up date.">
+        <SectionCard
+          title="Customer Tracker"
+          subtitle={role === "BDA"
+            ? "Only your assigned enrollments and recoveries are visible here."
+            : role === "BDM"
+              ? "Only your team’s assigned enrollments and recoveries are visible here."
+              : "Per-enrollment tracker for revenue teams with paid vs due, latest transaction ID, and next follow-up date."}
+        >
           <div className="table-shell table-shell-scrollable admin-table-scroll">
             <table>
               <thead>
@@ -123,7 +187,7 @@ export function DailyTrackerPage() {
                     <td>
                       <span>{row.bdm_name || row.manager_name || "Unassigned BDM"}</span>
                     </td>
-                    <td>{row.product?.name || "—"}</td>
+                    <td>{row.product?.name || "—"}{row.batch_month_label ? ` • ${row.batch_month_label}` : ""}</td>
                     <td>
                       <div className="cell-stack">
                         <span>{formatCurrency((row.amount_paid_inr || 0) / 100)} collected</span>
@@ -179,36 +243,38 @@ export function DailyTrackerPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="Webinar Schedule" subtitle="The original daily webinar tracker stays available below the BDA tracker.">
-        <div className="table-shell">
-          <table>
-            <thead>
-              <tr>
-                <th>Class Title</th>
-                <th>Teacher</th>
-                <th>Class Timing</th>
-                <th>Live</th>
-                <th>Category</th>
-                <th>Simulation</th>
-                <th>Schedule Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.title}</td>
-                  <td>{row.instructor?.name || "-"}</td>
-                  <td>{formatDateTime(row.start_time)}</td>
-                  <td><a href={`/live/${row.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-white font-semibold">L</a></td>
-                  <td>{row.category}</td>
-                  <td>{row.is_simulation ? "Yes" : "No"}</td>
-                  <td>{new Date(row.start_time).toLocaleDateString("en-IN")}</td>
+      {canViewProgramOps ? (
+        <SectionCard title="Webinar Schedule" subtitle="The original daily webinar tracker stays available below the BDA tracker.">
+          <div className="table-shell">
+            <table>
+              <thead>
+                <tr>
+                  <th>Class Title</th>
+                  <th>Teacher</th>
+                  <th>Class Timing</th>
+                  <th>Live</th>
+                  <th>Category</th>
+                  <th>Simulation</th>
+                  <th>Schedule Date</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </SectionCard>
+              </thead>
+              <tbody>
+                {data.rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.title}</td>
+                    <td>{row.instructor?.name || "-"}</td>
+                    <td>{formatDateTime(row.start_time)}</td>
+                    <td><a href={`/live/${row.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)] text-white font-semibold">L</a></td>
+                    <td>{row.category}</td>
+                    <td>{row.is_simulation ? "Yes" : "No"}</td>
+                    <td>{new Date(row.start_time).toLocaleDateString("en-IN")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SectionCard>
+      ) : null}
     </div>
   );
 }
