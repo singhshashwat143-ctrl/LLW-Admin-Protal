@@ -116,6 +116,61 @@ type RoomSnapshot = {
   messages: Array<{ id: string; role: string; name: string; text: string; createdAt: string; target?: "ALL" | "HOST"; messageType?: "CHAT" | "TOAST"; highlight?: boolean; attendanceId?: string }>;
 };
 
+type StageCandidate = {
+  id: string;
+  name: string;
+  role: string;
+  isMicOn?: boolean;
+  isCameraOn?: boolean;
+  isScreenSharing?: boolean;
+  stageStream: MediaStream | null;
+  cameraStream?: MediaStream | null;
+};
+
+function chooseStageCandidate(
+  candidates: StageCandidate[],
+  activeSpeakerIds: string[],
+  screenSharePriority: Record<string, number>,
+  preferLocalId?: string,
+) {
+  if (!candidates.length) return null;
+  const activeSpeakerOrder = new Map(activeSpeakerIds.map((id, index) => [id, index]));
+  return [...candidates].sort((left, right) => {
+    const leftIsSharing = Boolean(left.isScreenSharing && left.stageStream);
+    const rightIsSharing = Boolean(right.isScreenSharing && right.stageStream);
+    if (leftIsSharing !== rightIsSharing) return leftIsSharing ? -1 : 1;
+
+    if (leftIsSharing && rightIsSharing) {
+      const leftShareRank = Number(screenSharePriority[left.id] || 0);
+      const rightShareRank = Number(screenSharePriority[right.id] || 0);
+      if (leftShareRank !== rightShareRank) return rightShareRank - leftShareRank;
+    }
+
+    const leftSpeakerRank = activeSpeakerOrder.get(left.id);
+    const rightSpeakerRank = activeSpeakerOrder.get(right.id);
+    if (leftSpeakerRank !== undefined || rightSpeakerRank !== undefined) {
+      if (leftSpeakerRank === undefined) return 1;
+      if (rightSpeakerRank === undefined) return -1;
+      if (leftSpeakerRank !== rightSpeakerRank) return leftSpeakerRank - rightSpeakerRank;
+    }
+
+    const leftHasVideo = Boolean(left.stageStream && (left.isScreenSharing || left.isCameraOn));
+    const rightHasVideo = Boolean(right.stageStream && (right.isScreenSharing || right.isCameraOn));
+    if (leftHasVideo !== rightHasVideo) return leftHasVideo ? -1 : 1;
+
+    const leftCameraOnly = Boolean(left.cameraStream && left.isCameraOn);
+    const rightCameraOnly = Boolean(right.cameraStream && right.isCameraOn);
+    if (leftCameraOnly !== rightCameraOnly) return leftCameraOnly ? -1 : 1;
+
+    if (preferLocalId) {
+      if (left.id === preferLocalId && right.id !== preferLocalId) return -1;
+      if (right.id === preferLocalId && left.id !== preferLocalId) return 1;
+    }
+
+    return left.name.localeCompare(right.name);
+  })[0];
+}
+
 function describeMediaError(kind: "microphone" | "camera" | "screen share" | "room connection", error: unknown) {
   const message = error instanceof Error ? error.message : "";
   const lowered = message.toLowerCase();
@@ -1035,12 +1090,18 @@ function useClassMedia({
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const [remoteCameraStreams, setRemoteCameraStreams] = useState<Map<string, MediaStream>>(new Map());
   const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [activeSpeakerIds, setActiveSpeakerIds] = useState<string[]>([]);
   const [isMicOn, setIsMicOn] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [mediaError, setMediaError] = useState("");
   const roomRef = useRef<LiveKitRoom | null>(null);
-  const remoteTrackStateRef = useRef<Map<string, { audio: MediaStreamTrack | null; camera: MediaStreamTrack | null; screen: MediaStreamTrack | null }>>(new Map());
+  const remoteTrackStateRef = useRef<Map<string, {
+    micAudio: MediaStreamTrack | null;
+    screenAudio: MediaStreamTrack | null;
+    camera: MediaStreamTrack | null;
+    screen: MediaStreamTrack | null;
+  }>>(new Map());
 
   const getPublicationTrack = useCallback((publication: any) => {
     return publication?.track?.mediaStreamTrack || publication?.videoTrack?.mediaStreamTrack || publication?.audioTrack?.mediaStreamTrack || null;
@@ -1049,6 +1110,8 @@ function useClassMedia({
   const buildLocalPreview = useCallback((room: LiveKitRoom | null) => {
     if (!room || !canPublish) {
       setLocalStream(null);
+      setLocalCameraStream(null);
+      setLocalScreenStream(null);
       return;
     }
     const stream = new MediaStream();
@@ -1074,11 +1137,11 @@ function useClassMedia({
     const state = remoteTrackStateRef.current.get(identity);
     setRemoteStreams((current) => {
       const next = new Map(current);
-      if (!state || (!state.audio && !state.camera && !state.screen)) {
+      if (!state || (!state.micAudio && !state.screenAudio && !state.camera && !state.screen)) {
         next.delete(identity);
         return next;
       }
-      const stream = composeMediaStream(state.audio, state.screen || state.camera);
+      const stream = composeMediaStream(state.micAudio, state.screenAudio, state.screen || state.camera);
       if (stream) {
         next.set(identity, stream);
       } else {
@@ -1109,9 +1172,11 @@ function useClassMedia({
   }, []);
 
   const updateRemoteTrack = useCallback((identity: string, source: string | undefined, mediaStreamTrack: MediaStreamTrack | null) => {
-    const current = remoteTrackStateRef.current.get(identity) || { audio: null, camera: null, screen: null };
-    if (source === Track.Source.Microphone || source === Track.Source.ScreenShareAudio) {
-      current.audio = mediaStreamTrack;
+    const current = remoteTrackStateRef.current.get(identity) || { micAudio: null, screenAudio: null, camera: null, screen: null };
+    if (source === Track.Source.Microphone) {
+      current.micAudio = mediaStreamTrack;
+    } else if (source === Track.Source.ScreenShareAudio) {
+      current.screenAudio = mediaStreamTrack;
     } else if (source === Track.Source.ScreenShare) {
       current.screen = mediaStreamTrack;
     } else {
@@ -1129,6 +1194,7 @@ function useClassMedia({
       setRemoteStreams(new Map());
       setRemoteCameraStreams(new Map());
       setRemoteScreenStreams(new Map());
+      setActiveSpeakerIds([]);
       setIsMicOn(false);
       setIsCameraOn(false);
       setIsScreenSharing(false);
@@ -1170,11 +1236,27 @@ function useClassMedia({
         next.delete(participant.identity);
         return next;
       });
+      setRemoteCameraStreams((current) => {
+        const next = new Map(current);
+        next.delete(participant.identity);
+        return next;
+      });
+      setRemoteScreenStreams((current) => {
+        const next = new Map(current);
+        next.delete(participant.identity);
+        return next;
+      });
+      setActiveSpeakerIds((current) => current.filter((id) => id !== participant.identity));
+    };
+
+    const onActiveSpeakersChanged = (speakers: any[]) => {
+      setActiveSpeakerIds(speakers.map((participant) => participant.identity).filter(Boolean));
     };
 
     room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
     room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+    room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
     room.on(RoomEvent.LocalTrackPublished, () => buildLocalPreview(room));
     room.on(RoomEvent.LocalTrackUnpublished, () => buildLocalPreview(room));
 
@@ -1194,6 +1276,7 @@ function useClassMedia({
         setRemoteStreams(new Map());
         setRemoteCameraStreams(new Map());
         setRemoteScreenStreams(new Map());
+        setActiveSpeakerIds([]);
       });
 
     return () => {
@@ -1201,12 +1284,14 @@ function useClassMedia({
       room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
       room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
+      room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
       room.disconnect();
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
       setRemoteStreams(new Map());
       setRemoteCameraStreams(new Map());
       setRemoteScreenStreams(new Map());
+      setActiveSpeakerIds([]);
       setLocalStream(null);
       setLocalCameraStream(null);
       setLocalScreenStream(null);
@@ -1258,6 +1343,7 @@ function useClassMedia({
     const next = !isScreenSharing;
     try {
       setMediaError("");
+      const micWasOn = room.localParticipant.isMicrophoneEnabled;
       await room.localParticipant.setScreenShareEnabled(
         next,
         next
@@ -1275,6 +1361,9 @@ function useClassMedia({
             }
           : undefined,
       );
+      if (next && micWasOn && !room.localParticipant.isMicrophoneEnabled) {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
       setIsScreenSharing(next);
       buildLocalPreview(room);
     } catch (error) {
@@ -1289,6 +1378,7 @@ function useClassMedia({
     remoteStreams,
     remoteCameraStreams,
     remoteScreenStreams,
+    activeSpeakerIds,
     isMicOn,
     isCameraOn,
     isScreenSharing,
@@ -1325,7 +1415,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [hostOfferMode, setHostOfferMode] = useState<"FULL" | "TOKEN">("FULL");
   const [hostFullAmount, setHostFullAmount] = useState("9999");
   const [hostTokenAmount, setHostTokenAmount] = useState("499");
+  const [screenSharePriority, setScreenSharePriority] = useState<Record<string, number>>({});
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
   const connection = useRoomConnection(role, roomName, joined ? form : null);
   const canHostRoom = role === "HOST" && ["ADMIN", "SUPER_ADMIN"].includes(String(user?.role || "").toUpperCase());
   const media = useClassMedia({
@@ -1345,6 +1437,51 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const hostParticipants = useMemo(
     () => remoteParticipants.filter((participant) => participant.role === "HOST"),
     [remoteParticipants],
+  );
+  const remoteHostStageCandidates = useMemo<StageCandidate[]>(
+    () => hostParticipants.map((participant) => {
+      const combinedStream = media.remoteStreams.get(participant.attendanceId) || null;
+      const screenStream = media.remoteScreenStreams.get(participant.attendanceId) || null;
+      const cameraStream = media.remoteCameraStreams.get(participant.attendanceId) || null;
+      return {
+        id: participant.attendanceId,
+        name: participant.name,
+        role: participant.role,
+        isMicOn: participant.isMicOn,
+        isCameraOn: participant.isCameraOn,
+        isScreenSharing: participant.isScreenSharing,
+        stageStream: screenStream || combinedStream,
+        cameraStream,
+      };
+    }),
+    [hostParticipants, media.remoteCameraStreams, media.remoteScreenStreams, media.remoteStreams],
+  );
+  const localHostStageCandidate = useMemo<StageCandidate | null>(() => {
+    if (role !== "HOST") return null;
+    return {
+      id: connection.attendanceId || "local-host",
+      name: form.name || "Host Console",
+      role: "HOST",
+      isMicOn: media.isMicOn,
+      isCameraOn: media.isCameraOn,
+      isScreenSharing: media.isScreenSharing,
+      stageStream: media.localScreenStream || media.localStream,
+      cameraStream: media.localCameraStream,
+    };
+  }, [
+    connection.attendanceId,
+    form.name,
+    media.isCameraOn,
+    media.isMicOn,
+    media.isScreenSharing,
+    media.localCameraStream,
+    media.localScreenStream,
+    media.localStream,
+    role,
+  ]);
+  const hostStageCandidates = useMemo(
+    () => (localHostStageCandidate ? [localHostStageCandidate, ...remoteHostStageCandidates] : remoteHostStageCandidates),
+    [localHostStageCandidate, remoteHostStageCandidates],
   );
   const enrollEnabled = Boolean(connection.webinar?.payment_required && connection.webinar?.enroll_button_enabled);
 
@@ -1371,6 +1508,39 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     if (!media.mediaError) return;
     setPaymentNotice(media.mediaError);
   }, [media.mediaError]);
+
+  useEffect(() => {
+    setScreenSharePriority((current) => {
+      const nextSnapshot = new Map<string, boolean>();
+      const nextPriority = { ...current };
+      let changed = false;
+      const timestampBase = Date.now();
+
+      hostStageCandidates.forEach((participant, index) => {
+        const isSharing = Boolean(participant.isScreenSharing);
+        const wasSharing = previousScreenShareStateRef.current.get(participant.id) || false;
+        nextSnapshot.set(participant.id, isSharing);
+        if (isSharing && !wasSharing) {
+          nextPriority[participant.id] = timestampBase + index;
+          changed = true;
+        }
+        if (!isSharing && participant.id in nextPriority) {
+          delete nextPriority[participant.id];
+          changed = true;
+        }
+      });
+
+      Object.keys(nextPriority).forEach((id) => {
+        if (!nextSnapshot.has(id)) {
+          delete nextPriority[id];
+          changed = true;
+        }
+      });
+
+      previousScreenShareStateRef.current = nextSnapshot;
+      return changed ? nextPriority : current;
+    });
+  }, [hostStageCandidates]);
 
   useEffect(() => {
     if (role !== "HOST") return;
@@ -1733,14 +1903,11 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }
 
   if (role === "ATTENDEE" && joined) {
-    const leadRemote = hostParticipants[0] || null;
-    const leadRemoteStream = leadRemote ? media.remoteStreams.get(leadRemote.attendanceId) || null : null;
-    const leadRemoteScreenStream = leadRemote ? media.remoteScreenStreams.get(leadRemote.attendanceId) || null : null;
-    const leadRemoteCameraStream = leadRemote ? media.remoteCameraStreams.get(leadRemote.attendanceId) || null : null;
-    const leadRemoteStageStream = leadRemoteScreenStream || leadRemoteStream;
-    const showRemoteVideo = Boolean(leadRemoteStageStream && (leadRemote?.isCameraOn || leadRemote?.isScreenSharing));
-    const showHostCameraPreview = Boolean(leadRemoteScreenStream && leadRemote?.isCameraOn && leadRemoteCameraStream);
-    const hostLabel = leadRemote?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
+    const leadHost = chooseStageCandidate(remoteHostStageCandidates, media.activeSpeakerIds, screenSharePriority);
+    const leadRemoteStageStream = leadHost?.stageStream || null;
+    const showRemoteVideo = Boolean(leadRemoteStageStream && (leadHost?.isCameraOn || leadHost?.isScreenSharing));
+    const showHostCameraPreview = Boolean(leadHost?.isScreenSharing && leadHost?.isCameraOn && leadHost?.cameraStream);
+    const hostLabel = leadHost?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
     const showHostCameraRail = !sidePanel && showHostCameraPreview;
 
     return (
@@ -1759,7 +1926,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {!showHostCameraRail && showHostCameraPreview ? (
               <div className="gm-host-pip">
-                <VideoStream stream={leadRemoteCameraStream} label={`${hostLabel} camera`} isCameraOn />
+                <VideoStream stream={leadHost?.cameraStream || null} label={`${hostLabel} camera`} isCameraOn />
               </div>
             ) : null}
 
@@ -1772,7 +1939,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <span>LIVE</span>
             </div>
 
-            {leadRemote?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
+            {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
 
@@ -1913,7 +2080,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
           </div>
         ) : showHostCameraRail ? (
           <SideCameraRail
-            stream={leadRemoteCameraStream}
+            stream={leadHost?.cameraStream || null}
             label={`${hostLabel} camera`}
             eyebrow="Host camera"
             isCameraOn
@@ -1924,20 +2091,39 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }
 
   if (role === "HOST") {
-    const leadRemote = remoteParticipants[0];
-    const leadRemoteStream = leadRemote ? media.remoteStreams.get(leadRemote.attendanceId) || null : null;
-    const localStageStream = media.localScreenStream || media.localStream;
-    const localCameraPreviewStream = media.isScreenSharing ? media.localCameraStream : null;
+    const leadHost = chooseStageCandidate(
+      hostStageCandidates,
+      media.activeSpeakerIds,
+      screenSharePriority,
+      localHostStageCandidate?.id,
+    );
+    const backupHost = chooseStageCandidate(
+      hostStageCandidates.filter((participant) => participant.id !== leadHost?.id),
+      media.activeSpeakerIds,
+      screenSharePriority,
+      localHostStageCandidate?.id,
+    );
+    const leadStageStream = leadHost?.stageStream || null;
+    const leadShowsVideo = Boolean(leadStageStream && (leadHost?.isCameraOn || leadHost?.isScreenSharing));
+    const localLeadStage = Boolean(leadHost?.id && leadHost.id === localHostStageCandidate?.id);
+    const leadCameraPreviewStream = leadHost?.isScreenSharing ? leadHost.cameraStream || null : null;
+    const leadHostLabel = leadHost?.name || form.name || "Host Console";
     const raisedHands = connection.room.participants.filter((participant) => participant.role === "ATTENDEE" && participant.isHandRaised);
-    const hostSidePreview = localCameraPreviewStream
-      ? { stream: localCameraPreviewStream, label: `${form.name || "Host"} camera`, eyebrow: "Your camera", muted: true, isCameraOn: true }
-      : leadRemote
+    const hostSidePreview = leadCameraPreviewStream
+      ? {
+          stream: leadCameraPreviewStream,
+          label: `${leadHostLabel} camera`,
+          eyebrow: localLeadStage ? "Your camera" : "Host camera",
+          muted: localLeadStage,
+          isCameraOn: true,
+        }
+      : backupHost?.stageStream
         ? {
-            stream: leadRemoteStream,
-            label: leadRemote.name,
-            eyebrow: leadRemote.role === "HOST" ? "Host feed" : "Attendee feed",
-            muted: false,
-            isCameraOn: leadRemote.isCameraOn || leadRemote.isScreenSharing,
+            stream: backupHost.stageStream,
+            label: backupHost.name,
+            eyebrow: backupHost.id === localHostStageCandidate?.id ? "Your feed" : "Host feed",
+            muted: backupHost.id === localHostStageCandidate?.id,
+            isCameraOn: backupHost.isCameraOn || backupHost.isScreenSharing,
           }
         : null;
     const showHostCameraRail = Boolean(!sidePanel && hostSidePreview);
@@ -1946,17 +2132,18 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       <div className="gm-root">
         <div className="gm-main">
           <div className="gm-stage">
-            {media.isCameraOn || media.isScreenSharing ? (
-              <StageVideo stream={localStageStream} muted />
+            {leadStageStream && !leadShowsVideo ? <AudioStream stream={leadStageStream} /> : null}
+            {leadShowsVideo ? (
+              <StageVideo stream={leadStageStream} muted={localLeadStage} />
             ) : (
               <div className="gm-avatar-stage">
-                <div className="gm-avatar-circle">{(form.name || "Host").slice(0, 1).toUpperCase()}</div>
-                <p className="gm-avatar-name">{form.name || "Host Console"}</p>
+                <div className="gm-avatar-circle">{leadHostLabel.slice(0, 1).toUpperCase()}</div>
+                <p className="gm-avatar-name">{leadHostLabel}</p>
               </div>
             )}
 
             <div className="gm-name-pill">
-              <span>{form.name || "Host Console"}</span>
+              <span>{leadHostLabel}</span>
             </div>
 
             <div className="gm-live-badge">
@@ -1964,7 +2151,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <span>LIVE</span>
             </div>
 
-            {media.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
+            {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
 

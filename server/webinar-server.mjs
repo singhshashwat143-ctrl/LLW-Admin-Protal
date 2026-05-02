@@ -558,8 +558,109 @@ function scopeManagerSummaryForUser(user, managerSummary) {
   if (isManagerUser(user)) {
     return managerSummary.filter((entry) => entry.manager_name === user.name);
   }
-  const self = store.data.team.find((member) => member.id === user.id);
-  return managerSummary.filter((entry) => entry.manager_name === self?.manager_name);
+  return [];
+}
+
+function formatLocalDateInput(value) {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function buildDefaultDashboardRange() {
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - 29);
+  return {
+    start,
+    end,
+    dateFrom: formatLocalDateInput(start),
+    dateTo: formatLocalDateInput(end),
+  };
+}
+
+function parseLocalDateValue(value, endOfDay = false) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return endOfDay
+    ? new Date(Number(year), Number(month) - 1, Number(day), 23, 59, 59, 999)
+    : new Date(Number(year), Number(month) - 1, Number(day), 0, 0, 0, 0);
+}
+
+function parseLocalMonthValue(value) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const [, year, month] = match;
+  return new Date(Number(year), Number(month) - 1, 1, 0, 0, 0, 0);
+}
+
+function buildDashboardGraphFilter(query = {}) {
+  const month = String(query.month || "").trim();
+  let dateFrom = String(query.dateFrom || "").trim();
+  let dateTo = String(query.dateTo || "").trim();
+  const defaultRange = buildDefaultDashboardRange();
+
+  if ((!dateFrom || !dateTo) && month) {
+    const monthStart = parseLocalMonthValue(month);
+    if (monthStart) {
+      if (!dateFrom) {
+        dateFrom = formatLocalDateInput(monthStart);
+      }
+      if (!dateTo) {
+        dateTo = formatLocalDateInput(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0));
+      }
+    }
+  }
+
+  let start = parseLocalDateValue(dateFrom, false);
+  let end = parseLocalDateValue(dateTo, true);
+
+  if (start && !end) {
+    end = new Date();
+    end.setHours(23, 59, 59, 999);
+  } else if (!start && end) {
+    start = new Date(end);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 29);
+  } else if (!start && !end) {
+    start = defaultRange.start;
+    end = defaultRange.end;
+  }
+
+  if (start && end && start.getTime() > end.getTime()) {
+    const normalizedEnd = new Date(start);
+    normalizedEnd.setHours(23, 59, 59, 999);
+    const normalizedStart = new Date(end);
+    normalizedStart.setHours(0, 0, 0, 0);
+    start = normalizedStart;
+    end = normalizedEnd;
+  }
+
+  const monthLabel = month
+    ? new Date(`${month}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" })
+    : "";
+  const normalizedDateFrom = start ? formatLocalDateInput(start) : "";
+  const normalizedDateTo = end ? formatLocalDateInput(end) : "";
+  const isDefaultRange = !month && normalizedDateFrom === defaultRange.dateFrom && normalizedDateTo === defaultRange.dateTo;
+  const label = isDefaultRange
+    ? "Last 30 days"
+    : start && end
+    ? monthLabel || `${start.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })} - ${end.toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`
+    : "Last 30 days";
+
+  return {
+    month,
+    dateFrom: normalizedDateFrom,
+    dateTo: normalizedDateTo,
+    start,
+    end,
+    label,
+  };
 }
 
 function canAccessOrder(user, order) {
@@ -573,14 +674,14 @@ function canAccessOrder(user, order) {
   return order.bda?.id === user.id || order.bda_id === user.id;
 }
 
-function buildScopedCashVsValueSeries(orders, days = 30) {
-  const end = new Date();
-  end.setHours(0, 0, 0, 0);
-  const rows = [];
+function buildScopedCashVsValueSeries(orders, graphFilter = {}) {
+  const start = graphFilter.start ? new Date(graphFilter.start) : new Date();
+  const end = graphFilter.end ? new Date(graphFilter.end) : new Date();
+  start.setHours(0, 0, 0, 0);
+  end.setHours(23, 59, 59, 999);
 
-  for (let offset = days - 1; offset >= 0; offset -= 1) {
-    const day = new Date(end);
-    day.setDate(end.getDate() - offset);
+  const rows = [];
+  for (let day = new Date(start), index = 0; day.getTime() <= end.getTime() && index < 366; day.setDate(day.getDate() + 1), index += 1) {
     const next = new Date(day);
     next.setDate(day.getDate() + 1);
 
@@ -611,51 +712,173 @@ function buildScopedCashVsValueSeries(orders, days = 30) {
 
     rows.push({
       label: day.toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+      date: formatLocalDateInput(day),
       soldValue,
       cashInHand: Math.max(grossCollections - refundedAmount, 0),
     });
   }
 
-  return rows;
+  return {
+    rows,
+    filters: {
+      month: graphFilter.month || "",
+      dateFrom: graphFilter.dateFrom || "",
+      dateTo: graphFilter.dateTo || "",
+      label: graphFilter.label || "Last 30 days",
+    },
+  };
 }
 
-function buildScopedDashboardPayload(user) {
+function isTimestampWithinDashboardFilter(value, graphFilter) {
+  if (!value || !graphFilter?.start || !graphFilter?.end) return false;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) && time >= graphFilter.start.getTime() && time <= graphFilter.end.getTime();
+}
+
+function getApprovedRefundEventTime(refund) {
+  return refund?.approved_at || refund?.updated_at || refund?.created_at || null;
+}
+
+function summarizeDashboardOrders(orders, graphFilter) {
+  const createdOrders = orders.filter((order) => isTimestampWithinDashboardFilter(order.created_at, graphFilter));
+  const paidPayments = orders
+    .flatMap((order) => order.payment_history || [])
+    .filter((payment) => payment.status === "PAID" && payment.paid_at && isTimestampWithinDashboardFilter(payment.paid_at, graphFilter));
+  const approvedRefunds = orders
+    .flatMap((order) => order.refund_history || [])
+    .filter((refund) => refund.status === "APPROVED" && isTimestampWithinDashboardFilter(getApprovedRefundEventTime(refund), graphFilter));
+  const grossCollections = paidPayments.reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+  const refundedAmount = approvedRefunds.reduce((sum, refund) => sum + Number(refund.amount_inr || 0), 0);
+
+  return {
+    createdOrders,
+    soldValue: createdOrders.reduce((sum, order) => sum + Number(order.product_value_inr || 0), 0),
+    grossCollections,
+    refundedAmount,
+    cashInHand: Math.max(grossCollections - refundedAmount, 0),
+    newRevenue: paidPayments
+      .filter((payment) => payment.type === "ENROLLMENT")
+      .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0),
+    recoveryRevenue: paidPayments
+      .filter((payment) => payment.type === "RECOVERY")
+      .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0),
+    outstandingAmount: createdOrders.reduce((sum, order) => sum + Number(order.amount_due_inr || 0), 0),
+    customers: new Set(createdOrders.map((order) => order.student?.id || order.student_id).filter(Boolean)).size,
+  };
+}
+
+function getVisibleDashboardBdas(user) {
+  if (isAdminUser(user) || isOperationsUser(user)) {
+    return store.data.team.filter((member) => normalizeUserRole(member) === "BDA");
+  }
+  if (isManagerUser(user)) {
+    return store.data.team.filter((member) => normalizeUserRole(member) === "BDA" && member.manager_name === user.name);
+  }
+  return store.data.team.filter((member) => normalizeUserRole(member) === "BDA" && member.id === user.id);
+}
+
+function getVisibleDashboardManagers(user) {
+  if (isAdminUser(user) || isOperationsUser(user)) {
+    return store.data.team.filter((member) => normalizeUserRole(member) === "BDM");
+  }
+  if (isManagerUser(user)) {
+    return store.data.team.filter((member) => normalizeUserRole(member) === "BDM" && member.id === user.id);
+  }
+  return [];
+}
+
+function buildFilteredDashboardLeaderboard(user, orders, graphFilter) {
+  return getVisibleDashboardBdas(user)
+    .map((member) => {
+      const memberOrders = orders.filter((order) => order.bda?.id === member.id || order.bda_id === member.id);
+      const summary = summarizeDashboardOrders(memberOrders, graphFilter);
+      return {
+        id: member.id,
+        name: member.name,
+        manager_name: member.manager_name || "",
+        totalRevenue: summary.grossCollections,
+        netRevenue: summary.cashInHand,
+        refundedAmount: summary.refundedAmount,
+        newRevenue: summary.newRevenue,
+        recoveryRevenue: summary.recoveryRevenue,
+        recoveryPipeline: summary.outstandingAmount,
+        soldValue: summary.soldValue,
+        customers: summary.customers,
+      };
+    })
+    .sort((left, right) => (
+      right.totalRevenue - left.totalRevenue
+      || right.soldValue - left.soldValue
+      || right.recoveryPipeline - left.recoveryPipeline
+      || left.name.localeCompare(right.name)
+    ));
+}
+
+function buildFilteredDashboardManagerSummary(user, orders, graphFilter, leaderboard) {
+  const visibleBdas = getVisibleDashboardBdas(user);
+  return getVisibleDashboardManagers(user)
+    .map((manager) => {
+      const teamEntries = leaderboard.filter((entry) => entry.manager_name === manager.name);
+      const directOrders = orders.filter((order) => order.bda?.id === manager.id || order.bda_id === manager.id);
+      const directSummary = summarizeDashboardOrders(directOrders, graphFilter);
+      const topBda = teamEntries.reduce((best, entry) => {
+        if (!best || entry.totalRevenue > best.totalRevenue) return entry;
+        return best;
+      }, null);
+
+      return {
+        manager_name: manager.name,
+        totalRevenue: teamEntries.reduce((sum, entry) => sum + Number(entry.totalRevenue || 0), 0) + directSummary.grossCollections,
+        netRevenue: teamEntries.reduce((sum, entry) => sum + Number(entry.netRevenue || 0), 0) + directSummary.cashInHand,
+        refundedAmount: teamEntries.reduce((sum, entry) => sum + Number(entry.refundedAmount || 0), 0) + directSummary.refundedAmount,
+        recoveryPipeline: teamEntries.reduce((sum, entry) => sum + Number(entry.recoveryPipeline || 0), 0) + directSummary.outstandingAmount,
+        teamMembers: visibleBdas.filter((member) => member.manager_name === manager.name).length,
+        top_bda: topBda?.name || "—",
+      };
+    })
+    .sort((left, right) => right.totalRevenue - left.totalRevenue || left.manager_name.localeCompare(right.manager_name));
+}
+
+function buildScopedDashboardPayload(user, graphFilter = buildDashboardGraphFilter()) {
   const orders = scopeOrderRowsForUser(user, store.getOrders());
-  const leaderboard = scopeLeaderboardForUser(user, store.getTeamSummary().leaderboard).slice(0, 5);
-  const managerSummary = scopeManagerSummaryForUser(user, store.getTeamSummary().managers);
-  const cashVsValueSeries = buildScopedCashVsValueSeries(orders, 30);
-  const grossCollections = orders.reduce((sum, order) => sum + Number(order.amount_paid_inr || 0), 0);
-  const refundedAmount = orders.reduce((sum, order) => sum + Number(order.refunded_amount_inr || 0), 0);
-  const newRevenue = orders
-    .flatMap((order) => order.payment_history || [])
-    .filter((payment) => payment.status === "PAID" && payment.type === "ENROLLMENT")
-    .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
-  const recoveryRevenue = orders
-    .flatMap((order) => order.payment_history || [])
-    .filter((payment) => payment.status === "PAID" && payment.type === "RECOVERY")
-    .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+  const summary = summarizeDashboardOrders(orders, graphFilter);
+  const fullLeaderboard = buildFilteredDashboardLeaderboard(user, orders, graphFilter);
+  const leaderboard = fullLeaderboard.slice(0, 5);
+  const managerSummary = buildFilteredDashboardManagerSummary(user, orders, graphFilter, fullLeaderboard);
+  const cashVsValueSeries = buildScopedCashVsValueSeries(orders, graphFilter);
+  const canViewProgramOps = isAdminUser(user) || isOperationsUser(user);
 
   return {
     stats: {
-      activeWebinarsToday: store.data.webinars.filter((item) => item.status === "LIVE").length,
+      activeWebinarsToday: canViewProgramOps ? store.data.webinars.filter((item) => item.status === "LIVE").length : 0,
     },
     revenueTotals: {
-      soldValue: orders.reduce((sum, order) => sum + Number(order.product_value_inr || 0), 0),
-      grossCollections,
-      refundedAmount,
-      cashInHand: Math.max(grossCollections - refundedAmount, 0),
-      newRevenue,
-      recoveryRevenue,
-      outstandingAmount: orders.reduce((sum, order) => sum + Number(order.amount_due_inr || 0), 0),
+      soldValue: summary.soldValue,
+      grossCollections: summary.grossCollections,
+      refundedAmount: summary.refundedAmount,
+      cashInHand: summary.cashInHand,
+      newRevenue: summary.newRevenue,
+      recoveryRevenue: summary.recoveryRevenue,
+      outstandingAmount: summary.outstandingAmount,
     },
-    cashVsValueSeries,
-    recentOrders: orders.slice(0, 10),
+    cashVsValueSeries: cashVsValueSeries.rows,
+    graphFilters: cashVsValueSeries.filters,
+    recentOrders: [...summary.createdOrders]
+      .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+      .slice(0, 10),
     leaderboard,
-    upcomingWebinars: store.data.webinars
-      .map((item) => store.attachInstructor(item))
-      .filter((item) => ["LIVE", "SCHEDULED"].includes(item.status)),
+    upcomingWebinars: canViewProgramOps
+      ? store.data.webinars
+        .map((item) => store.attachInstructor(item))
+        .filter((item) => ["LIVE", "SCHEDULED"].includes(item.status))
+      : [],
     managerSummary,
   };
+}
+
+function buildScopedSalesSummaryPayload(user) {
+  const orders = scopeOrderRowsForUser(user, store.getOrders());
+  return store.getSalesSummaryForOrders(orders);
 }
 
 function buildScopedTrackerPayload(user) {
@@ -684,13 +907,18 @@ function buildScopedTrackerPayload(user) {
 function getTeamPayloadForUser(user) {
   const summary = store.getTeamSummary();
   if (!user || isAdminUser(user) || isOperationsUser(user)) {
-    return summary;
+    return {
+      ...summary,
+      salesOwners: summary.salesOwners,
+    };
   }
   if (isManagerUser(user)) {
+    const self = summary.team.find((member) => member.id === user.id) || user;
     return {
       team: summary.team.filter((member) => member.id === user.id || (normalizeUserRole(member) === "BDA" && member.manager_name === user.name)),
       admins: summary.admins,
       bdas: summary.bdas.filter((member) => member.manager_name === user.name),
+      salesOwners: [self, ...summary.bdas.filter((member) => member.manager_name === user.name)],
       managers: summary.managers.filter((manager) => manager.manager_name === user.name),
       leaderboard: summary.leaderboard.filter((entry) => entry.manager_name === user.name),
     };
@@ -701,6 +929,7 @@ function getTeamPayloadForUser(user) {
     team: [self],
     admins: summary.admins,
     bdas: summary.bdas.filter((member) => member.id === user.id),
+    salesOwners: [self],
     managers: summary.managers.filter((manager) => manager.manager_name === self.manager_name),
     leaderboard: summary.leaderboard.filter((entry) => entry.id === user.id),
   };
@@ -925,11 +1154,13 @@ app.get("/api/auth/me", (req, res) => {
 app.get("/api/dashboard/stats", (req, res) => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;
-  res.json({ ok: true, ...buildScopedDashboardPayload(user) });
+  res.json({ ok: true, ...buildScopedDashboardPayload(user, buildDashboardGraphFilter(req.query || {})) });
 });
 
-app.get("/api/sales/summary", (_req, res) => {
-  res.json({ ok: true, ...store.getSalesSummary() });
+app.get("/api/sales/summary", (req, res) => {
+  const user = requireAuthenticatedUser(req, res);
+  if (!user) return;
+  res.json({ ok: true, ...buildScopedSalesSummaryPayload(user) });
 });
 
 app.get("/api/tracker", (req, res) => {
@@ -937,7 +1168,7 @@ app.get("/api/tracker", (req, res) => {
   if (!user) return;
   res.json({
     ok: true,
-    rows: store.getTracker(String(req.query.teacher || "ALL")),
+    rows: isAdminUser(user) || isOperationsUser(user) ? store.getTracker(String(req.query.teacher || "ALL")) : [],
     salesTracker: buildScopedTrackerPayload(user),
   });
 });
@@ -973,11 +1204,15 @@ app.delete("/api/instructors/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/products", (_req, res) => {
+app.get("/api/products", (req, res) => {
+  const user = requireAuthenticatedUser(req, res);
+  if (!user) return;
   res.json({ ok: true, products: store.data.products });
 });
 
 app.post("/api/products", (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can create products.");
+  if (!user) return;
   const record = { id: crypto.randomUUID(), ...req.body, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
   store.data.products.unshift(record);
   store.save();
@@ -985,6 +1220,8 @@ app.post("/api/products", (req, res) => {
 });
 
 app.put("/api/products/:id", (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can update product batches.");
+  if (!user) return;
   const index = store.data.products.findIndex((item) => item.id === req.params.id);
   if (index < 0) return res.status(404).json({ ok: false, message: "Product not found" });
   store.data.products[index] = { ...store.data.products[index], ...req.body, updated_at: new Date().toISOString() };
@@ -993,6 +1230,8 @@ app.put("/api/products/:id", (req, res) => {
 });
 
 app.delete("/api/products/:id", (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can delete products.");
+  if (!user) return;
   store.data.products = store.data.products.filter((item) => item.id !== req.params.id);
   store.save();
   res.json({ ok: true });

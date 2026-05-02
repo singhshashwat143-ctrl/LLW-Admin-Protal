@@ -3,7 +3,7 @@ import { Badge, PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
-import { hasPermission } from "../lib/permissions";
+import { hasPermission, normalizeRole } from "../lib/permissions";
 import { navigate } from "../lib/router";
 
 type PaymentHistory = {
@@ -74,6 +74,7 @@ type PaymentRow = {
     demat_setup_done: boolean;
     welcome_kit_sent: boolean;
   };
+  operations_completed?: boolean;
   token_due?: { due_date?: string | null } | null;
   bdm_name?: string;
   manager_name?: string;
@@ -152,6 +153,19 @@ function getPendingRefundRequest(row: PaymentRow) {
   return row.refund_history?.find((refund) => refund.status === "REQUESTED") || null;
 }
 
+function hasSuccessfulCollection(row: PaymentRow) {
+  return Number(row.amount_paid_inr || 0) > 0 && row.payment_state !== "REFUNDED";
+}
+
+function getPendingOperations(row: PaymentRow) {
+  const pending = [];
+  if (!row.operations.portal_access_done) pending.push("Portal");
+  if (!row.operations.broker_setup_done) pending.push("Broker");
+  if (!row.operations.demat_setup_done) pending.push("Demat");
+  if (!row.operations.welcome_kit_sent) pending.push("Welcome kit");
+  return pending;
+}
+
 function isExpired(value?: string | null) {
   if (!value) return false;
   const time = new Date(value).getTime();
@@ -167,6 +181,9 @@ function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: numbe
 
 export function PaymentsPage() {
   const { user } = useAuth();
+  const role = normalizeRole(user?.role);
+  const canViewProgramOps = role === "ADMIN" || role === "SUPER_ADMIN" || role === "OPERATIONS";
+  const isRevenueScopedRole = role === "BDA" || role === "BDM";
   const paymentsApi = useApi<{ payments: PaymentRow[] }>("/api/payments", { payments: [] });
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
   const couponsApi = useApi<{ coupons: CouponRow[] }>("/api/coupons", { coupons: [] });
@@ -182,6 +199,12 @@ export function PaymentsPage() {
   const [notice, setNotice] = useState("");
   const [paymentForm, setPaymentForm] = useState(initialPaymentForm);
   const [creatingRecoveryId, setCreatingRecoveryId] = useState("");
+  const paymentsDescription = role === "BDA"
+    ? "View only your own payments, recoveries, and payment status inside the revenue workspace."
+    : role === "BDM"
+      ? "View only your team’s payments, recoveries, and payment status inside the revenue workspace."
+      : "Track product, BDA, and manual payments from one desk with payment-only status, token recovery links, and detailed source filters.";
+  const visibleSourceFilters = canViewProgramOps ? ["ALL", "BDA", "WEBINAR", "BOOTCAMP", "MANUAL"] : ["ALL", "BDA", "MANUAL"];
 
   const selectedProduct = useMemo(
     () => productsApi.data.products.find((product) => product.id === paymentForm.product_id),
@@ -414,12 +437,12 @@ export function PaymentsPage() {
       <PageHeader
         eyebrow="Payments"
         title="Payment desk"
-        description="Track webinar, BDA, and manual payments from one desk with payment-only status, token recovery links, and detailed source filters."
+        description={paymentsDescription}
         actions={
           <div className="page-actions">
-            <button className="btn-secondary" type="button" onClick={() => navigate("/onboarding")}>Ondoarding Form</button>
+            <button className="btn-secondary" type="button" onClick={() => navigate("/onboarding")}>Onboarding Form</button>
             {hasPermission(user, "export_data") ? <button className="btn-secondary" type="button" onClick={() => navigate("/exports")}>Data Export</button> : null}
-            <button className="btn-secondary" type="button" onClick={() => navigate("/operations")}>Operations Queue</button>
+            {hasPermission(user, "manage_operations") ? <button className="btn-secondary" type="button" onClick={() => navigate("/operations")}>Operations Queue</button> : null}
             <button className="btn-secondary" type="button" onClick={() => setShowForm((value) => !value)}>
               {showForm ? "Hide Payment Form" : "Generate Payment Link"}
             </button>
@@ -442,6 +465,12 @@ export function PaymentsPage() {
       {notice ? (
         <div className="rounded-[22px] border border-[rgba(34,197,94,0.2)] bg-[rgba(34,197,94,0.08)] px-5 py-4 text-sm text-[var(--success)]">
           {notice}
+        </div>
+      ) : null}
+
+      {isRevenueScopedRole ? (
+        <div className="rounded-[22px] border border-[rgba(59,130,246,0.2)] bg-[rgba(59,130,246,0.08)] px-5 py-4 text-sm text-[var(--text-strong)]">
+          {role === "BDA" ? "Only your own payment rows and recovery links are visible here." : "Only your team’s payment rows and recovery links are visible here."}
         </div>
       ) : null}
 
@@ -539,11 +568,11 @@ export function PaymentsPage() {
         </SectionCard>
       ) : null}
 
-      <SectionCard title="Payments Board" subtitle="Filter by source, payment state, mode, method, and date without mixing in operations status.">
+      <SectionCard title="Payments Board" subtitle="Filter by source, payment state, mode, method, and date inside your visible revenue scope.">
         <div className="payments-toolbar mb-4">
           <div className="payments-filters">
             <select className="input-dark min-w-[150px]" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
-              {["ALL", "BDA", "WEBINAR", "BOOTCAMP", "MANUAL"].map((source) => <option key={source}>{source}</option>)}
+              {visibleSourceFilters.map((source) => <option key={source}>{source}</option>)}
             </select>
             <select className="input-dark min-w-[150px]" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
               {["ALL", "PENDING", "COMPLETED", "TOKEN", "PARTIAL", "FAILED", "REFUNDED"].map((status) => <option key={status}>{status}</option>)}
@@ -558,7 +587,7 @@ export function PaymentsPage() {
             <input className="input-dark min-w-[150px]" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </div>
           <div className="payments-search">
-            <input className="input-dark" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by customer, source, class, order, or transaction ID" />
+            <input className="input-dark" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by customer, source, product, order, or transaction ID" />
           </div>
         </div>
 
@@ -580,6 +609,8 @@ export function PaymentsPage() {
               <tbody>
               {filteredPayments.map((row) => {
                 const pendingRefund = getPendingRefundRequest(row);
+                const successfulCollection = hasSuccessfulCollection(row);
+                const pendingOperations = getPendingOperations(row);
 
                 return (
                 <tr key={row.id}>
@@ -654,6 +685,18 @@ export function PaymentsPage() {
                         <div className="text-xs text-[var(--text-secondary)]">
                           Recovery chances left {row.recovery_installments_remaining ?? 0}
                         </div>
+                      ) : null}
+                      {successfulCollection ? (
+                        <>
+                          <div>
+                            <Badge tone={row.operations_completed ? "green" : "gold"}>
+                              {row.operations_completed ? "Operations Completed" : "Operations Pending"}
+                            </Badge>
+                          </div>
+                          <div className="text-xs text-[var(--text-secondary)]">
+                            {row.operations_completed ? "All onboarding and access steps are done." : `Pending: ${pendingOperations.join(", ") || "Operations review"}`}
+                          </div>
+                        </>
                       ) : null}
                       {row.access_revoked ? <div className="text-xs text-[var(--danger)]">Access revoked</div> : null}
                       {!row.access_revoked && row.access_revocation_requested ? (
