@@ -1140,11 +1140,28 @@ function useClassMedia({
     setIsScreenSharing(Boolean(screenTrack) && room.localParticipant.isScreenShareEnabled);
   }, [canPublish, getPublicationTrack]);
 
-  const restoreMicrophoneIfNeeded = useCallback(async (room: LiveKitRoom | null) => {
+  const restoreMicrophoneIfNeeded = useCallback(async (
+    room: LiveKitRoom | null,
+    options: { restartTrack?: boolean; republishAll?: boolean } = {},
+  ) => {
     if (!room || !canPublishAudio || !desiredMicEnabledRef.current) return;
     try {
-      const micPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
-      if (!micPublication || micPublication.isMuted || !room.localParticipant.isMicrophoneEnabled) {
+      let micPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone) as any;
+      let micTrack = micPublication?.track;
+
+      if (options.restartTrack && typeof micTrack?.restartTrack === "function") {
+        await micTrack.restartTrack();
+        micPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone) as any;
+        micTrack = micPublication?.track;
+      }
+
+      if (options.republishAll && typeof room.localParticipant.republishAllTracks === "function") {
+        await room.localParticipant.republishAllTracks(undefined, true);
+        micPublication = room.localParticipant.getTrackPublication(Track.Source.Microphone) as any;
+        micTrack = micPublication?.track;
+      }
+
+      if (!micPublication || !micTrack || micPublication.isMuted || !room.localParticipant.isMicrophoneEnabled) {
         await room.localParticipant.setMicrophoneEnabled(true);
       }
       setMediaError("");
@@ -1155,13 +1172,16 @@ function useClassMedia({
     }
   }, [buildLocalPreview, canPublishAudio]);
 
-  const scheduleMicrophoneRecovery = useCallback((room: LiveKitRoom | null) => {
+  const scheduleMicrophoneRecovery = useCallback((room: LiveKitRoom | null, aggressive = false) => {
     if (!room) return;
     clearMicRecoveryTimers();
-    [0, 180, 600, 1400].forEach((delay) => {
+    [0, 200, 700, 1600, 2800].forEach((delay, index) => {
       const timeoutId = window.setTimeout(() => {
         if (!room.localParticipant.isScreenShareEnabled || !desiredMicEnabledRef.current) return;
-        void restoreMicrophoneIfNeeded(room);
+        void restoreMicrophoneIfNeeded(room, {
+          restartTrack: aggressive || index >= 2,
+          republishAll: aggressive && index >= 4,
+        });
       }, delay);
       micRecoveryTimeoutsRef.current.push(timeoutId);
     });
@@ -1293,7 +1313,7 @@ function useClassMedia({
       if (participant?.identity !== livekit.identity) return;
       buildLocalPreview(room);
       if (publication?.source === Track.Source.Microphone && desiredMicEnabledRef.current && room.localParticipant.isScreenShareEnabled) {
-        scheduleMicrophoneRecovery(room);
+        scheduleMicrophoneRecovery(room, true);
       }
     };
 
@@ -1309,7 +1329,19 @@ function useClassMedia({
     const onLocalTrackUnpublished = (publication: any) => {
       buildLocalPreview(room);
       if (publication?.source === Track.Source.Microphone && desiredMicEnabledRef.current && room.localParticipant.isScreenShareEnabled) {
-        scheduleMicrophoneRecovery(room);
+        scheduleMicrophoneRecovery(room, true);
+      }
+    };
+
+    const onLocalAudioSilenceDetected = (publication: any) => {
+      if (publication?.source === Track.Source.Microphone && desiredMicEnabledRef.current && room.localParticipant.isScreenShareEnabled) {
+        scheduleMicrophoneRecovery(room, true);
+      }
+    };
+
+    const onMediaDevicesChanged = () => {
+      if (desiredMicEnabledRef.current && room.localParticipant.isScreenShareEnabled) {
+        scheduleMicrophoneRecovery(room, true);
       }
     };
 
@@ -1321,6 +1353,8 @@ function useClassMedia({
     room.on(RoomEvent.TrackUnmuted, onTrackUnmuted);
     room.on(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
     room.on(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
+    room.on(RoomEvent.LocalAudioSilenceDetected, onLocalAudioSilenceDetected);
+    room.on(RoomEvent.MediaDevicesChanged, onMediaDevicesChanged);
 
     room.connect(livekit.url, livekit.token, { autoSubscribe: true })
       .then(() => {
@@ -1351,6 +1385,8 @@ function useClassMedia({
       room.off(RoomEvent.TrackUnmuted, onTrackUnmuted);
       room.off(RoomEvent.LocalTrackPublished, onLocalTrackPublished);
       room.off(RoomEvent.LocalTrackUnpublished, onLocalTrackUnpublished);
+      room.off(RoomEvent.LocalAudioSilenceDetected, onLocalAudioSilenceDetected);
+      room.off(RoomEvent.MediaDevicesChanged, onMediaDevicesChanged);
       room.disconnect();
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
@@ -1438,7 +1474,7 @@ function useClassMedia({
       );
       if (next && micWasOn) {
         desiredMicEnabledRef.current = true;
-        scheduleMicrophoneRecovery(room);
+        scheduleMicrophoneRecovery(room, true);
       } else if (!next) {
         clearMicRecoveryTimers();
       }
