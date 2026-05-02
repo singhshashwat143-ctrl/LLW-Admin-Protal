@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "llw-auth-session";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || (import.meta.env.DEV ? "http://localhost:4000" : "")).replace(/\/$/, "");
+
+function resolveApiPath(path: string) {
+  if (!API_BASE_URL || /^https?:\/\//.test(path)) {
+    return path;
+  }
+  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let authHeaders: Record<string, string> = {};
@@ -16,7 +24,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // Ignore invalid local storage and continue without auth headers.
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(resolveApiPath(path), {
     headers: { "Content-Type": "application/json", ...authHeaders, ...(init?.headers || {}) },
     ...init,
   });
