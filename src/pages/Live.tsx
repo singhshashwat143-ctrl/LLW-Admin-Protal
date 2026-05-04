@@ -769,6 +769,8 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   const [unmutePrompt, setUnmutePrompt] = useState("");
   const [forceMuteSignal, setForceMuteSignal] = useState(0);
   const [livekit, setLivekit] = useState<LiveKitJoinInfo | null>(null);
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const attendanceIdRef = useRef("");
 
@@ -784,6 +786,9 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     if (!joinPayload) return;
     let active = true;
     let localAttendanceId = "";
+    setJoining(true);
+    setJoinError("");
+    setMeetingEndedMessage("");
 
     api<{ webinar: Webinar; session: Session; attendance: Attendance; livekit?: LiveKitJoinInfo | null }>(`/api/rooms/${roomName}/join`, {
       method: "POST",
@@ -830,10 +835,17 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
 
       socketRef.current = socket;
       setSocketInstance(socket);
+      setJoining(false);
+    }).catch((error) => {
+      if (!active) return;
+      const message = error instanceof Error ? error.message : "Could not join this webinar room.";
+      setJoinError(message);
+      setJoining(false);
     });
 
     return () => {
       active = false;
+      setJoining(false);
       const socket = socketRef.current;
       socketRef.current = null;
       const currentAttendanceId = localAttendanceId || attendanceIdRef.current;
@@ -918,6 +930,8 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     unmutePrompt,
     forceMuteSignal,
     livekit,
+    joining,
+    joinError,
     clearMeetingEndedMessage,
     clearUnmutePrompt,
   };
@@ -1348,6 +1362,7 @@ function useClassMedia({
         next,
         next
           ? {
+              audio: false,
               video: true,
               resolution: ScreenSharePresets.h1080fps30.resolution,
               contentHint: "detail",
@@ -1441,7 +1456,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const remoteHostStageCandidates = useMemo<StageCandidate[]>(
     () => hostParticipants.map((participant) => {
       const combinedStream = media.remoteStreams.get(participant.attendanceId) || null;
-      const screenStream = media.remoteScreenStreams.get(participant.attendanceId) || null;
       const cameraStream = media.remoteCameraStreams.get(participant.attendanceId) || null;
       return {
         id: participant.attendanceId,
@@ -1450,11 +1464,11 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
         isMicOn: participant.isMicOn,
         isCameraOn: participant.isCameraOn,
         isScreenSharing: participant.isScreenSharing,
-        stageStream: screenStream || combinedStream,
+        stageStream: combinedStream,
         cameraStream,
       };
     }),
-    [hostParticipants, media.remoteCameraStreams, media.remoteScreenStreams, media.remoteStreams],
+    [hostParticipants, media.remoteCameraStreams, media.remoteStreams],
   );
   const localHostStageCandidate = useMemo<StageCandidate | null>(() => {
     if (role !== "HOST") return null;
@@ -1465,7 +1479,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       isMicOn: media.isMicOn,
       isCameraOn: media.isCameraOn,
       isScreenSharing: media.isScreenSharing,
-      stageStream: media.localScreenStream || media.localStream,
+      stageStream: media.localStream,
       cameraStream: media.localCameraStream,
     };
   }, [
@@ -1475,7 +1489,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     media.isMicOn,
     media.isScreenSharing,
     media.localCameraStream,
-    media.localScreenStream,
     media.localStream,
     role,
   ]);
@@ -1508,6 +1521,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     if (!media.mediaError) return;
     setPaymentNotice(media.mediaError);
   }, [media.mediaError]);
+
+  useEffect(() => {
+    if (!joined || !connection.joinError) return;
+    setPaymentNotice(connection.joinError);
+    setJoined(false);
+  }, [connection.joinError, joined]);
 
   useEffect(() => {
     setScreenSharePriority((current) => {
@@ -1658,6 +1677,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       return;
     }
     if (!form.name.trim() || !form.phone.trim()) return;
+    setPaymentNotice("");
     setJoined(true);
   }
 
@@ -1896,6 +1916,30 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <button className="gm-prejoin-btn" type="button" onClick={submitJoin}>{role === "HOST" ? "Join As Host" : "Join Webinar"}</button>
               {paymentNotice ? <div className="gm-payment-note">{paymentNotice}</div> : null}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (connection.joining && !connection.attendanceId) {
+    return (
+      <div className="gm-prejoin-shell">
+        <div className="gm-prejoin-brand">
+          <div>
+            <div className="gm-prejoin-logo">LW</div>
+            <h1 className="gm-prejoin-title">Connecting To Webinar</h1>
+            <p className="gm-prejoin-copy">
+              We are opening the room, validating access, and connecting the live session now.
+            </p>
+          </div>
+        </div>
+
+        <div className="gm-prejoin-form-shell">
+          <div className="gm-prejoin-form">
+            <h2>{role === "HOST" ? "Host Console" : "Join Webinar"}</h2>
+            <p>Just a moment while the room connects.</p>
+            <div className="gm-payment-note">Connecting to the live room...</div>
           </div>
         </div>
       </div>
