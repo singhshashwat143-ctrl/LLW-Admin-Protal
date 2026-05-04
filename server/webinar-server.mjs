@@ -450,6 +450,34 @@ function canJoinAsHost(user) {
   return isAdminUser(user);
 }
 
+function getStoredTeamMember(user) {
+  if (!user) return null;
+  const email = String(user.email || "").toLowerCase();
+  return store.data.team.find(
+    (member) => member.id === user.id || String(member.email || "").toLowerCase() === email,
+  ) ?? null;
+}
+
+function getManagerScope(user) {
+  const member = getStoredTeamMember(user) || user || {};
+  return {
+    id: String(member.id || user?.id || ""),
+    name: String(member.name || user?.name || ""),
+    teamName: String(member.team_name || user?.team_name || "").trim(),
+  };
+}
+
+function isBdaInManagerScope(managerUser, member) {
+  if (!member || normalizeUserRole(member) !== "BDA") return false;
+  const scope = getManagerScope(managerUser);
+  const memberTeamName = String(member.team_name || "").trim();
+  const memberManagerName = String(member.manager_name || "").trim();
+  return Boolean(
+    (scope.teamName && memberTeamName === scope.teamName)
+    || (scope.name && memberManagerName === scope.name),
+  );
+}
+
 async function createLiveKitToken({ roomName, identity, name, canPublish, canPublishData = false, canPublishSources }) {
   if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
     return null;
@@ -515,7 +543,7 @@ function getManagedBdaIds(user) {
     return store.data.team.filter((member) => normalizeUserRole(member) === "BDA").map((member) => member.id);
   }
   if (role === "BDM") {
-    return store.data.team.filter((member) => normalizeUserRole(member) === "BDA" && member.manager_name === user.name).map((member) => member.id);
+    return store.data.team.filter((member) => isBdaInManagerScope(user, member)).map((member) => member.id);
   }
   if (role === "BDA") {
     return [user.id];
@@ -528,7 +556,14 @@ function scopeOrderRowsForUser(user, rows) {
     return rows;
   }
   if (isManagerUser(user)) {
-    return rows.filter((row) => row.manager_name === user.name || row.created_by_user_id === user.id);
+    const managedBdaIds = new Set(getManagedBdaIds(user));
+    const scope = getManagerScope(user);
+    return rows.filter((row) => (
+      managedBdaIds.has(String(row.bda?.id || row.bda_id || ""))
+      || (scope.teamName && String(row.team_name || "").trim() === scope.teamName)
+      || String(row.manager_name || "").trim() === scope.name
+      || row.created_by_user_id === scope.id
+    ));
   }
   return rows.filter((row) => row.bda?.id === user.id || row.bda_id === user.id || row.created_by_user_id === user.id);
 }
@@ -546,7 +581,13 @@ function scopeLeaderboardForUser(user, leaderboard) {
     return leaderboard;
   }
   if (isManagerUser(user)) {
-    return leaderboard.filter((entry) => entry.manager_name === user.name);
+    const managedBdaIds = new Set(getManagedBdaIds(user));
+    const scope = getManagerScope(user);
+    return leaderboard.filter((entry) => (
+      managedBdaIds.has(String(entry.id || ""))
+      || (scope.teamName && String(entry.team_name || "").trim() === scope.teamName)
+      || String(entry.manager_name || "").trim() === scope.name
+    ));
   }
   return leaderboard.filter((entry) => entry.id === user.id);
 }
@@ -556,7 +597,11 @@ function scopeManagerSummaryForUser(user, managerSummary) {
     return managerSummary;
   }
   if (isManagerUser(user)) {
-    return managerSummary.filter((entry) => entry.manager_name === user.name);
+    const scope = getManagerScope(user);
+    return managerSummary.filter((entry) => (
+      (scope.teamName && String(entry.team_name || "").trim() === scope.teamName)
+      || String(entry.manager_name || "").trim() === scope.name
+    ));
   }
   return [];
 }
@@ -669,7 +714,11 @@ function canAccessOrder(user, order) {
     return true;
   }
   if (isManagerUser(user)) {
-    return order.manager_name === user.name;
+    const scope = getManagerScope(user);
+    return (
+      (scope.teamName && String(order.team_name || "").trim() === scope.teamName)
+      || String(order.manager_name || "").trim() === scope.name
+    );
   }
   return order.bda?.id === user.id || order.bda_id === user.id;
 }
@@ -772,7 +821,7 @@ function getVisibleDashboardBdas(user) {
     return store.data.team.filter((member) => normalizeUserRole(member) === "BDA");
   }
   if (isManagerUser(user)) {
-    return store.data.team.filter((member) => normalizeUserRole(member) === "BDA" && member.manager_name === user.name);
+    return store.data.team.filter((member) => isBdaInManagerScope(user, member));
   }
   return store.data.team.filter((member) => normalizeUserRole(member) === "BDA" && member.id === user.id);
 }
@@ -796,6 +845,7 @@ function buildFilteredDashboardLeaderboard(user, orders, graphFilter) {
         id: member.id,
         name: member.name,
         manager_name: member.manager_name || "",
+        team_name: member.team_name || "",
         totalRevenue: summary.grossCollections,
         netRevenue: summary.cashInHand,
         refundedAmount: summary.refundedAmount,
@@ -818,7 +868,11 @@ function buildFilteredDashboardManagerSummary(user, orders, graphFilter, leaderb
   const visibleBdas = getVisibleDashboardBdas(user);
   return getVisibleDashboardManagers(user)
     .map((manager) => {
-      const teamEntries = leaderboard.filter((entry) => entry.manager_name === manager.name);
+      const managerTeamName = String(manager.team_name || "").trim();
+      const teamEntries = leaderboard.filter((entry) => (
+        (managerTeamName && String(entry.team_name || "").trim() === managerTeamName)
+        || entry.manager_name === manager.name
+      ));
       const directOrders = orders.filter((order) => order.bda?.id === manager.id || order.bda_id === manager.id);
       const directSummary = summarizeDashboardOrders(directOrders, graphFilter);
       const topBda = teamEntries.reduce((best, entry) => {
@@ -828,11 +882,15 @@ function buildFilteredDashboardManagerSummary(user, orders, graphFilter, leaderb
 
       return {
         manager_name: manager.name,
+        team_name: manager.team_name || "",
         totalRevenue: teamEntries.reduce((sum, entry) => sum + Number(entry.totalRevenue || 0), 0) + directSummary.grossCollections,
         netRevenue: teamEntries.reduce((sum, entry) => sum + Number(entry.netRevenue || 0), 0) + directSummary.cashInHand,
         refundedAmount: teamEntries.reduce((sum, entry) => sum + Number(entry.refundedAmount || 0), 0) + directSummary.refundedAmount,
         recoveryPipeline: teamEntries.reduce((sum, entry) => sum + Number(entry.recoveryPipeline || 0), 0) + directSummary.outstandingAmount,
-        teamMembers: visibleBdas.filter((member) => member.manager_name === manager.name).length,
+        teamMembers: visibleBdas.filter((member) => (
+          (managerTeamName && String(member.team_name || "").trim() === managerTeamName)
+          || member.manager_name === manager.name
+        )).length,
         top_bda: topBda?.name || "—",
       };
     })
@@ -913,14 +971,15 @@ function getTeamPayloadForUser(user) {
     };
   }
   if (isManagerUser(user)) {
-    const self = summary.team.find((member) => member.id === user.id) || user;
+    const self = getStoredTeamMember(user) || summary.team.find((member) => member.id === user.id) || user;
+    const managedBdas = summary.bdas.filter((member) => isBdaInManagerScope(self, member));
     return {
-      team: summary.team.filter((member) => member.id === user.id || (normalizeUserRole(member) === "BDA" && member.manager_name === user.name)),
+      team: summary.team.filter((member) => member.id === self.id || managedBdas.some((entry) => entry.id === member.id)),
       admins: summary.admins,
-      bdas: summary.bdas.filter((member) => member.manager_name === user.name),
-      salesOwners: [self, ...summary.bdas.filter((member) => member.manager_name === user.name)],
-      managers: summary.managers.filter((manager) => manager.manager_name === user.name),
-      leaderboard: summary.leaderboard.filter((entry) => entry.manager_name === user.name),
+      bdas: managedBdas,
+      salesOwners: [self, ...managedBdas],
+      managers: summary.managers.filter((manager) => String(manager.manager_name || "").trim() === String(self.name || "").trim()),
+      leaderboard: summary.leaderboard.filter((entry) => managedBdas.some((member) => member.id === entry.id)),
     };
   }
 
@@ -966,7 +1025,9 @@ function findApprovedGoogleUser(profile) {
     throw new Error("This Google account is currently inactive.");
   }
 
-  user.name = profile.name || user.name;
+  if (!user.name) {
+    user.name = profile.name || user.name;
+  }
   user.avatar_url = profile.picture || user.avatar_url || "";
   user.auth_provider = "GOOGLE";
   user.updated_at = new Date().toISOString();
