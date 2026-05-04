@@ -56,6 +56,9 @@ type PaymentRow = {
   latest_transaction_id?: string;
   latest_payment_method?: string;
   latest_payment_status?: string;
+  batch_month_key?: string;
+  batch_month_label?: string;
+  batch_is_active?: boolean | null;
   payment_history: PaymentHistory[];
   refund_history?: RefundRequestSummary[];
   refund_count?: number;
@@ -161,9 +164,14 @@ function getPendingOperations(row: PaymentRow) {
   const pending = [];
   if (!row.operations.portal_access_done) pending.push("Portal");
   if (!row.operations.broker_setup_done) pending.push("Broker");
-  if (!row.operations.demat_setup_done) pending.push("Demat");
-  if (!row.operations.welcome_kit_sent) pending.push("Welcome kit");
   return pending;
+}
+
+function getBatchStatusLabel(row: Pick<PaymentRow, "batch_month_label" | "batch_is_active">) {
+  if (!row.batch_month_label) return "";
+  if (row.batch_is_active === true) return "Operational";
+  if (row.batch_is_active === false) return "Non-operational";
+  return "Saved batch";
 }
 
 function isExpired(value?: string | null) {
@@ -236,7 +244,7 @@ export function PaymentsPage() {
       const matchesMethod = methodFilter === "ALL" || row.latest_payment_method === methodFilter;
       const matchesDateFrom = !dateFrom || (rowTime !== null && rowTime >= new Date(dateFrom).getTime());
       const matchesDateTo = !dateTo || (rowTime !== null && rowTime <= new Date(`${dateTo}T23:59:59.999`).getTime());
-      const haystack = [row.student?.name, row.student?.phone, row.student?.email, getOfferTitle(row), row.source_label, row.order_number, row.latest_transaction_id]
+      const haystack = [row.student?.name, row.student?.phone, row.student?.email, getOfferTitle(row), row.batch_month_label, row.source_label, row.order_number, row.latest_transaction_id]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -636,6 +644,11 @@ export function PaymentsPage() {
                   <td>
                     <div className="cell-stack">
                       <div>{getOfferTitle(row)}</div>
+                      {row.batch_month_label ? (
+                        <div className="text-xs text-[var(--text-secondary)]">
+                          Batch {row.batch_month_label}{getBatchStatusLabel(row) ? ` • ${getBatchStatusLabel(row)}` : ""}
+                        </div>
+                      ) : null}
                       <div className="text-xs text-[var(--text-secondary)]">{row.payment_mode} order</div>
                       <div className="text-xs text-[var(--text-secondary)]">Created {formatDateTime(row.created_at)}</div>
                       {row.coupon_code ? <div className="text-xs text-[var(--text-secondary)]">Coupon {row.coupon_code}</div> : null}

@@ -27,8 +27,8 @@ const requiredTeamMembers = [
   { name: "Aswin", email: "aswin@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
   { name: "Aika", email: "aika@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
   { name: "Bilu", email: "bilu@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
-  { name: "Bibin", email: "bibin@livelongwealth.com", role: "OPERATIONS", manager_name: "", team_name: "Operations" },
-  { name: "Abhinav", email: "abhinav@livelongwealth.com", role: "OPERATIONS", manager_name: "", team_name: "Operations" },
+  { name: "Bibin", email: "bibin@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
+  { name: "Abhinav", email: "abhinav@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Vaisakh V S", email: "vaisakh.vs@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Drisya", email: "drisya@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Sravani", email: "sravani@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
@@ -870,7 +870,7 @@ function getAmountDue(order, data) {
 }
 
 function isOperationsComplete(order) {
-  return Boolean(order.portal_access_done && order.broker_setup_done && order.demat_setup_done && order.welcome_kit_sent);
+  return Boolean(order.portal_access_done && order.broker_setup_done);
 }
 
 function computeOrderStatus(order, data) {
@@ -1162,6 +1162,11 @@ function withComputedPayment(order, data) {
   const paymentState = getPaymentState(order, data);
   const offerTitle = product?.name || webinar?.title || bootcamp?.title || sourceLabel;
   const recoveryInstallments = getRecoveryInstallmentSummary(order, data);
+  const batchKey = order.batch_month_key || "";
+  const selectedBatch = product && batchKey
+    ? (product.batches || []).find((batch) => batch.key === batchKey) ?? null
+    : null;
+  const batchLabel = order.batch_month_label || selectedBatch?.label || (batchKey ? productBatchMonthByKey.get(batchKey)?.label || batchKey : "");
 
   return {
     ...order,
@@ -1208,8 +1213,9 @@ function withComputedPayment(order, data) {
     recovery_installments_used: recoveryInstallments.usable,
     recovery_installments_paid: recoveryInstallments.paid,
     recovery_installments_remaining: recoveryInstallments.remaining,
-    batch_month_key: order.batch_month_key || "",
-    batch_month_label: order.batch_month_label || "",
+    batch_month_key: batchKey,
+    batch_month_label: batchLabel,
+    batch_is_active: selectedBatch ? Boolean(selectedBatch.is_active) : null,
     token_due:
       amountDue > 0
         ? {
@@ -2129,7 +2135,10 @@ export function createDashboardStore() {
     getOperationsQueue() {
       const operations = store
         .getOrders()
-        .filter((order) => ["OPERATIONS_IN_PROGRESS", "ACTIVE"].includes(order.status) || order.access_revocation_requested || order.access_revoked)
+        .filter((order) => {
+          const hasSuccessfulPayment = Number(order.amount_paid_inr || 0) > 0 || (order.payment_history || []).some((payment) => isPaidStatus(payment.status));
+          return hasSuccessfulPayment || order.access_revocation_requested || order.access_revoked;
+        })
         .sort((left, right) => {
           if (left.operations_completed !== right.operations_completed) {
             return Number(left.operations_completed) - Number(right.operations_completed);
@@ -2782,6 +2791,25 @@ export function createDashboardStore() {
           order.access_revocation_requested_by = "";
         }
       }
+      if (patch.batch_month_key != null || patch.batchMonthKey != null || patch.batch != null) {
+        const product = store.data.products.find((entry) => entry.id === order.product_id) ?? null;
+        if (!product) {
+          throw new Error("This order does not have a product batch to update.");
+        }
+        const nextBatchKey = normalizeBatchKey(patch.batch_month_key || patch.batchMonthKey || patch.batch || "");
+        if (!nextBatchKey) {
+          order.batch_month_key = "";
+          order.batch_month_label = "";
+        } else {
+          const selectedBatch = (product.batches || []).find((batch) => batch.key === nextBatchKey) ?? null;
+          if (!selectedBatch) {
+            throw new Error("The selected batch does not exist for this product.");
+          }
+          order.batch_month_key = nextBatchKey;
+          order.batch_month_label = selectedBatch.label || productBatchMonthByKey.get(nextBatchKey)?.label || nextBatchKey;
+        }
+      }
+      order.updated_at = nowIso();
       store.refreshOrderState(order.id);
       store.persist();
 

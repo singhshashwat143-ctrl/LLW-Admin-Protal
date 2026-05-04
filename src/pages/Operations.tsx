@@ -38,8 +38,6 @@ type OperationRow = {
   operations: {
     portal_access_done: boolean;
     broker_setup_done: boolean;
-    demat_setup_done: boolean;
-    welcome_kit_sent: boolean;
   };
   operations_completed?: boolean;
   created_at: string;
@@ -138,7 +136,7 @@ export function OperationsPage() {
       <PageHeader
         eyebrow="Operations"
         title="Paid orders operations queue"
-        description="Only fully paid orders appear here, so the operations team can complete fulfilment without the payment desk getting cluttered."
+        description="All successfully paid token and full orders appear here, so the operations team can track fulfilment as soon as money is collected."
         actions={
           <>
             <button className="btn-secondary" type="button" onClick={operationsApi.refresh}>Refresh</button>
@@ -154,13 +152,13 @@ export function OperationsPage() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Ready For Ops" value={String(operationsApi.data.summary.total || 0)} meta="Fully paid orders in the queue" />
+        <StatCard label="Ready For Ops" value={String(operationsApi.data.summary.total || 0)} meta="Successful token and full payments in the queue" />
         <StatCard label="Pending Checklist" value={String(operationsApi.data.summary.pending || 0)} meta="Orders still awaiting fulfilment steps" />
         <StatCard label="Completed" value={String(operationsApi.data.summary.completed || 0)} meta="Orders whose checklist is fully done" />
         <StatCard label="Net Cash Covered" value={formatCurrency((operationsApi.data.summary.netCashInHand || 0) / 100)} meta="Retained cash across the operations queue" />
       </div>
 
-      <SectionCard title="Operations Queue" subtitle="Only completed-payment orders are shown here. Mark fulfilment steps as work gets done.">
+      <SectionCard title="Operations Queue" subtitle="All successful token and full payments are shown here. Mark fulfilment steps as work gets done.">
         <div className="payments-toolbar mb-4">
           <div className="payments-filters">
             <select className="input-dark min-w-[180px]" value={checklistFilter} onChange={(event) => setChecklistFilter(event.target.value)}>
@@ -237,8 +235,6 @@ export function OperationsPage() {
                       {([
                         ["portal_access_done", "Portal access"],
                         ["broker_setup_done", "Broker setup"],
-                        ["demat_setup_done", "Demat setup"],
-                        ["welcome_kit_sent", "Welcome kit"],
                       ] as const).map(([key, label]) => (
                         <label key={key} className="inline-flex items-center gap-2">
                           <input
@@ -284,7 +280,7 @@ export function OperationsPage() {
               {!filteredRows.length ? (
                 <tr>
                   <td colSpan={7} className="py-10 text-center text-sm text-[var(--text-secondary)]">
-                    No fully paid orders match the current filters.
+                    No paid token or full orders match the current filters.
                   </td>
                 </tr>
               ) : null}

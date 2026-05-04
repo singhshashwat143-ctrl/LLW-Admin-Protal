@@ -406,7 +406,7 @@ export function OnboardingPage() {
                   <input className="input-dark" type="number" min="1" value={form.token_amount} onChange={(event) => updateField("token_amount", event.target.value)} placeholder="5000" />
                 </label>
                 <label className="grid gap-2">
-                  <span className="text-sm font-medium text-[var(--text-secondary)]">Promise date</span>
+                  <span className="text-sm font-medium text-[var(--text-secondary)]">Remaining payment date</span>
                   <input className="input-dark" type="date" value={form.promise_date} onChange={(event) => updateField("promise_date", event.target.value)} />
                 </label>
               </>
