@@ -9,7 +9,8 @@
     "dev:server": "node --watch server/webinar-server.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server/webinar-server.mjs"
+    "start": "node server/webinar-server.mjs",
+    "db:bootstrap-runtime": "node server/bootstrap-runtime-store.mjs"
   },
   "dependencies": {
     "clsx": "2.1.1",

@@ -2,10 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDashboardStore as createSeedStore, constants } from "./dashboard-data.mjs";
+import { createRuntimePersistence } from "./runtime-persistence.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const dataFile = join(__dirname, "..", "db", "app-data.json");
+const runtimePersistence = await createRuntimePersistence();
 const requiredTeamMembers = [
   { name: "Punith Raj S N", email: "punith@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Punith Raj S N Team" },
   { name: "Aman Israr", email: "aman@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
@@ -784,15 +786,22 @@ function buildPersistentData(data) {
   };
 }
 
-function readDataFile() {
+async function readDataFile() {
   ensureDataFile();
   try {
     const parsed = JSON.parse(readFileSync(dataFile, "utf8"));
-    return buildPersistentData(parsed);
+    const normalized = buildPersistentData(parsed);
+    const loaded = await runtimePersistence.load(normalized);
+    const hydrated = buildPersistentData(loaded);
+    writeFileSync(dataFile, JSON.stringify(hydrated, null, 2));
+    return hydrated;
   } catch {
     const fallback = buildPersistentData(buildSeedData());
     writeFileSync(dataFile, JSON.stringify(fallback, null, 2));
-    return fallback;
+    const loaded = await runtimePersistence.load(fallback);
+    const hydrated = buildPersistentData(loaded);
+    writeFileSync(dataFile, JSON.stringify(hydrated, null, 2));
+    return hydrated;
   }
 }
 
@@ -1517,16 +1526,30 @@ function validateCouponForOrder(data, coupon, product, actor = {}) {
   }
 }
 
-export function createDashboardStore() {
-  const data = readDataFile();
+export async function createDashboardStore() {
+  const data = await readDataFile();
 
   const store = {
     data,
-    persist() {
-      writeFileSync(dataFile, JSON.stringify(store.data, null, 2));
+    pendingPersist: Promise.resolve(),
+    persist(reason = "persist") {
+      const snapshot = buildPersistentData(structuredClone(store.data));
+      writeFileSync(dataFile, JSON.stringify(snapshot, null, 2));
+      store.pendingPersist = runtimePersistence.save(snapshot, reason);
+      return store.pendingPersist;
     },
     save() {
-      store.persist();
+      return store.persist();
+    },
+    flush() {
+      return store.pendingPersist;
+    },
+    async close() {
+      await store.flush();
+      await runtimePersistence.close();
+    },
+    getPersistenceStatus() {
+      return runtimePersistence.getStatus();
     },
     attachInstructor(record) {
       return { ...record, instructor: store.data.instructors.find((item) => item.id === record.instructor_id) ?? null };
@@ -2936,7 +2959,7 @@ export function createDashboardStore() {
   store.data.orders.forEach((order) => {
     store.refreshOrderState(order.id);
   });
-  store.persist();
+  store.persist("startup-normalize");
 
   return store;
 }

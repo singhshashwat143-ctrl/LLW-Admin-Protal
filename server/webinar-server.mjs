@@ -20,7 +20,7 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: true, credentials: false },
 });
-const store = createDashboardStore();
+const store = await createDashboardStore();
 const port = Number(process.env.PORT || 4000);
 const pyMdApiKey = process.env.PYMD_API_KEY || "";
 const pyMdBaseUrl = "https://py.md/api";
@@ -50,6 +50,10 @@ function withAbsolute(req, path) {
   if (!path) return path;
   if (path.startsWith("http")) return path;
   return `${req.protocol}://${req.get("host")}${path}`;
+}
+
+async function flushStore() {
+  await store.flush();
 }
 
 function serializeWebinar(req, webinar) {
@@ -1166,7 +1170,12 @@ function addRoomMessage(roomName, input = {}) {
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "llw-api", port });
+  res.json({
+    ok: true,
+    service: "llw-api",
+    port,
+    persistence: store.getPersistenceStatus(),
+  });
 });
 
 app.post("/api/auth/login", (req, res) => {
@@ -1646,6 +1655,7 @@ app.post("/api/payment-links", async (req, res) => {
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
@@ -1668,6 +1678,7 @@ app.post("/api/payment-links", async (req, res) => {
       }
     }
     store.save();
+    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Payment creation failed" });
   }
 });
@@ -1679,6 +1690,7 @@ app.post("/api/enrollments", async (req, res) => {
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
@@ -1702,6 +1714,7 @@ app.post("/api/enrollments", async (req, res) => {
       }
       store.save();
     }
+    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Enrollment creation failed" });
   }
 });
@@ -1717,6 +1730,7 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
   try {
     created = store.createRecoveryLink(req.params.id, req.body ?? {});
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
@@ -1724,11 +1738,12 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
       store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
       store.save();
     }
+    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to create recovery link" });
   }
 });
 
-app.patch("/api/orders/:id/operations", (req, res) => {
+app.patch("/api/orders/:id/operations", async (req, res) => {
   const user = requireOperationsPermission(req, res);
   if (!user) return;
   try {
@@ -1736,13 +1751,14 @@ app.patch("/api/orders/:id/operations", (req, res) => {
       ...(req.body ?? {}),
       access_revoked_by: user.name || user.email || "Operations",
     });
+    await flushStore();
     res.json({ ok: true, order });
   } catch (error) {
     res.status(404).json({ ok: false, message: error instanceof Error ? error.message : "Order not found" });
   }
 });
 
-app.post("/api/orders/:id/request-access-revoke", (req, res) => {
+app.post("/api/orders/:id/request-access-revoke", async (req, res) => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;
   const scopedOrder = scopeOrderRowsForUser(user, store.getOrders()).find((entry) => entry.id === req.params.id);
@@ -1751,6 +1767,7 @@ app.post("/api/orders/:id/request-access-revoke", (req, res) => {
   }
   try {
     const order = store.requestAccessRevoke(req.params.id, user);
+    await flushStore();
     res.json({ ok: true, order });
   } catch (error) {
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to request access revoke." });
@@ -1796,18 +1813,20 @@ app.get("/api/refunds", (req, res) => {
   res.json({ ok: true, refunds: store.getRefunds(), summary: store.getRefundSummary() });
 });
 
-app.post("/api/refunds", (req, res) => {
+app.post("/api/refunds", async (req, res) => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;
   const refund = store.createRefund(req.body ?? {}, user);
+  await flushStore();
   res.status(201).json({ ok: true, refund });
 });
 
-app.post("/api/refunds/:id/decision", (req, res) => {
+app.post("/api/refunds/:id/decision", async (req, res) => {
   const user = requireAdminPermission(req, res, "Only admin and finance users can approve or reject refunds.");
   if (!user) return;
   const refund = store.updateRefund(req.params.id, String(req.body?.decision || "REQUESTED"), String(req.body?.admin_comment || ""), user);
   if (!refund) return res.status(404).json({ ok: false, message: "Refund not found" });
+  await flushStore();
   res.json({ ok: true, refund });
 });
 
@@ -1832,7 +1851,7 @@ app.post("/api/orders/create", (req, res) => {
   res.status(501).json({ ok: false, message: "Use /api/payment-links or /api/orders/checkout-session for Razorpay-backed orders." });
 });
 
-app.post("/api/orders/verify-payment", (req, res) => {
+app.post("/api/orders/verify-payment", async (req, res) => {
   const payment = req.body?.payment_id ? store.getPaymentRecord(req.body.payment_id) : null;
   const order = payment
     ? store.data.orders.find((item) => item.id === payment.order_id)
@@ -1879,13 +1898,14 @@ app.post("/api/orders/verify-payment", (req, res) => {
         });
       }
     }
+    await flushStore();
     res.json({ ok: true, ...result, aisensy: "enrollment_confirmation queued" });
   } catch (error) {
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to verify payment" });
   }
 });
 
-app.post("/api/orders/mark-payment-failed", (req, res) => {
+app.post("/api/orders/mark-payment-failed", async (req, res) => {
   try {
     const result = store.markPaymentFailed({
       payment_id: req.body?.payment_id,
@@ -1893,6 +1913,7 @@ app.post("/api/orders/mark-payment-failed", (req, res) => {
       failure_code: req.body?.failure_code,
       failure_reason: req.body?.failure_reason,
     });
+    await flushStore();
     res.json({ ok: true, ...result });
   } catch (error) {
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to mark payment failed" });
@@ -1935,6 +1956,7 @@ app.post("/api/orders/reconcile-payment", async (req, res) => {
           failure_code: failedPayment.error_code,
           failure_reason: failureMessage,
         });
+        await flushStore();
         return res.json({ ok: true, paid: false, failed: true, message: failureMessage, ...result });
       }
       return res.json({ ok: true, paid: false, order: store.attachOrder(order), payment: openPayment });
@@ -1962,6 +1984,7 @@ app.post("/api/orders/reconcile-payment", async (req, res) => {
       }
     }
 
+    await flushStore();
     return res.json({ ok: true, paid: true, ...result });
   } catch (error) {
     res.status(400).json({ ok: false, paid: false, message: error instanceof Error ? error.message : "Unable to reconcile payment." });
@@ -1983,6 +2006,7 @@ app.post("/api/orders/checkout-session", async (req, res) => {
     if (order.collect_customer_details_on_checkout) {
       try {
         store.captureCheckoutCustomer(order.id, req.body ?? {});
+        await flushStore();
       } catch (error) {
         return res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Customer details are required" });
       }
@@ -2029,6 +2053,7 @@ app.post("/api/orders/checkout-session", async (req, res) => {
       });
       store.attachRazorpayOrderToPayment(payment.id, razorpayOrder);
       store.save();
+      await flushStore();
     }
 
     res.json({
@@ -2547,6 +2572,17 @@ if (existsSync(distPath)) {
   app.use(express.static(distPath));
   app.get(/^(?!\/api|\/health|\/socket\.io).*/, (req, res) => {
     res.sendFile(join(distPath, "index.html"));
+  });
+}
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, async () => {
+    try {
+      await flushStore();
+      await store.close();
+    } finally {
+      process.exit(0);
+    }
   });
 }
 

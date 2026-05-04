@@ -166,3 +166,14 @@ CREATE TABLE webinar_attendance (
   payment_status VARCHAR(20),
   connection_quality NUMERIC(4, 2)
 );
+
+CREATE TABLE app_runtime_state (
+  store_key TEXT PRIMARY KEY,
+  payload JSONB NOT NULL,
+  checksum TEXT NOT NULL,
+  revision BIGINT NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'server',
+  last_reason TEXT NOT NULL DEFAULT 'persist',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
