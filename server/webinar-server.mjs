@@ -788,6 +788,10 @@ function getApprovedRefundEventTime(refund) {
   return refund?.approved_at || refund?.updated_at || refund?.created_at || null;
 }
 
+function shouldCountOrderInOutstanding(order) {
+  return Number(order?.amount_due_inr || 0) > 0 && Number(order?.amount_paid_inr || 0) > 0;
+}
+
 function summarizeDashboardOrders(orders, graphFilter) {
   const createdOrders = orders.filter((order) => isTimestampWithinDashboardFilter(order.created_at, graphFilter));
   const paidPayments = orders
@@ -811,7 +815,9 @@ function summarizeDashboardOrders(orders, graphFilter) {
     recoveryRevenue: paidPayments
       .filter((payment) => payment.type === "RECOVERY")
       .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0),
-    outstandingAmount: createdOrders.reduce((sum, order) => sum + Number(order.amount_due_inr || 0), 0),
+    outstandingAmount: createdOrders
+      .filter((order) => shouldCountOrderInOutstanding(order))
+      .reduce((sum, order) => sum + Number(order.amount_due_inr || 0), 0),
     customers: new Set(createdOrders.map((order) => order.student?.id || order.student_id).filter(Boolean)).size,
   };
 }
@@ -954,7 +960,9 @@ function buildScopedTrackerPayload(user) {
     leaderboard,
     managerSummary,
     summary: {
-      outstandingAmount: enrollments.reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0),
+      outstandingAmount: enrollments
+        .filter((row) => shouldCountOrderInOutstanding(row))
+        .reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0),
       dueToday: enrollments.filter((row) => row.token_due?.due_date && new Date(row.token_due.due_date).toDateString() === new Date().toDateString()).length,
       overdue: enrollments.filter((row) => row.token_due?.due_date && new Date(row.token_due.due_date).getTime() < Date.now()).length,
       thisMonthCollections,

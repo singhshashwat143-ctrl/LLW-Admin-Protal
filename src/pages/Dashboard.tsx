@@ -152,7 +152,7 @@ export function DashboardPage() {
     upcomingWebinars: [],
     managerSummary: [],
   });
-  const outstandingMeta = "Outstanding on orders inside the selected dashboard range";
+  const outstandingMeta = "Remaining amount on collected orders inside the selected dashboard range";
   const graphLabel = data.graphFilters.label || "Last 30 days";
   const hasGraphFilters = Boolean(
     monthFilter
@@ -235,7 +235,7 @@ export function DashboardPage() {
       </SectionCard>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-        <StatCard label="Sold Value" value={formatCurrency((data.revenueTotals.soldValue || 0) / 100)} meta="Product value booked in the selected range" />
+        <StatCard label="Sold Value" value={formatCurrency((data.revenueTotals.soldValue || 0) / 100)} meta="Net product cost after discount booked in the selected range" />
         <StatCard label="Gross Collections" value={formatCurrency((data.revenueTotals.grossCollections || 0) / 100)} meta="Successful collections in the selected range" />
         <StatCard label="Approved Refunds" value={formatCurrency((data.revenueTotals.refundedAmount || 0) / 100)} meta="Approved refunds in the selected range" />
         <StatCard label="Net Cash In Hand" value={formatCurrency((data.revenueTotals.cashInHand || 0) / 100)} meta="Collections retained in the selected range" />
