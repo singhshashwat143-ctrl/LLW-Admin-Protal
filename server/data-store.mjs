@@ -51,6 +51,7 @@ const productBatchMonths = [
   { key: "DEC", label: "Dec" },
 ];
 const productBatchMonthByKey = new Map(productBatchMonths.map((month) => [month.key, month]));
+const couponResetRevision = 1;
 
 function nowIso() {
   return new Date().toISOString();
@@ -305,6 +306,7 @@ function normalizeSettings(settings = {}) {
   return {
     ...settings,
     bdm_coupon_limit_inr: Number(settings.bdm_coupon_limit_inr ?? settings.bdmCouponLimitInr ?? 1000000),
+    coupon_reset_revision: Number(settings.coupon_reset_revision ?? settings.couponResetRevision ?? 0),
     aisensy_payment_link_campaign:
       settings.aisensy_payment_link_campaign
       || settings.aisensyPaymentLinkCampaign
@@ -786,6 +788,26 @@ function buildPersistentData(data) {
   };
 }
 
+function applyRuntimeDataMigrations(data) {
+  const next = buildPersistentData(structuredClone(data));
+  const currentRevision = Number(next.settings?.coupon_reset_revision || 0);
+  let changed = false;
+  let reason = "";
+
+  if (currentRevision < couponResetRevision) {
+    next.coupons = [];
+    next.settings = normalizeSettings({
+      ...next.settings,
+      coupon_reset_revision: couponResetRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = `coupon-reset-revision-${couponResetRevision}`;
+  }
+
+  return { data: next, changed, reason };
+}
+
 async function readDataFile() {
   ensureDataFile();
   try {
@@ -793,15 +815,23 @@ async function readDataFile() {
     const normalized = buildPersistentData(parsed);
     const loaded = await runtimePersistence.load(normalized);
     const hydrated = buildPersistentData(loaded);
-    writeFileSync(dataFile, JSON.stringify(hydrated, null, 2));
-    return hydrated;
+    const migrated = applyRuntimeDataMigrations(hydrated);
+    writeFileSync(dataFile, JSON.stringify(migrated.data, null, 2));
+    if (migrated.changed) {
+      await runtimePersistence.save(migrated.data, migrated.reason);
+    }
+    return migrated.data;
   } catch {
     const fallback = buildPersistentData(buildSeedData());
     writeFileSync(dataFile, JSON.stringify(fallback, null, 2));
     const loaded = await runtimePersistence.load(fallback);
     const hydrated = buildPersistentData(loaded);
-    writeFileSync(dataFile, JSON.stringify(hydrated, null, 2));
-    return hydrated;
+    const migrated = applyRuntimeDataMigrations(hydrated);
+    writeFileSync(dataFile, JSON.stringify(migrated.data, null, 2));
+    if (migrated.changed) {
+      await runtimePersistence.save(migrated.data, migrated.reason);
+    }
+    return migrated.data;
   }
 }
 
@@ -1273,6 +1303,7 @@ function buildExportRows(data) {
       phone: order?.student?.phone || "",
       product_id: order?.product?.id || "",
       product_name: order?.offer_title || order?.product?.name || "",
+      batch_month_key: order?.batch_month_key || "",
       batch_month_label: order?.batch_month_label || "",
       source_type: order?.source_type || "",
       source_label: order?.source_label || "",
@@ -1306,6 +1337,7 @@ function buildExportRows(data) {
     phone: order.student?.phone || "",
     product_id: order.product?.id || "",
     product_name: order.offer_title || order.product?.name || "",
+    batch_month_key: order.batch_month_key || "",
     batch_month_label: order.batch_month_label || "",
     source_type: order.source_type || "",
     source_label: order.source_label || "",
@@ -1334,6 +1366,7 @@ function buildExportRows(data) {
       phone: order.student?.phone || "",
       product_id: order.product?.id || "",
       product_name: order.offer_title || order.product?.name || "",
+      batch_month_key: order.batch_month_key || "",
       batch_month_label: order.batch_month_label || "",
       source_type: order.source_type || "",
       source_label: order.source_label || "",
@@ -1361,6 +1394,7 @@ function buildExportRows(data) {
       phone: refund.phone || order?.student?.phone || "",
       product_id: order?.product?.id || "",
       product_name: order?.offer_title || order?.product?.name || refund.course_name || "",
+      batch_month_key: order?.batch_month_key || "",
       batch_month_label: order?.batch_month_label || "",
       source_type: order?.source_type || "",
       source_label: order?.source_label || "",
@@ -1390,12 +1424,13 @@ function applyExportFilters(rows, filters) {
     const matchesBda = !filters.bdaId || row.bda_id === filters.bdaId;
     const matchesManager = !filters.managerName || row.manager_name === filters.managerName;
     const matchesProduct = !filters.productId || row.product_id === filters.productId;
+    const matchesBatch = !filters.batchKey || row.batch_month_key === filters.batchKey;
     const matchesSourceType = !filters.sourceType || filters.sourceType === "ALL" || row.source_type === filters.sourceType;
     const matchesMode = !filters.paymentMode || filters.paymentMode === "ALL" || row.payment_mode === filters.paymentMode;
     const matchesBucket = !filters.paymentBucket || filters.paymentBucket === "ALL" || row.payment_bucket === filters.paymentBucket;
     const matchesPaymentState = !filters.paymentState || filters.paymentState === "ALL" || row.payment_state === filters.paymentState;
     const matchesPaymentStatus = !filters.paymentStatus || filters.paymentStatus === "ALL" || row.payment_status === filters.paymentStatus;
-    return matchesDate && matchesDateFrom && matchesDateTo && matchesBda && matchesManager && matchesProduct && matchesSourceType && matchesMode && matchesBucket && matchesPaymentState && matchesPaymentStatus;
+    return matchesDate && matchesDateFrom && matchesDateTo && matchesBda && matchesManager && matchesProduct && matchesBatch && matchesSourceType && matchesMode && matchesBucket && matchesPaymentState && matchesPaymentStatus;
   });
 }
 

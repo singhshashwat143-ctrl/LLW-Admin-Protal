@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
+import { PRODUCT_BATCH_OPTIONS } from "../lib/batches";
 import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
@@ -200,6 +201,8 @@ export function PaymentsPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [modeFilter, setModeFilter] = useState("ALL");
   const [methodFilter, setMethodFilter] = useState("ALL");
+  const [productFilter, setProductFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [query, setQuery] = useState("");
@@ -242,6 +245,8 @@ export function PaymentsPage() {
       const matchesStatus = statusFilter === "ALL" || row.payment_state === statusFilter;
       const matchesMode = modeFilter === "ALL" || row.payment_mode === modeFilter;
       const matchesMethod = methodFilter === "ALL" || row.latest_payment_method === methodFilter;
+      const matchesProduct = !productFilter || row.product?.id === productFilter;
+      const matchesBatch = !batchFilter || row.batch_month_key === batchFilter;
       const matchesDateFrom = !dateFrom || (rowTime !== null && rowTime >= new Date(dateFrom).getTime());
       const matchesDateTo = !dateTo || (rowTime !== null && rowTime <= new Date(`${dateTo}T23:59:59.999`).getTime());
       const haystack = [row.student?.name, row.student?.phone, row.student?.email, getOfferTitle(row), row.batch_month_label, row.source_label, row.order_number, row.latest_transaction_id]
@@ -249,9 +254,9 @@ export function PaymentsPage() {
         .join(" ")
         .toLowerCase();
       const matchesQuery = !query || haystack.includes(query.toLowerCase());
-      return matchesSource && matchesStatus && matchesMode && matchesMethod && matchesDateFrom && matchesDateTo && matchesQuery;
+      return matchesSource && matchesStatus && matchesMode && matchesMethod && matchesProduct && matchesBatch && matchesDateFrom && matchesDateTo && matchesQuery;
     });
-  }, [dateFrom, dateTo, methodFilter, modeFilter, paymentsApi.data.payments, query, sourceFilter, statusFilter]);
+  }, [batchFilter, dateFrom, dateTo, methodFilter, modeFilter, paymentsApi.data.payments, productFilter, query, sourceFilter, statusFilter]);
 
   async function createPayment() {
     const fullAmount = netOrderValue;
@@ -576,7 +581,7 @@ export function PaymentsPage() {
         </SectionCard>
       ) : null}
 
-      <SectionCard title="Payments Board" subtitle="Filter by source, payment state, mode, method, and date inside your visible revenue scope.">
+      <SectionCard title="Payments Board" subtitle="Filter by product, batch, source, payment state, mode, method, and date inside your visible revenue scope.">
         <div className="payments-toolbar mb-4">
           <div className="payments-filters">
             <select className="input-dark min-w-[150px]" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
@@ -590,6 +595,16 @@ export function PaymentsPage() {
             </select>
             <select className="input-dark min-w-[170px]" value={methodFilter} onChange={(event) => setMethodFilter(event.target.value)}>
               {["ALL", "RAZORPAY", "BANK_TRANSFER", "CASH"].map((method) => <option key={method}>{method}</option>)}
+            </select>
+            <select className="input-dark min-w-[180px]" value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+              <option value="">All products</option>
+              {productsApi.data.products.map((product) => (
+                <option key={product.id} value={product.id}>{product.name}</option>
+              ))}
+            </select>
+            <select className="input-dark min-w-[150px]" value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)}>
+              <option value="">All batches</option>
+              {PRODUCT_BATCH_OPTIONS.map((batch) => <option key={batch.key} value={batch.key}>{batch.label}</option>)}
             </select>
             <input className="input-dark min-w-[150px]" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
             <input className="input-dark min-w-[150px]" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />

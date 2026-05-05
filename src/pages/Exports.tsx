@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "../components/UI";
+import { PRODUCT_BATCH_OPTIONS } from "../lib/batches";
 import { api, useApi } from "../lib/api";
 import { navigate } from "../lib/router";
 
@@ -37,6 +38,7 @@ export function ExportsPage() {
     bdaId: "",
     managerName: "",
     productId: "",
+    batchKey: "",
     paymentMode: "ALL",
     paymentBucket: "ALL",
     paymentState: "ALL",
@@ -55,6 +57,7 @@ export function ExportsPage() {
       "manager_name",
       "customer_name",
       "product_name",
+      "batch_month_label",
       "payment_mode",
       "payment_state",
       "payment_status",
@@ -107,7 +110,7 @@ export function ExportsPage() {
       <PageHeader
         eyebrow="Exports"
         title="Payment and collections exports"
-        description="Download class, webinar, BDA, manual, token, pending, completed, failed, and refunded payment data with date and source filters."
+        description="Download payment, enrollment, due, and refund data with product, batch, date, and source filters."
         actions={
           <>
             <button className="btn-secondary" type="button" onClick={() => navigate("/payments")}>Back to Payments</button>
@@ -122,7 +125,7 @@ export function ExportsPage() {
         </div>
       ) : null}
 
-      <SectionCard title="Export Filters" subtitle="Track class payments, BDA payments, payment date and time, full/token, pending, completed, failed, and refunded from one place.">
+      <SectionCard title="Export Filters" subtitle="Filter exports by product, batch, date, source, owner, and payment state before downloading.">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <select className="input-dark" value={filters.type} onChange={(event) => setFilters({ ...filters, type: event.target.value })}>
             <option value="payments">Payments</option>
@@ -168,6 +171,13 @@ export function ExportsPage() {
             <option value="">All products / classes</option>
             {productsApi.data.products.map((product) => (
               <option key={product.id} value={product.id}>{product.name}</option>
+            ))}
+          </select>
+
+          <select className="input-dark" value={filters.batchKey} onChange={(event) => setFilters({ ...filters, batchKey: event.target.value })}>
+            <option value="">All batches</option>
+            {PRODUCT_BATCH_OPTIONS.map((batch) => (
+              <option key={batch.key} value={batch.key}>{batch.label}</option>
             ))}
           </select>
 

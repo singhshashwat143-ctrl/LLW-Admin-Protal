@@ -1784,6 +1784,7 @@ app.get("/api/admin/export", (req, res) => {
     bdaId: String(req.query.bdaId || "") || undefined,
     managerName: String(req.query.managerName || "") || undefined,
     productId: String(req.query.productId || "") || undefined,
+    batchKey: String(req.query.batchKey || "") || undefined,
     sourceType: String(req.query.sourceType || "ALL"),
     paymentMode: String(req.query.paymentMode || "ALL"),
     paymentBucket: String(req.query.paymentBucket || "ALL"),

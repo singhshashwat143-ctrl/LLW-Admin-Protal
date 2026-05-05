@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Badge, PageHeader, SectionCard, StatCard } from "../components/UI";
+import { PRODUCT_BATCH_OPTIONS } from "../lib/batches";
 import { api, useApi } from "../lib/api";
 import { formatCurrency, formatDateTime } from "../lib/format";
 import { navigate } from "../lib/router";
@@ -24,6 +25,9 @@ type OperationRow = {
   status: string;
   bdm_name?: string;
   manager_name?: string;
+  batch_month_key?: string;
+  batch_month_label?: string;
+  batch_is_active?: boolean | null;
   payment_mode: string;
   product_value_inr: number;
   amount_paid_inr: number;
@@ -81,8 +85,22 @@ export function OperationsPage() {
   });
   const [query, setQuery] = useState("");
   const [checklistFilter, setChecklistFilter] = useState("ALL");
+  const [productFilter, setProductFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [notice, setNotice] = useState("");
   const [savingOpsId, setSavingOpsId] = useState("");
+
+  const productOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    operationsApi.data.operations.forEach((row) => {
+      if (row.product?.id && row.product?.name && !seen.has(row.product.id)) {
+        seen.set(row.product.id, row.product.name);
+      }
+    });
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name));
+  }, [operationsApi.data.operations]);
 
   const filteredRows = useMemo(() => {
     return operationsApi.data.operations.filter((row) => {
@@ -95,9 +113,21 @@ export function OperationsPage() {
         .join(" ")
         .toLowerCase();
       const matchesQuery = !query || haystack.includes(query.toLowerCase());
-      return matchesChecklist && matchesQuery;
+      const rowTime = row.created_at ? new Date(row.created_at).getTime() : null;
+      const matchesProduct = !productFilter || row.product?.id === productFilter;
+      const matchesBatch = !batchFilter || row.batch_month_key === batchFilter;
+      const matchesDateFrom = !dateFrom || (rowTime !== null && rowTime >= new Date(dateFrom).getTime());
+      const matchesDateTo = !dateTo || (rowTime !== null && rowTime <= new Date(`${dateTo}T23:59:59.999`).getTime());
+      return matchesChecklist && matchesProduct && matchesBatch && matchesDateFrom && matchesDateTo && matchesQuery;
     });
-  }, [checklistFilter, operationsApi.data.operations, query]);
+  }, [batchFilter, checklistFilter, dateFrom, dateTo, operationsApi.data.operations, productFilter, query]);
+
+  const filteredSummary = useMemo(() => ({
+    total: filteredRows.length,
+    pending: filteredRows.filter((row) => !row.operations_completed).length,
+    completed: filteredRows.filter((row) => row.operations_completed).length,
+    netCashInHand: filteredRows.reduce((sum, row) => sum + Number(row.net_cash_in_hand_inr || 0), 0),
+  }), [filteredRows]);
 
   async function toggleOperation(orderId: string, key: keyof OperationRow["operations"], value: boolean) {
     setSavingOpsId(orderId);
@@ -152,13 +182,13 @@ export function OperationsPage() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Ready For Ops" value={String(operationsApi.data.summary.total || 0)} meta="Successful token and full payments in the queue" />
-        <StatCard label="Pending Checklist" value={String(operationsApi.data.summary.pending || 0)} meta="Orders still awaiting fulfilment steps" />
-        <StatCard label="Completed" value={String(operationsApi.data.summary.completed || 0)} meta="Orders whose checklist is fully done" />
-        <StatCard label="Net Cash Covered" value={formatCurrency((operationsApi.data.summary.netCashInHand || 0) / 100)} meta="Retained cash across the operations queue" />
+        <StatCard label="Ready For Ops" value={String(filteredSummary.total || 0)} meta="Successful token and full payments in the current filter" />
+        <StatCard label="Pending Checklist" value={String(filteredSummary.pending || 0)} meta="Orders still awaiting fulfilment steps" />
+        <StatCard label="Completed" value={String(filteredSummary.completed || 0)} meta="Orders whose checklist is fully done" />
+        <StatCard label="Net Cash Covered" value={formatCurrency((filteredSummary.netCashInHand || 0) / 100)} meta="Retained cash across the filtered queue" />
       </div>
 
-      <SectionCard title="Operations Queue" subtitle="All successful token and full payments are shown here. Mark fulfilment steps as work gets done.">
+      <SectionCard title="Operations Queue" subtitle="All successful token and full payments are shown here. Use product, batch, and date filters to focus the queue.">
         <div className="payments-toolbar mb-4">
           <div className="payments-filters">
             <select className="input-dark min-w-[180px]" value={checklistFilter} onChange={(event) => setChecklistFilter(event.target.value)}>
@@ -166,6 +196,20 @@ export function OperationsPage() {
               <option value="PENDING">Pending checklist</option>
               <option value="COMPLETED">Completed checklist</option>
             </select>
+            <select className="input-dark min-w-[180px]" value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+              <option value="">All products</option>
+              {productOptions.map((product) => (
+                <option key={product.id} value={product.id}>{product.name}</option>
+              ))}
+            </select>
+            <select className="input-dark min-w-[150px]" value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)}>
+              <option value="">All batches</option>
+              {PRODUCT_BATCH_OPTIONS.map((batch) => (
+                <option key={batch.key} value={batch.key}>{batch.label}</option>
+              ))}
+            </select>
+            <input className="input-dark min-w-[150px]" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+            <input className="input-dark min-w-[150px]" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </div>
           <div className="payments-search">
             <input className="input-dark" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by customer, product, order, or transaction ID" />
@@ -204,6 +248,7 @@ export function OperationsPage() {
                   <td>
                     <div className="cell-stack">
                       <div>{row.product?.name || "-"}</div>
+                      {row.batch_month_label ? <div className="text-xs text-[var(--text-secondary)]">Batch {row.batch_month_label}{row.batch_is_active === false ? " • Non-operational" : " • Operational"}</div> : null}
                       <div className="text-xs text-[var(--text-secondary)]">{row.payment_mode} order</div>
                       <div className="text-xs text-[var(--text-secondary)]">Created {formatDateTime(row.created_at)}</div>
                     </div>

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Badge, PageHeader, SectionCard, StatCard } from "../components/UI";
+import { PRODUCT_BATCH_OPTIONS } from "../lib/batches";
 import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
@@ -32,6 +33,9 @@ type RefundRow = {
     coupon_code?: string;
     amount_paid_inr?: number;
     net_cash_in_hand_inr?: number;
+    product?: { id?: string; name?: string } | null;
+    batch_month_key?: string;
+    batch_month_label?: string;
   } | null;
 };
 
@@ -65,7 +69,20 @@ export function RefundsPage() {
   });
   const [tab, setTab] = useState("REQUESTED");
   const [search, setSearch] = useState("");
+  const [productFilter, setProductFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const canApproveRefunds = hasPermission(user, "approve_refunds");
+  const productOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    data.refunds.forEach((row) => {
+      if (row.order?.product?.id && row.order?.product?.name && !seen.has(row.order.product.id)) {
+        seen.set(row.order.product.id, row.order.product.name);
+      }
+    });
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name));
+  }, [data.refunds]);
 
   const refunds = useMemo(() => {
     return data.refunds.filter((row) => {
@@ -73,10 +90,20 @@ export function RefundsPage() {
         tab === "HISTORY"
           ? row.status !== "REQUESTED"
           : row.status === tab;
-      const matchesSearch = !search || row.phone.includes(search) || row.student_name.toLowerCase().includes(search.toLowerCase());
-      return matchesTab && matchesSearch;
+      const rowDate = row.approved_at || row.rejected_at || row.created_at;
+      const rowTime = rowDate ? new Date(rowDate).getTime() : null;
+      const matchesProduct = !productFilter || row.order?.product?.id === productFilter;
+      const matchesBatch = !batchFilter || row.order?.batch_month_key === batchFilter;
+      const matchesDateFrom = !dateFrom || (rowTime !== null && rowTime >= new Date(dateFrom).getTime());
+      const matchesDateTo = !dateTo || (rowTime !== null && rowTime <= new Date(`${dateTo}T23:59:59.999`).getTime());
+      const matchesSearch =
+        !search
+        || row.phone.includes(search)
+        || row.student_name.toLowerCase().includes(search.toLowerCase())
+        || row.course_name.toLowerCase().includes(search.toLowerCase());
+      return matchesTab && matchesProduct && matchesBatch && matchesDateFrom && matchesDateTo && matchesSearch;
     });
-  }, [data.refunds, search, tab]);
+  }, [batchFilter, data.refunds, dateFrom, dateTo, productFilter, search, tab]);
 
   async function updateDecision(id: string, decision: "APPROVED" | "REJECTED") {
     const response = await api<{ refund: RefundRow }>(`/api/refunds/${id}/decision`, {
@@ -121,23 +148,43 @@ export function RefundsPage() {
 
       <SectionCard title="Refunds">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-2">
-            {[
-              ["REQUESTED", "Requests"],
-              ["APPROVED", "Approved"],
-              ["HISTORY", "History"],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                className={tab === value ? "btn-primary" : "btn-secondary"}
-                type="button"
-                onClick={() => setTab(value)}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex flex-1 flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+              {[
+                ["REQUESTED", "Requests"],
+                ["APPROVED", "Approved"],
+                ["HISTORY", "History"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={tab === value ? "btn-primary" : "btn-secondary"}
+                  type="button"
+                  onClick={() => setTab(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="payments-toolbar">
+              <div className="payments-filters">
+                <select className="input-dark min-w-[180px]" value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+                  <option value="">All products</option>
+                  {productOptions.map((product) => (
+                    <option key={product.id} value={product.id}>{product.name}</option>
+                  ))}
+                </select>
+                <select className="input-dark min-w-[150px]" value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)}>
+                  <option value="">All batches</option>
+                  {PRODUCT_BATCH_OPTIONS.map((batch) => (
+                    <option key={batch.key} value={batch.key}>{batch.label}</option>
+                  ))}
+                </select>
+                <input className="input-dark min-w-[150px]" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+                <input className="input-dark min-w-[150px]" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+              </div>
+            </div>
           </div>
-          <input className="input-dark max-w-[360px]" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by phone number..." />
+          <input className="input-dark max-w-[360px]" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by phone, customer, or course..." />
         </div>
 
         <div className="table-shell">
@@ -169,7 +216,10 @@ export function RefundsPage() {
                     <div className="text-sm text-[var(--text-secondary)]">{row.phone}</div>
                   </td>
                   <td>{formatCurrency((row.amount_inr || 0) / 100)}</td>
-                  <td>{row.course_name}</td>
+                  <td>
+                    <div>{row.course_name}</div>
+                    {row.order?.batch_month_label ? <div className="text-xs text-[var(--text-secondary)]">Batch {row.order.batch_month_label}</div> : null}
+                  </td>
                   <td>
                     <div className="font-mono text-xs">{row.order_id || "-"}</div>
                     {row.order?.coupon_code ? <div className="text-xs text-[var(--text-secondary)]">Coupon {row.order.coupon_code}</div> : null}
@@ -210,6 +260,13 @@ export function RefundsPage() {
                   </td>
                 </tr>
               ))}
+              {!refunds.length ? (
+                <tr>
+                  <td colSpan={11} className="py-10 text-center text-sm text-[var(--text-secondary)]">
+                    No refunds matched the current product, batch, date, or search filters.
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

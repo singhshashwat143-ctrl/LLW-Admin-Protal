@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { PageHeader, SectionCard } from "../components/UI";
+import { PRODUCT_BATCH_OPTIONS } from "../lib/batches";
 import { useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
@@ -26,16 +27,20 @@ type TrackerResponse = {
       id: string;
       order_number: string;
       student?: { name?: string; phone?: string; email?: string } | null;
-      bda?: { name?: string } | null;
+      bda?: { id?: string; name?: string } | null;
       bdm_name?: string;
       manager_name?: string;
-      product?: { name?: string } | null;
+      product?: { id?: string; name?: string } | null;
+      batch_month_key?: string;
       batch_month_label?: string;
       source?: string;
       product_value_inr: number;
       amount_paid_inr: number;
       amount_due_inr: number;
+      refunded_amount_inr?: number;
+      net_cash_in_hand_inr?: number;
       status: string;
+      created_at: string;
       token_due?: { due_date?: string | null } | null;
       payment_history: Array<{
         id: string;
@@ -63,6 +68,11 @@ export function DailyTrackerPage() {
   const role = normalizeRole(user?.role);
   const canViewProgramOps = role === "ADMIN" || role === "SUPER_ADMIN" || role === "OPERATIONS";
   const isRevenueScopedRole = role === "BDA" || role === "BDM";
+  const [productFilter, setProductFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [query, setQuery] = useState("");
   const { data, refresh } = useApi<TrackerResponse>("/api/tracker?teacher=ALL", {
     rows: [],
     salesTracker: {
@@ -77,9 +87,44 @@ export function DailyTrackerPage() {
     },
   });
 
+  const productOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    data.salesTracker.enrollments.forEach((row) => {
+      if (row.product?.id && row.product?.name && !seen.has(row.product.id)) {
+        seen.set(row.product.id, row.product.name);
+      }
+    });
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name));
+  }, [data.salesTracker.enrollments]);
+  const filteredEnrollments = useMemo(() => {
+    return data.salesTracker.enrollments.filter((row) => {
+      const rowTime = row.created_at ? new Date(row.created_at).getTime() : null;
+      const matchesProduct = !productFilter || row.product?.id === productFilter;
+      const matchesBatch = !batchFilter || row.batch_month_key === batchFilter;
+      const matchesDateFrom = !dateFrom || (rowTime !== null && rowTime >= new Date(dateFrom).getTime());
+      const matchesDateTo = !dateTo || (rowTime !== null && rowTime <= new Date(`${dateTo}T23:59:59.999`).getTime());
+      const haystack = [
+        row.order_number,
+        row.student?.name,
+        row.student?.phone,
+        row.student?.email,
+        row.bda?.name,
+        row.bdm_name,
+        row.manager_name,
+        row.product?.name,
+        row.batch_month_label,
+        row.source,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const matchesQuery = !query || haystack.includes(query.toLowerCase());
+      return matchesProduct && matchesBatch && matchesDateFrom && matchesDateTo && matchesQuery;
+    });
+  }, [batchFilter, data.salesTracker.enrollments, dateFrom, dateTo, productFilter, query]);
   const dueRows = useMemo(
-    () => data.salesTracker.enrollments.filter((row) => row.amount_due_inr > 0),
-    [data.salesTracker.enrollments],
+    () => filteredEnrollments.filter((row) => row.amount_due_inr > 0),
+    [filteredEnrollments],
   );
   const todayStart = useMemo(() => {
     const date = new Date();
@@ -100,6 +145,34 @@ export function DailyTrackerPage() {
   );
   const dueTodayAmount = dueTodayRows.reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0);
   const overdueAmount = overdueRows.reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0);
+  const filteredThisMonthCollections = useMemo(() => {
+    const monthPrefix = new Date().toISOString().slice(0, 7);
+    return filteredEnrollments
+      .flatMap((row) => row.payment_history || [])
+      .filter((payment) => payment.status === "PAID" && String(payment.created_at || "").startsWith(monthPrefix))
+      .reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
+  }, [filteredEnrollments]);
+  const filteredLeaderboard = useMemo(() => {
+    const board = new Map<string, { id: string; name: string; totalRevenue: number; netRevenue: number; refundedAmount: number; recoveryPipeline: number }>();
+    filteredEnrollments.forEach((row) => {
+      const id = row.bda?.id || row.bda?.name || row.order_number;
+      const name = row.bda?.name || "Unassigned BDA";
+      const current = board.get(id) || {
+        id,
+        name,
+        totalRevenue: 0,
+        netRevenue: 0,
+        refundedAmount: 0,
+        recoveryPipeline: 0,
+      };
+      current.totalRevenue += Number(row.amount_paid_inr || 0);
+      current.netRevenue += Number((row.net_cash_in_hand_inr ?? row.amount_paid_inr) || 0);
+      current.refundedAmount += Number(row.refunded_amount_inr || 0);
+      current.recoveryPipeline += Number(row.amount_due_inr || 0);
+      board.set(id, current);
+    });
+    return [...board.values()].sort((left, right) => right.totalRevenue - left.totalRevenue || left.name.localeCompare(right.name));
+  }, [filteredEnrollments]);
   const oldestOverdue = overdueRows.reduce<string | null>((oldest, row) => {
     const value = row.token_due?.due_date || "";
     if (!value) return oldest;
@@ -143,10 +216,10 @@ export function DailyTrackerPage() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <TrackerMetric label="Outstanding Amount" value={formatCurrency((data.salesTracker.summary.outstandingAmount || 0) / 100)} meta="Total remaining collection" />
-        <TrackerMetric label="Due Today" value={String(data.salesTracker.summary.dueToday || 0)} meta="Promises landing today" />
-        <TrackerMetric label="Overdue" value={String(data.salesTracker.summary.overdue || 0)} meta="Promises past the due date" />
-        <TrackerMetric label="This Month" value={formatCurrency((data.salesTracker.summary.thisMonthCollections || 0) / 100)} meta="Collections in your visible scope" />
+        <TrackerMetric label="Outstanding Amount" value={formatCurrency((dueRows.reduce((sum, row) => sum + Number(row.amount_due_inr || 0), 0) || 0) / 100)} meta="Total remaining collection in the current filter" />
+        <TrackerMetric label="Due Today" value={String(dueTodayRows.length || 0)} meta="Promises landing today" />
+        <TrackerMetric label="Overdue" value={String(overdueRows.length || 0)} meta="Promises past the due date" />
+        <TrackerMetric label="This Month" value={formatCurrency((filteredThisMonthCollections || 0) / 100)} meta="Collections in your filtered scope" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[1.45fr_0.95fr]">
@@ -158,6 +231,27 @@ export function DailyTrackerPage() {
               ? "Only your team’s assigned enrollments and recoveries are visible here."
               : "Per-enrollment tracker for revenue teams with paid vs due, latest transaction ID, and next follow-up date."}
         >
+          <div className="payments-toolbar mb-4">
+            <div className="payments-filters">
+              <select className="input-dark min-w-[180px]" value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+                <option value="">All products</option>
+                {productOptions.map((product) => (
+                  <option key={product.id} value={product.id}>{product.name}</option>
+                ))}
+              </select>
+              <select className="input-dark min-w-[150px]" value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)}>
+                <option value="">All batches</option>
+                {PRODUCT_BATCH_OPTIONS.map((batch) => (
+                  <option key={batch.key} value={batch.key}>{batch.label}</option>
+                ))}
+              </select>
+              <input className="input-dark min-w-[150px]" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+              <input className="input-dark min-w-[150px]" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+            </div>
+            <div className="payments-search">
+              <input className="input-dark" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by customer, product, BDA, or order" />
+            </div>
+          </div>
           <div className="table-shell table-shell-scrollable admin-table-scroll">
             <table>
               <thead>
@@ -217,6 +311,13 @@ export function DailyTrackerPage() {
                     </td>
                   </tr>
                 ))}
+                {!dueRows.length ? (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-sm text-[var(--text-secondary)]">
+                      No enrollments with due amounts matched the current product, batch, date, or search filters.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -224,7 +325,7 @@ export function DailyTrackerPage() {
 
         <SectionCard title="Top BDA Snapshot" subtitle="Quick leaderboard pulled from the same OMS-style collections data.">
           <div className="space-y-3">
-            {data.salesTracker.leaderboard.slice(0, 5).map((entry, index) => (
+            {filteredLeaderboard.slice(0, 5).map((entry, index) => (
               <div key={entry.id} className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -239,6 +340,11 @@ export function DailyTrackerPage() {
                 </div>
               </div>
             ))}
+            {!filteredLeaderboard.length ? (
+              <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm text-[var(--text-secondary)]">
+                No BDA revenue rows matched the current product, batch, date, or search filters.
+              </div>
+            ) : null}
           </div>
         </SectionCard>
       </div>
