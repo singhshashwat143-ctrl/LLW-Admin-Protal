@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track } from "livekit-client";
+import { TrackSource as ProtoTrackSource } from "@livekit/protocol";
 import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
@@ -757,6 +758,38 @@ function PublicShell({ title, description, children }: { title: string; descript
   );
 }
 
+type LocalPublishPermissions = {
+  canPublishAudio: boolean;
+  canPublishVideo: boolean;
+  canShareScreen: boolean;
+};
+
+function samePublishPermissions(left: LocalPublishPermissions, right: LocalPublishPermissions) {
+  return (
+    left.canPublishAudio === right.canPublishAudio
+    && left.canPublishVideo === right.canPublishVideo
+    && left.canShareScreen === right.canShareScreen
+  );
+}
+
+function resolveLocalPublishPermissions(
+  room: LiveKitRoom | null,
+  fallback: LocalPublishPermissions,
+): LocalPublishPermissions {
+  const permissions = room?.localParticipant.permissions;
+  if (!permissions) return fallback;
+  const allowedSources = permissions.canPublishSources || [];
+  const allowsSource = (source: ProtoTrackSource) => (
+    Boolean(permissions.canPublish)
+    && (allowedSources.length === 0 || allowedSources.includes(source))
+  );
+  return {
+    canPublishAudio: allowsSource(ProtoTrackSource.MICROPHONE),
+    canPublishVideo: allowsSource(ProtoTrackSource.CAMERA),
+    canShareScreen: allowsSource(ProtoTrackSource.SCREEN_SHARE),
+  };
+}
+
 function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayload: { name: string; phone: string; email: string } | null) {
   const [session, setSession] = useState<Session | null>(null);
   const [webinar, setWebinar] = useState<Webinar | null>(null);
@@ -1097,7 +1130,11 @@ function useClassMedia({
   livekit: LiveKitJoinInfo | null;
   sendMediaState: (isMicOn: boolean, isCameraOn: boolean, isScreenSharing?: boolean) => void;
 }) {
-  const canPublish = canPublishAudio || canPublishVideo || canShareScreen;
+  const initialPublishPermissions = useMemo<LocalPublishPermissions>(() => ({
+    canPublishAudio,
+    canPublishVideo,
+    canShareScreen,
+  }), [canPublishAudio, canPublishVideo, canShareScreen]);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
@@ -1108,6 +1145,7 @@ function useClassMedia({
   const [isMicOn, setIsMicOn] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [publishPermissions, setPublishPermissions] = useState<LocalPublishPermissions>(initialPublishPermissions);
   const [mediaError, setMediaError] = useState("");
   const roomRef = useRef<LiveKitRoom | null>(null);
   const remoteTrackStateRef = useRef<Map<string, {
@@ -1122,10 +1160,25 @@ function useClassMedia({
   }, []);
 
   const buildLocalPreview = useCallback((room: LiveKitRoom | null) => {
-    if (!room || !canPublish) {
+    if (!room) {
       setLocalStream(null);
       setLocalCameraStream(null);
       setLocalScreenStream(null);
+      setIsMicOn(false);
+      setIsCameraOn(false);
+      setIsScreenSharing(false);
+      return;
+    }
+    const nextPublishPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
+    setPublishPermissions((current) => samePublishPermissions(current, nextPublishPermissions) ? current : nextPublishPermissions);
+    const canPublishAnything = nextPublishPermissions.canPublishAudio || nextPublishPermissions.canPublishVideo || nextPublishPermissions.canShareScreen;
+    if (!canPublishAnything) {
+      setLocalStream(null);
+      setLocalCameraStream(null);
+      setLocalScreenStream(null);
+      setIsMicOn(false);
+      setIsCameraOn(false);
+      setIsScreenSharing(false);
       return;
     }
     const stream = new MediaStream();
@@ -1145,7 +1198,11 @@ function useClassMedia({
     setIsMicOn(Boolean(audioTrack) && room.localParticipant.isMicrophoneEnabled);
     setIsCameraOn(Boolean(cameraTrack) && room.localParticipant.isCameraEnabled);
     setIsScreenSharing(Boolean(screenTrack) && room.localParticipant.isScreenShareEnabled);
-  }, [canPublish, getPublicationTrack]);
+  }, [getPublicationTrack, initialPublishPermissions]);
+
+  useEffect(() => {
+    setPublishPermissions(initialPublishPermissions);
+  }, [initialPublishPermissions]);
 
   const syncRemoteStream = useCallback((identity: string) => {
     const state = remoteTrackStateRef.current.get(identity);
@@ -1212,6 +1269,7 @@ function useClassMedia({
       setIsMicOn(false);
       setIsCameraOn(false);
       setIsScreenSharing(false);
+      setPublishPermissions(initialPublishPermissions);
       setMediaError("");
       return;
     }
@@ -1267,10 +1325,16 @@ function useClassMedia({
       setActiveSpeakerIds(speakers.map((participant) => participant.identity).filter(Boolean));
     };
 
+    const onParticipantPermissionsChanged = (_prevPermissions: unknown, participant: any) => {
+      if (participant.identity !== livekit.identity) return;
+      buildLocalPreview(room);
+    };
+
     room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
     room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
     room.on(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
+    room.on(RoomEvent.ParticipantPermissionsChanged, onParticipantPermissionsChanged);
     room.on(RoomEvent.LocalTrackPublished, () => buildLocalPreview(room));
     room.on(RoomEvent.LocalTrackUnpublished, () => buildLocalPreview(room));
 
@@ -1299,6 +1363,7 @@ function useClassMedia({
       room.off(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
       room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
+      room.off(RoomEvent.ParticipantPermissionsChanged, onParticipantPermissionsChanged);
       room.disconnect();
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
@@ -1312,9 +1377,10 @@ function useClassMedia({
       setIsMicOn(false);
       setIsCameraOn(false);
       setIsScreenSharing(false);
+      setPublishPermissions(initialPublishPermissions);
       setMediaError("");
     };
-  }, [buildLocalPreview, getPublicationTrack, joined, livekit, updateRemoteTrack]);
+  }, [buildLocalPreview, getPublicationTrack, initialPublishPermissions, joined, livekit, updateRemoteTrack]);
 
   useEffect(() => {
     sendMediaState(isMicOn, isCameraOn, isScreenSharing);
@@ -1323,7 +1389,12 @@ function useClassMedia({
   async function toggleMic() {
     const next = !isMicOn;
     const room = roomRef.current;
-    if (!room || !canPublishAudio) return;
+    if (!room) return false;
+    const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
+    if (next && !currentPermissions.canPublishAudio) {
+      setMediaError("The host has not enabled your microphone yet.");
+      return false;
+    }
     try {
       setMediaError("");
       const publication = await room.localParticipant.setMicrophoneEnabled(next);
@@ -1332,29 +1403,37 @@ function useClassMedia({
         setIsMicOn(false);
       }
       buildLocalPreview(room);
+      return true;
     } catch (error) {
       setMediaError(describeMediaError("microphone", error));
+      return false;
     }
   }
 
   async function toggleCamera() {
     const next = !isCameraOn;
     const room = roomRef.current;
-    if (!room || !canPublishVideo) return;
+    if (!room) return false;
+    const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
+    if (next && !currentPermissions.canPublishVideo) return false;
     try {
       setMediaError("");
       await room.localParticipant.setCameraEnabled(next);
       setIsCameraOn(next);
       buildLocalPreview(room);
+      return true;
     } catch (error) {
       setMediaError(describeMediaError("camera", error));
+      return false;
     }
   }
 
   async function toggleScreenShare() {
     const room = roomRef.current;
-    if (!room || !canShareScreen) return;
     const next = !isScreenSharing;
+    if (!room) return false;
+    const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
+    if (next && !currentPermissions.canShareScreen) return false;
     try {
       setMediaError("");
       const micWasOn = room.localParticipant.isMicrophoneEnabled;
@@ -1381,8 +1460,10 @@ function useClassMedia({
       }
       setIsScreenSharing(next);
       buildLocalPreview(room);
+      return true;
     } catch (error) {
       setMediaError(describeMediaError("screen share", error));
+      return false;
     }
   }
 
@@ -1394,13 +1475,16 @@ function useClassMedia({
     remoteCameraStreams,
     remoteScreenStreams,
     activeSpeakerIds,
+    canPublishAudio: publishPermissions.canPublishAudio,
+    canPublishVideo: publishPermissions.canPublishVideo,
+    canShareScreen: publishPermissions.canShareScreen,
     isMicOn,
     isCameraOn,
     isScreenSharing,
     toggleMic,
     toggleCamera,
     toggleScreenShare,
-    hasMediaAccess: canPublish ? Boolean(livekit?.token) : true,
+    hasMediaAccess: Boolean(livekit?.token),
     mediaError,
   };
 }
@@ -1572,7 +1656,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
   useEffect(() => {
     if (!connection.forceMuteSignal || !media.isMicOn) return;
-    media.toggleMic();
+    void media.toggleMic();
   }, [connection.forceMuteSignal, media]);
 
   const reconcileLivePaymentStatus = useCallback(async () => {
@@ -1855,16 +1939,32 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     }
   }
 
-  function handleAskToUnmute() {
-    if (!media.hasMediaAccess) {
-      setPaymentNotice("Allow microphone access first, then you can unmute.");
+  async function handleAttendeeMicToggle() {
+    if (!media.canPublishAudio && !media.isMicOn) {
+      setPaymentNotice(connection.unmutePrompt ? "Host approval is still syncing. Try again in a moment." : "Wait for the host to ask you to unmute.");
+      return;
+    }
+    const toggled = await media.toggleMic();
+    if (!toggled && !media.isMicOn) {
+      setPaymentNotice("Could not enable mic. Please check browser permissions.");
+    }
+  }
+
+  async function handleAskToUnmute() {
+    if (media.isMicOn) {
       connection.clearUnmutePrompt();
       return;
     }
-    if (!media.isMicOn) {
-      media.toggleMic();
+    const toggled = await media.toggleMic();
+    if (toggled) {
+      connection.clearUnmutePrompt();
+      return;
     }
-    connection.clearUnmutePrompt();
+    if (!media.canPublishAudio) {
+      setPaymentNotice("Host approval is still syncing. Try again in a moment.");
+      return;
+    }
+    setPaymentNotice("Could not enable mic. Please check browser permissions.");
   }
 
   function toggleEnrollVisibility() {
@@ -2034,11 +2134,14 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             <div className="gm-bar-attendee-bottom">
               <div className="gm-ctrl-group">
-                {connection.livekit?.canPublishAudio ? (
-                  <button className={`gm-btn ${media.isMicOn ? "" : "gm-btn-off"}`} type="button" onClick={media.toggleMic} title="Microphone">
-                    <ControlIcon name={media.isMicOn ? "mic" : "mic-off"} />
-                  </button>
-                ) : null}
+                <button
+                  className={`gm-btn ${media.isMicOn ? "" : "gm-btn-off"}`}
+                  type="button"
+                  onClick={handleAttendeeMicToggle}
+                  title={media.canPublishAudio || media.isMicOn ? "Microphone" : "Host must ask you to unmute first"}
+                >
+                  <ControlIcon name={media.isMicOn ? "mic" : "mic-off"} />
+                </button>
                 {enrollEnabled ? (
                   <button className={`gm-enroll-btn ${paymentComplete ? "gm-enroll-btn-done" : ""}`} type="button" onClick={launchEnrollNow} disabled={paymentLoading || paymentComplete}>
                     <ControlIcon name="offer" />
@@ -2436,7 +2539,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                         </button>
                       </>
                     ) : (
-                      <Badge tone="gold">View-only audio/video</Badge>
+                      <Badge tone="gold">{media.canPublishAudio ? "Mic enabled by host" : "Host-controlled mic"}</Badge>
                     )}
                   </div>
                 </div>

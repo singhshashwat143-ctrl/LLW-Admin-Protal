@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/webinar-server.mjs",
-    "db:bootstrap-runtime": "node server/bootstrap-runtime-store.mjs"
+    "db:bootstrap-runtime": "node server/bootstrap-runtime-store.mjs",
+    "db:install-runtime-views": "node server/install-runtime-views.mjs"
   },
   "dependencies": {
     "clsx": "2.1.1",

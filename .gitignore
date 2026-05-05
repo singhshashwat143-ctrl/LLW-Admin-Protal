@@ -14,3 +14,6 @@ pnpm-debug.log*
 .vercel/
 .idea/
 .vscode/
+
+# Runtime data store — keep local bootstrap data out of future commits once untracked.
+db/app-data.json

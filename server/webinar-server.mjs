@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
 import { OAuth2Client } from "google-auth-library";
 import { Server } from "socket.io";
-import { AccessToken } from "livekit-server-sdk";
+import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
 
@@ -38,6 +38,14 @@ const sessionSecret = process.env.SESSION_SECRET || "llw-demo-session-secret";
 const livekitUrl = process.env.LIVEKIT_URL || process.env.LIVEKIT_HOST_URL || "";
 const livekitApiKey = process.env.LIVEKIT_API_KEY || "";
 const livekitApiSecret = process.env.LIVEKIT_API_SECRET || "";
+const livekitControlUrl = livekitUrl.startsWith("wss://")
+  ? `https://${livekitUrl.slice("wss://".length)}`
+  : livekitUrl.startsWith("ws://")
+    ? `http://${livekitUrl.slice("ws://".length)}`
+    : livekitUrl;
+const roomService = livekitControlUrl && livekitApiKey && livekitApiSecret
+  ? new RoomServiceClient(livekitControlUrl, livekitApiKey, livekitApiSecret)
+  : null;
 const googleOauthClient = new OAuth2Client(googleClientId, googleClientSecret);
 const roomPresence = new Map();
 const roomChats = new Map();
@@ -499,6 +507,20 @@ async function createLiveKitToken({ roomName, identity, name, canPublish, canPub
     canSubscribe: true,
   });
   return token.toJwt();
+}
+
+async function updateParticipantPublishPermission(roomName, identity, canPublish, canPublishSources = []) {
+  if (!roomService) {
+    throw new Error("LiveKit room service is not configured.");
+  }
+  return roomService.updateParticipant(roomName, identity, {
+    permission: {
+      canSubscribe: true,
+      canPublish,
+      canPublishData: false,
+      canPublishSources,
+    },
+  });
 }
 
 function requireAdminPermission(req, res, message = "This action requires admin approval.") {
@@ -1478,14 +1500,15 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
       email: role === "HOST" ? String(currentUser?.email || "") : req.body?.email,
     });
     const hostCanPublish = role === "HOST";
-    const canPublishAudio = true;
+    const canPublishAudio = hostCanPublish;
     const canPublishVideo = hostCanPublish;
     const canShareScreen = hostCanPublish;
+    const canPublish = hostCanPublish;
     const livekitToken = await createLiveKitToken({
       roomName: req.params.roomName,
       identity: joined.attendance.id,
       name: joined.attendance.name,
-      canPublish: hostCanPublish || undefined,
+      canPublish,
       canPublishData: hostCanPublish,
       canPublishSources: hostCanPublish ? undefined : [TrackSource.MICROPHONE],
     });
@@ -2387,9 +2410,6 @@ io.on("connection", (socket) => {
   });
 
   socket.on("participant:media", (payload) => {
-    if (role !== "HOST") {
-      return;
-    }
     const participants = roomPresence.get(roomName) || [];
     const nextParticipants = participants.map((item) => {
       if (item.socketId !== socket.id) return item;
@@ -2430,34 +2450,56 @@ io.on("connection", (socket) => {
     if (role !== "HOST") return;
     const targetSocketId = String(payload?.targetSocketId || "");
     const targetSocket = io.sockets.sockets.get(targetSocketId);
+    const targetMeta = socketRoomMeta.get(targetSocketId) || {};
     if (!targetSocket || targetSocketId === socket.id) return;
-    targetSocket.emit("participant:unmute-request", {
-      fromName: name,
-      message: `${name} asked you to unmute.`,
-    });
-    addRoomMessage(roomName, {
-      role: "SYSTEM",
-      name: "Host Controls",
-      text: `${name} asked ${String(payload?.targetName || "an attendee")} to unmute.`,
-      target: "ALL",
-      messageType: "CHAT",
-    });
+    if (String(targetMeta.roomName || "") !== roomName || String(targetMeta.role || "").toUpperCase() !== "ATTENDEE") return;
+    updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), true, [TrackSource.MICROPHONE])
+      .then(() => {
+        targetSocket.emit("participant:unmute-request", {
+          fromName: name,
+          message: `${name} asked you to unmute.`,
+        });
+        addRoomMessage(roomName, {
+          role: "SYSTEM",
+          name: "Host Controls",
+          text: `${name} asked ${String(payload?.targetName || "an attendee")} to unmute.`,
+          target: "ALL",
+          messageType: "CHAT",
+        });
+      })
+      .catch((error) => {
+        socket.emit("room:toast", {
+          id: crypto.randomUUID(),
+          text: error instanceof Error ? error.message : "Could not enable attendee microphone.",
+        });
+      });
   });
 
   socket.on("participant:mute", (payload) => {
     if (role !== "HOST") return;
     const targetSocketId = String(payload?.targetSocketId || "");
     const targetSocket = io.sockets.sockets.get(targetSocketId);
+    const targetMeta = socketRoomMeta.get(targetSocketId) || {};
     if (!targetSocket || targetSocketId === socket.id) return;
-    targetSocket.emit("participant:muted", {
-      fromName: name,
-      message: `${name} muted your microphone.`,
-    });
-    const participants = roomPresence.get(roomName) || [];
-    roomPresence.set(roomName, participants.map((item) => (
-      item.socketId === targetSocketId ? { ...item, isMicOn: false } : item
-    )));
-    emitRoomSnapshot(roomName);
+    if (String(targetMeta.roomName || "") !== roomName || String(targetMeta.role || "").toUpperCase() !== "ATTENDEE") return;
+    updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), false, [])
+      .then(() => {
+        targetSocket.emit("participant:muted", {
+          fromName: name,
+          message: `${name} muted your microphone.`,
+        });
+        const participants = roomPresence.get(roomName) || [];
+        roomPresence.set(roomName, participants.map((item) => (
+          item.socketId === targetSocketId ? { ...item, isMicOn: false } : item
+        )));
+        emitRoomSnapshot(roomName);
+      })
+      .catch((error) => {
+        socket.emit("room:toast", {
+          id: crypto.randomUUID(),
+          text: error instanceof Error ? error.message : "Could not mute attendee microphone.",
+        });
+      });
   });
 
   socket.on("participant:remove", (payload) => {

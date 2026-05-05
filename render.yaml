@@ -27,3 +27,17 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
+      - key: DATABASE_SSL
+        value: true
+      - key: REQUIRE_DATABASE_PERSISTENCE
+        value: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: llw-admin-db
+          property: connectionString
+
+databases:
+  - name: llw-admin-db
+    plan: basic-256mb
+    databaseName: llw_admin
+    user: llw_admin
