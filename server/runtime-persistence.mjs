@@ -18,6 +18,143 @@ function clonePayload(payload) {
   return JSON.parse(JSON.stringify(payload));
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+const collectionIdentitySpecs = {
+  team: [["id"], ["email"]],
+  students: [["id"], ["email"], ["phone"]],
+  products: [["id"], ["slug"], ["name"]],
+  orders: [["id"], ["order_number"]],
+  payment_records: [["id"], ["transaction_id"], ["reference_code"], ["order_id", "amount_inr", "paid_at"], ["order_id", "amount_inr", "created_at"]],
+  due_promises: [["id"], ["order_id"]],
+  refunds: [["id"], ["order_id", "amount_inr", "created_at"]],
+  links: [["id"], ["slug"], ["short_url"]],
+  webinars: [["id"], ["slug"], ["livekit_room_name"]],
+  bootcamps: [["id"], ["slug"], ["title"]],
+  instructors: [["id"], ["slug"], ["name"]],
+  webinarSessions: [["id"], ["room_name"], ["webinar_id", "title", "start_time"]],
+  webinarAttendance: [["id"], ["session_id", "role", "email", "phone", "name", "join_time"]],
+  marketing_spend: [["id"]],
+};
+
+function normalizeIdentityPart(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim().toLowerCase();
+}
+
+function buildRecordIdentity(collectionName, record) {
+  if (!isPlainObject(record)) {
+    return JSON.stringify(record);
+  }
+
+  const specs = collectionIdentitySpecs[collectionName] || [["id"]];
+  for (const spec of specs) {
+    const parts = spec.map((field) => normalizeIdentityPart(record[field]));
+    if (parts.every(Boolean)) {
+      return `${collectionName}:${spec.join("+")}:${parts.join("|")}`;
+    }
+  }
+
+  return record.id ? `${collectionName}:id:${normalizeIdentityPart(record.id)}` : JSON.stringify(record);
+}
+
+function getRecordTimestamp(record) {
+  if (!isPlainObject(record)) return Number.NaN;
+  const candidateKeys = [
+    "updated_at",
+    "updatedAt",
+    "paid_at",
+    "paidAt",
+    "approved_at",
+    "approvedAt",
+    "join_time",
+    "joinTime",
+    "created_at",
+    "createdAt",
+  ];
+
+  for (const key of candidateKeys) {
+    const value = record[key];
+    if (!value) continue;
+    const timestamp = new Date(value).getTime();
+    if (Number.isFinite(timestamp)) {
+      return timestamp;
+    }
+  }
+
+  return Number.NaN;
+}
+
+function choosePreferredRecord(existingRecord, incomingRecord) {
+  const existingTimestamp = getRecordTimestamp(existingRecord);
+  const incomingTimestamp = getRecordTimestamp(incomingRecord);
+
+  if (Number.isFinite(existingTimestamp) && Number.isFinite(incomingTimestamp)) {
+    return incomingTimestamp > existingTimestamp ? incomingRecord : existingRecord;
+  }
+
+  if (Number.isFinite(incomingTimestamp) && !Number.isFinite(existingTimestamp)) {
+    return incomingRecord;
+  }
+
+  return existingRecord;
+}
+
+function mergeArrayCollection(collectionName, existingValue, incomingValue) {
+  const existing = Array.isArray(existingValue) ? existingValue : [];
+  const incoming = Array.isArray(incomingValue) ? incomingValue : [];
+  const merged = [];
+  const indexByIdentity = new Map();
+
+  const addRecord = (record) => {
+    const identity = buildRecordIdentity(collectionName, record);
+    const existingIndex = indexByIdentity.get(identity);
+    if (existingIndex === undefined) {
+      indexByIdentity.set(identity, merged.length);
+      merged.push(record);
+      return;
+    }
+
+    merged[existingIndex] = choosePreferredRecord(merged[existingIndex], record);
+  };
+
+  existing.forEach(addRecord);
+  incoming.forEach(addRecord);
+
+  return merged;
+}
+
+function mergeSnapshots(existingPayload, incomingPayload) {
+  const existing = isPlainObject(existingPayload) ? existingPayload : {};
+  const incoming = isPlainObject(incomingPayload) ? incomingPayload : {};
+  const merged = { ...existing };
+
+  for (const [key, incomingValue] of Object.entries(incoming)) {
+    const existingValue = merged[key];
+
+    if (Array.isArray(existingValue) || Array.isArray(incomingValue)) {
+      merged[key] = mergeArrayCollection(key, existingValue, incomingValue);
+      continue;
+    }
+
+    if (isPlainObject(existingValue) && isPlainObject(incomingValue)) {
+      merged[key] = {
+        ...existingValue,
+        ...incomingValue,
+      };
+      continue;
+    }
+
+    if (existingValue === undefined) {
+      merged[key] = incomingValue;
+    }
+  }
+
+  return merged;
+}
+
 function createDisabledPersistence() {
   return {
     enabled: false,
@@ -45,6 +182,9 @@ function createDisabledPersistence() {
 
 export async function createRuntimePersistence() {
   if (!databaseUrl) {
+    if (requireDatabasePersistence) {
+      throw new Error("REQUIRE_DATABASE_PERSISTENCE is enabled, but DATABASE_URL is not configured.");
+    }
     return createDisabledPersistence();
   }
 
@@ -123,7 +263,14 @@ export async function createRuntimePersistence() {
     revision = Number(row.revision || 0);
     updatedAt = row.updated_at || null;
     lastError = null;
-    return row.payload;
+    const mergedPayload = mergeSnapshots(row.payload, fallbackData);
+    const mergedChecksum = buildChecksum(JSON.stringify(mergedPayload));
+
+    if (mergedChecksum !== lastChecksum) {
+      await persistNow(clonePayload(mergedPayload), "merge-json-fallback");
+    }
+
+    return mergedPayload;
   }
 
   function save(snapshot, reason = "persist") {
