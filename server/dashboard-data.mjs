@@ -56,6 +56,7 @@ const team = [
   { id: "10000000-0000-0000-0000-000000000001", name: "Shashwat Singh", email: "shashwat@livelongwealth.com", role: "SUPER_ADMIN", is_active: true, password: "$2b$10$demo.hash.value" },
   { id: "10000000-0000-0000-0000-000000000002", name: "Nisha Rao", email: "nisha@livelongwealth.com", role: "ADMIN", is_active: true, password: "$2b$10$demo.hash.value" },
   { id: "10000000-0000-0000-0000-000000000003", name: "Rahul Bhat", email: "rahul@livelongwealth.com", role: "BDA", is_active: true, password: "$2b$10$demo.hash.value" },
+  { id: "7f3e29b8-8e31-4f3e-bcc8-3d5c1f6b2d10", name: "Dhanush", email: "dhanush@livelongwealth.com", role: "ADMIN", is_active: true, password: "google-oauth" },
 ];
 
 const students = [

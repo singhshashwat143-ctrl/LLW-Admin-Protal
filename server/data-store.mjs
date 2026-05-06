@@ -31,6 +31,7 @@ const requiredTeamMembers = [
   { name: "Bilu", email: "bilu@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
   { name: "Bibin", email: "bibin@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Abhinav", email: "abhinav@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
+  { name: "Dhanush", email: "dhanush@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Vaisakh V S", email: "vaisakh.vs@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Drisya", email: "drisya@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Sravani", email: "sravani@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },

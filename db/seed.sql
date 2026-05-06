@@ -1,7 +1,8 @@
 INSERT INTO admin_users (id, name, email, password, role, is_active) VALUES
   ('10000000-0000-0000-0000-000000000001', 'Shashwat Singh', 'shashwat@livelongwealth.com', '$2b$10$demo.hash.value', 'SUPER_ADMIN', TRUE),
   ('10000000-0000-0000-0000-000000000002', 'Nisha Rao', 'nisha@livelongwealth.com', '$2b$10$demo.hash.value', 'ADMIN', TRUE),
-  ('10000000-0000-0000-0000-000000000003', 'Rahul Bhat', 'rahul@livelongwealth.com', '$2b$10$demo.hash.value', 'BDA', TRUE);
+  ('10000000-0000-0000-0000-000000000003', 'Rahul Bhat', 'rahul@livelongwealth.com', '$2b$10$demo.hash.value', 'BDA', TRUE),
+  ('7f3e29b8-8e31-4f3e-bcc8-3d5c1f6b2d10', 'Dhanush', 'dhanush@livelongwealth.com', 'google-oauth', 'ADMIN', TRUE);
 
 INSERT INTO instructors (id, name, slug, market_type, languages, short_bio, experience_years, speciality, is_active, display_order) VALUES
   ('20000000-0000-0000-0000-000000000001', 'Bibin', 'bibin', 'INDIAN', ARRAY['MALAYALAM', 'HINDI'], 'Indian market mentor with strong classroom engagement.', 8, 'Indian market', TRUE, 1),
