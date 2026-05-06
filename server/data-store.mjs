@@ -1522,7 +1522,10 @@ function isCouponVisibleForActor(data, coupon = {}, actor = {}) {
   }
 
   if (actorRole === "BDA") {
-    return ownerRole === "BDM" && owner?.name === actorMember?.manager_name;
+    return (
+      ["ADMIN", "SUPER_ADMIN"].includes(ownerRole)
+      || (ownerRole === "BDM" && owner?.name === actorMember?.manager_name)
+    );
   }
 
   return false;
