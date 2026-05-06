@@ -15,7 +15,7 @@ The app is built as:
 
 - Frontend: React 19 + Vite + TypeScript.
 - Backend: Node.js + Express + Socket.IO.
-- Persistence: local JSON file at `db/app-data.json`.
+- Persistence: local JSON file at `DATA_FILE` with default path `data/app-data.json`.
 - Integrations: Google Sign-In, Razorpay, PyMD, and AiSensy.
 
 Important: this is not a static website deployment. The Node server is mandatory.
@@ -28,9 +28,9 @@ Please read these first before deploying:
 - Use one public HTTPS domain for everything if possible.
 - Do not deploy frontend and backend separately unless you also change the code.
 - The live room currently uses Socket.IO plus browser WebRTC, not a managed LiveKit media pipeline.
-- The active persistence layer is `db/app-data.json`, not PostgreSQL.
+- The active persistence layer is the JSON file at `DATA_FILE`, not PostgreSQL.
 - Run only one app instance. Do not horizontally scale this app in its current form.
-- The Node process must have read and write access to `db/app-data.json`.
+- The Node process must have read and write access to `DATA_FILE`.
 - Reverse proxy must support WebSocket upgrades on `/socket.io/`.
 - HTTPS is mandatory in production because Google Sign-In and Razorpay checkout are involved.
 
@@ -47,7 +47,7 @@ This file:
 - starts Socket.IO on the same HTTP server
 - exposes `/api/*` endpoints
 - serves the built frontend from `dist/`
-- persists changes back into `db/app-data.json`
+- persists changes back into `DATA_FILE`
 
 ### Frontend entrypoint
 
@@ -59,9 +59,10 @@ The frontend is a SPA. The backend serves `dist/index.html` for non-API routes.
 ### Data store
 
 - `server/data-store.mjs`
-- `db/app-data.json`
+- `server/data-store.mjs`
+- `db/app-data.seed.json`
 
-This app reads the JSON file at startup, keeps it in memory, and writes it back on changes.
+This app reads the JSON file at startup, keeps it in memory, and writes it back on changes. By default it uses `data/app-data.json`, but production should override that with `DATA_FILE`.
 
 ### Public routes
 
@@ -108,7 +109,7 @@ Important note: the codebase still uses names like `livekit_room_name`, and the 
 
 The app writes runtime data into:
 
-- `db/app-data.json`
+- `DATA_FILE`
 
 This includes items such as:
 
@@ -124,10 +125,10 @@ This includes items such as:
 
 ### Operational implications
 
-- The disk holding `db/app-data.json` must be persistent.
+- The disk holding `DATA_FILE` must be persistent.
 - The file must survive redeploys and restarts.
-- If using Docker, mount a persistent volume for the `db/` directory.
-- Back up `db/app-data.json` regularly.
+- If using Docker, mount a persistent volume for the directory that contains `DATA_FILE`.
+- Set `DATA_BACKUP_DIR` to persistent storage and back it up regularly.
 
 ### Very important clarification
 
@@ -140,7 +141,7 @@ The repository contains:
 
 But the current Node server does not connect to PostgreSQL. Those files are not the active production storage path right now.
 
-If you provision Postgres only and ignore `db/app-data.json`, the running app will still use the JSON file.
+If you provision Postgres only and ignore `DATA_FILE`, the running app will still use the JSON file.
 
 ## 5. Access Model and Roles
 
@@ -171,7 +172,7 @@ Google login is not open to every Google account. The user must already exist in
 
 Approved users are resolved from:
 
-- `store.data.team` inside `db/app-data.json`
+- `store.data.team` inside the JSON store pointed to by `DATA_FILE`
 
 Also note:
 
@@ -180,7 +181,7 @@ Also note:
 
 This means:
 
-- adding a user can be done by updating `db/app-data.json` and restarting
+- adding a user can be done by updating the JSON file pointed to by `DATA_FILE` and restarting
 - removing a user who exists in `requiredTeamMembers` requires a code change and redeploy, not just a JSON edit
 
 ### Write behavior on login
@@ -192,7 +193,7 @@ When a user logs in with Google, the app updates:
 - auth provider
 - updated timestamp
 
-That login event writes back into `db/app-data.json`, so write access is required even for authentication.
+That login event writes back into `DATA_FILE`, so write access is required even for authentication.
 
 ## 6. Domain, DNS, and TLS
 
@@ -356,13 +357,13 @@ This is not domain-only access. It is explicit-email access.
 
 To add a user:
 
-1. add the user into `db/app-data.json` under the team collection with the correct role
+1. add the user into the JSON store pointed to by `DATA_FILE` under the team collection with the correct role
 2. restart the Node service
 3. ask the user to sign in with that exact Google email
 
 To remove a normal JSON-only user:
 
-1. mark the user inactive or remove them from `db/app-data.json`
+1. mark the user inactive or remove them from the JSON store pointed to by `DATA_FILE`
 2. restart the service
 
 To remove a user that is auto-added by `requiredTeamMembers` in `server/data-store.mjs`:
@@ -495,7 +496,7 @@ Recommended production layout:
 - `Nginx` on ports `80/443`
 - reverse proxy to Node on `127.0.0.1:4000`
 - one Node app process
-- persistent app directory or mounted volume for `db/app-data.json`
+- persistent app directory or mounted volume for `DATA_FILE`
 
 Do not:
 
@@ -519,7 +520,7 @@ The repo Dockerfile also uses Node 22.
 3. Fill secrets securely.
 4. Run `npm ci`.
 5. Run `npm run build`.
-6. Make sure `db/app-data.json` exists and is writable by the app user.
+6. Create a persistent data home such as `/var/lib/llw`, then make sure `DATA_FILE` and `DATA_BACKUP_DIR` there are writable by the app user.
 7. Start the app with `node server/webinar-server.mjs`.
 8. Put Nginx in front of it.
 9. Install TLS.
@@ -538,6 +539,8 @@ User=www-data
 Group=www-data
 WorkingDirectory=/var/www/llw_webinare
 EnvironmentFile=/var/www/llw_webinare/.env
+Environment=DATA_FILE=/var/lib/llw/app-data.json
+Environment=DATA_BACKUP_DIR=/var/lib/llw/backups
 ExecStart=/usr/bin/node /var/www/llw_webinare/server/webinar-server.mjs
 Restart=always
 RestartSec=5
@@ -548,6 +551,8 @@ WantedBy=multi-user.target
 
 After creating the service:
 
+- `sudo mkdir -p /var/lib/llw/backups`
+- `sudo chown -R www-data:www-data /var/lib/llw`
 - `sudo systemctl daemon-reload`
 - `sudo systemctl enable llw-webinar`
 - `sudo systemctl start llw-webinar`
@@ -603,11 +608,12 @@ Notes:
 
 ## 17. Docker Notes
 
-The repository Dockerfile builds and runs the app, but you still need persistent storage for `db/app-data.json`.
+The repository Dockerfile builds and runs the app, but you still need persistent storage for `DATA_FILE` and `DATA_BACKUP_DIR`.
 
 Example approach:
 
-- mount the project `db/` directory or a dedicated volume into the container
+- mount a dedicated persistent volume for the directory that contains `DATA_FILE`
+- mount or reuse persistent storage for `DATA_BACKUP_DIR`
 - provide `.env` or environment variables securely
 - publish the chosen internal port
 
@@ -621,12 +627,14 @@ Important:
 At minimum back up:
 
 - `.env`
-- `db/app-data.json`
+- the live JSON file at `DATA_FILE`
+- the rolling backup at `DATA_BACKUP_DIR/app-data.last.json`
 
 Recommended:
 
-- snapshot `db/app-data.json` before each deploy
+- snapshot `DATA_FILE` before each deploy
 - keep daily rolling backups
+- sync nightly copies from `DATA_BACKUP_DIR` to external storage such as S3, Backblaze, or Drive
 - verify restore by starting a staging copy with a restored JSON file
 
 Because the app writes constantly to the JSON store, this file is the main business continuity artifact.
@@ -650,7 +658,8 @@ After deployment, verify all of the following:
 - create a PyMD short link if that integration is enabled
 - send an AiSensy message if that integration is enabled
 - restart the service and confirm previous data is still present
-- confirm `db/app-data.json` keeps updating after writes
+- confirm `DATA_FILE` keeps updating after writes
+- confirm `DATA_BACKUP_DIR/app-data.last.json` is refreshed after writes
 
 ## 20. Known Risks and Hardening Notes
 
@@ -668,7 +677,7 @@ These are important for whoever is hosting this:
 
 - `server/webinar-server.mjs`
 - `server/data-store.mjs`
-- `db/app-data.json`
+- the live JSON file pointed to by `DATA_FILE`
 - `src/lib/auth.tsx`
 - `src/components/LoginGate.tsx`
 - `src/pages/Live.tsx`
@@ -684,7 +693,7 @@ If you only remember ten things, remember these:
 2. Use one HTTPS domain for everything.
 3. Proxy `/socket.io/` with WebSocket upgrade support.
 4. Keep `PUBLIC_APP_URL` correct.
-5. Keep `db/app-data.json` writable and persistent.
+5. Keep `DATA_FILE` and `DATA_BACKUP_DIR` writable and persistent.
 6. Run only one instance of the app.
 7. Google login is email-allowlist based, not open OAuth.
 8. Razorpay is required for real payment flows.
