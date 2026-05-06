@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDashboardStore as createSeedStore, constants } from "./dashboard-data.mjs";
@@ -6,7 +6,9 @@ import { createRuntimePersistence } from "./runtime-persistence.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const dataFile = join(__dirname, "..", "db", "app-data.json");
+const dataFile = process.env.DATA_FILE || join(__dirname, "..", "data", "app-data.json");
+const seedDataFile = join(__dirname, "..", "db", "app-data.seed.json");
+const backupDir = process.env.DATA_BACKUP_DIR || join(dirname(dataFile), "backups");
 const runtimePersistence = await createRuntimePersistence();
 const requiredTeamMembers = [
   { name: "Punith Raj S N", email: "punith@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Punith Raj S N Team" },
@@ -31,6 +33,7 @@ const requiredTeamMembers = [
   { name: "Bilu", email: "bilu@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
   { name: "Bibin", email: "bibin@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Abhinav", email: "abhinav@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
+  { name: "Dhanush", email: "dhanush@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Vaisakh V S", email: "vaisakh.vs@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Drisya", email: "drisya@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Sravani", email: "sravani@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
@@ -55,6 +58,14 @@ const couponResetRevision = 1;
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function coerceIsoTimestamp(value, fallback = nowIso()) {
+  if (!value) return fallback;
+  const raw = String(value).trim();
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00.000Z` : raw;
+  const timestamp = new Date(normalized).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
 
 function slugify(value) {
@@ -116,6 +127,17 @@ function normalizeSourceType(value = "MANUAL") {
   const normalized = String(value || "MANUAL").toUpperCase();
   if (["WEBINAR", "BOOTCAMP", "BDA", "MANUAL"].includes(normalized)) return normalized;
   return "MANUAL";
+}
+
+function normalizePreferredLanguage(value = "English") {
+  const normalized = String(value || "English").trim().toUpperCase();
+  if (normalized === "HINDI") return "Hindi";
+  if (normalized === "MALAYALAM") return "Malayalam";
+  return "English";
+}
+
+function normalizeLearningSchedule(value = "WEEKDAY") {
+  return String(value || "WEEKDAY").trim().toUpperCase() === "WEEKEND" ? "WEEKEND" : "WEEKDAY";
 }
 
 function normalizeCouponType(value = "FLAT") {
@@ -249,7 +271,23 @@ function ensureDataFile() {
   }
 
   mkdirSync(dirname(dataFile), { recursive: true });
+  if (existsSync(seedDataFile)) {
+    writeFileSync(dataFile, readFileSync(seedDataFile, "utf8"));
+    return;
+  }
+
   writeFileSync(dataFile, JSON.stringify(buildPersistentData(buildSeedData()), null, 2));
+}
+
+function snapshotDataFile() {
+  try {
+    mkdirSync(backupDir, { recursive: true });
+    copyFileSync(dataFile, join(backupDir, "app-data.last.json"));
+    const day = new Date().toISOString().slice(0, 10);
+    copyFileSync(dataFile, join(backupDir, `app-data.${day}.json`));
+  } catch (error) {
+    console.error("backup failed", error);
+  }
 }
 
 function buildSeedData() {
@@ -1185,6 +1223,9 @@ function withComputedPayment(order, data) {
     readable_method: payment.method.replaceAll("_", " "),
   }));
   const latestPayment = paymentHistory[0] ?? null;
+  const latestSuccessfulPayment = paymentHistory
+    .filter((payment) => isPaidStatus(payment.status))
+    .sort((left, right) => new Date(right.paid_at || right.created_at).getTime() - new Date(left.paid_at || left.created_at).getTime())[0] ?? null;
   const openPayment = paymentHistory.find((payment) => payment.status === "CREATED") ?? latestPayment;
   const productValue = getProductValue(order, data);
   const grossAmountPaid = getAmountPaid(order, data);
@@ -1237,6 +1278,7 @@ function withComputedPayment(order, data) {
     latest_transaction_id: latestPayment?.transaction_id || "",
     latest_payment_method: latestPayment?.method || "RAZORPAY",
     latest_payment_status: latestPayment?.status || "CREATED",
+    latest_successful_payment_at: latestSuccessfulPayment?.paid_at || latestSuccessfulPayment?.created_at || null,
     payment_link: latestPayment?.payment_link || order.payment_link || "",
     current_link_valid_until: openPayment?.valid_until || null,
     collect_customer_details_on_checkout: Boolean(order.collect_customer_details_on_checkout),
@@ -1571,6 +1613,7 @@ export async function createDashboardStore() {
       const snapshot = buildPersistentData(structuredClone(store.data));
       writeFileSync(dataFile, JSON.stringify(snapshot, null, 2));
       store.pendingPersist = runtimePersistence.save(snapshot, reason);
+      snapshotDataFile();
       return store.pendingPersist;
     },
     save() {
@@ -2032,6 +2075,8 @@ export async function createDashboardStore() {
       let student =
         store.data.students.find((item) => item.phone === normalizedPhone || (normalizedEmail && item.email?.toLowerCase() === normalizedEmail)) ??
         null;
+      const preferredLanguage = normalizePreferredLanguage(input.preferred_language || input.language || "English");
+      const createdAt = coerceIsoTimestamp(input.created_at, nowIso());
 
       if (!student) {
         student = {
@@ -2042,11 +2087,12 @@ export async function createDashboardStore() {
           city: "",
           state: "",
           product_ids: [],
-          enrolled_at: nowIso(),
+          preferred_language: preferredLanguage,
+          enrolled_at: createdAt,
           source: input.source || "Webinar Join",
           bda_id: input.bda_id || store.data.team.find((member) => member.role === "BDA")?.id || store.data.team[0]?.id || null,
           is_active: true,
-          created_at: nowIso(),
+          created_at: createdAt,
         };
         store.data.students.unshift(student);
       } else {
@@ -2054,6 +2100,7 @@ export async function createDashboardStore() {
         student.email = normalizedEmail || student.email;
         student.source = input.source || student.source;
         student.bda_id = input.bda_id || student.bda_id;
+        student.preferred_language = preferredLanguage || student.preferred_language || "English";
       }
 
       return student;
@@ -2438,7 +2485,8 @@ export async function createDashboardStore() {
             ? "TOKEN_1"
             : "FULL";
       const status = input.status ? normalizePaymentStatus(input.status) : isManualMethod(method) ? "PAID" : "CREATED";
-      const createdAt = nowIso();
+      const createdAt = coerceIsoTimestamp(input.created_at, nowIso());
+      const paidAt = input.paid_at ? coerceIsoTimestamp(input.paid_at, createdAt) : null;
       const payment = {
         id: crypto.randomUUID(),
         order_id: order.id,
@@ -2453,17 +2501,17 @@ export async function createDashboardStore() {
         razorpay_order_id: "",
         razorpay_payment_id: "",
         razorpay_signature: "",
-        payment_link: method === "RAZORPAY" ? `/payment/${input.payment_id || ""}` : "",
+        payment_link: method === "RAZORPAY" && status !== "PAID" ? `/payment/${input.payment_id || ""}` : "",
         slug: "",
         reference_code: input.reference_code || "",
         proof_url: input.proof_url || "",
         valid_until: order.promise_date ? toEndOfDayIso(order.promise_date) : null,
         created_at: createdAt,
         updated_at: createdAt,
-        paid_at: status === "PAID" ? createdAt : null,
+        paid_at: status === "PAID" ? paidAt || createdAt : null,
       };
 
-      payment.payment_link = method === "RAZORPAY" ? `/payment/${payment.id}` : "";
+      payment.payment_link = method === "RAZORPAY" && status !== "PAID" ? `/payment/${payment.id}` : "";
       store.data.payment_records.unshift(payment);
       return payment;
     },
@@ -2533,17 +2581,23 @@ export async function createDashboardStore() {
       const webinar = input.webinar_id ? store.data.webinars.find((item) => item.id === input.webinar_id) ?? null : null;
       const bootcamp = input.bootcamp_id ? store.data.bootcamps.find((item) => item.id === input.bootcamp_id) ?? null : null;
       const collectCustomerDetailsOnCheckout = Boolean(input.collect_customer_details_on_checkout);
+      const isAdminOverrideAllowed = ["ADMIN", "SUPER_ADMIN"].includes(actorRole);
       const managerName =
         bda?.manager_name
         || (actorRole === "BDM" ? actorTeamMember?.name || actor.name || "" : "")
         || (actorRole === "BDA" ? actorTeamMember?.manager_name || "" : "");
       const teamName = bda?.team_name || actorTeamMember?.team_name || "";
+      const createdAt = coerceIsoTimestamp(input.created_at, nowIso());
+      const preferredLanguage = normalizePreferredLanguage(input.preferred_language || input.language || "English");
+      const learningSchedule = normalizeLearningSchedule(input.learning_schedule || input.schedule_preference || input.schedule_type || "WEEKDAY");
       const student = store.upsertStudent({
         name: collectCustomerDetailsOnCheckout ? "Customer completes at checkout" : input.student_name || input.customer_name || input.name || "Payment Link Student",
         phone: collectCustomerDetailsOnCheckout ? "" : input.phone || input.customer_phone || "",
         email: collectCustomerDetailsOnCheckout ? "" : input.email || input.customer_email || "",
         source: input.source || input.campaign_source || webinar?.title || bootcamp?.title || "Manual Entry",
         bda_id: bda?.id || null,
+        preferred_language: preferredLanguage,
+        created_at: createdAt,
       });
       const product = input.product_id ? store.data.products.find((item) => item.id === input.product_id) ?? null : null;
       if (!product && !webinar && !bootcamp) {
@@ -2551,7 +2605,6 @@ export async function createDashboardStore() {
       }
       const originalProductValue = Number(
         input.original_product_value_inr
-        || input.product_value_inr
         || product?.discounted_price
         || webinar?.price_inr
         || bootcamp?.discounted_price
@@ -2570,8 +2623,13 @@ export async function createDashboardStore() {
           throw new Error("The selected batch is not operational for this product.");
         }
       }
-      const discountInr = coupon ? calculateCouponDiscount(coupon, originalProductValue) : 0;
-      const productValue = Math.max(originalProductValue - discountInr, 0);
+      const defaultSoldValue = Math.max(originalProductValue - (coupon ? calculateCouponDiscount(coupon, originalProductValue) : 0), 0);
+      const explicitSoldValue = Number(input.product_value_inr ?? input.sale_price_inr ?? 0);
+      if (explicitSoldValue > 0 && !isAdminOverrideAllowed && explicitSoldValue !== defaultSoldValue) {
+        throw new Error("Only admin and super-admin users can override the sold price.");
+      }
+      const productValue = explicitSoldValue > 0 ? explicitSoldValue : defaultSoldValue;
+      const discountInr = Math.max(originalProductValue - productValue, 0);
       if (productValue <= 0) {
         throw new Error("Coupon discount cannot reduce order value to zero");
       }
@@ -2629,8 +2687,10 @@ export async function createDashboardStore() {
         welcome_kit_sent: false,
         access_revocation_requested: false,
         access_revoked: false,
-        created_at: nowIso(),
-        updated_at: nowIso(),
+        preferred_language: preferredLanguage,
+        learning_schedule: learningSchedule,
+        created_at: createdAt,
+        updated_at: createdAt,
       };
 
       store.data.orders.unshift(order);
@@ -2644,9 +2704,11 @@ export async function createDashboardStore() {
         amount_inr: firstCollection,
         type: "ENROLLMENT",
         is_recovery: false,
+        created_at: createdAt,
+        paid_at: input.paid_at || createdAt,
       });
 
-      if (payment.method === "RAZORPAY") {
+      if (payment.method === "RAZORPAY" && payment.status !== "PAID") {
         const link = store.createShortLink({
           label: collectCustomerDetailsOnCheckout ? `Payment ${product?.name || webinar?.title || bootcamp?.title || order.order_number}` : `Payment ${student.name}`,
           original_url: `/payment/${payment.id}`,
@@ -2736,6 +2798,112 @@ export async function createDashboardStore() {
         type: "RECOVERY",
         payment_method: input.payment_method || "RAZORPAY",
       });
+    },
+    importPaymentRows(rows = [], actor = {}) {
+      const created = [];
+      const errors = [];
+      const parseRowAmount = (value, fallback = 0) => {
+        const normalized = String(value ?? "").replace(/,/g, "").trim();
+        if (!normalized) return fallback;
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      };
+
+      const resolveProduct = (row = {}) => {
+        const productId = String(row.product_id || "").trim();
+        const productName = String(row.product_name || "").trim().toLowerCase();
+        const productSlug = String(row.product_slug || "").trim().toLowerCase();
+        return store.data.products.find((product) => (
+          (productId && product.id === productId)
+          || (productName && String(product.name || "").trim().toLowerCase() === productName)
+          || (productSlug && String(product.slug || "").trim().toLowerCase() === productSlug)
+        )) ?? null;
+      };
+
+      const resolveBda = (row = {}) => {
+        const bdaId = String(row.bda_id || "").trim();
+        const bdaEmail = String(row.bda_email || row.sales_owner_email || "").trim().toLowerCase();
+        const bdaName = String(row.bda_name || row.sales_owner_name || "").trim().toLowerCase();
+        return store.data.team.find((member) => (
+          String(member.role || "").toUpperCase() === "BDA"
+          && (
+            (bdaId && member.id === bdaId)
+            || (bdaEmail && String(member.email || "").trim().toLowerCase() === bdaEmail)
+            || (bdaName && String(member.name || "").trim().toLowerCase() === bdaName)
+          )
+        )) ?? null;
+      };
+
+      rows.forEach((rawRow = {}, index) => {
+        try {
+          const product = resolveProduct(rawRow);
+          if (!product) {
+            throw new Error("Product not found. Use product_id, product_name, or product_slug.");
+          }
+
+          const bda = resolveBda(rawRow);
+          const paymentMode = String(rawRow.payment_mode || "TOKEN").trim().toUpperCase() === "FULL" ? "FULL" : "TOKEN";
+          const paymentMethod = normalizePaymentMethod(rawRow.payment_method || "CASH");
+          const basePriceRs = parseRowAmount(rawRow.base_price_rs ?? rawRow.base_price, product.discounted_price / 100);
+          const salePriceRs = parseRowAmount(rawRow.sale_price_rs ?? rawRow.sold_price_rs ?? rawRow.sale_price, basePriceRs);
+          const collectedAmountRs = parseRowAmount(rawRow.collected_amount_rs ?? rawRow.amount_received_rs ?? rawRow.token_amount_rs ?? rawRow.amount_rs, paymentMode === "FULL" ? salePriceRs : 0);
+          if (!collectedAmountRs || collectedAmountRs <= 0) {
+            throw new Error("Collected amount must be greater than zero.");
+          }
+          if (paymentMode === "TOKEN" && collectedAmountRs >= salePriceRs) {
+            throw new Error("Token collected amount must be lower than the sold price.");
+          }
+          const paidAt = coerceIsoTimestamp(rawRow.payment_date || rawRow.paid_at || rawRow.created_at, nowIso());
+          const promiseDate = rawRow.promise_date ? String(rawRow.promise_date).trim() : "";
+          const createdEntry = store.createPaymentLink({
+            student_name: rawRow.customer_name || rawRow.student_name || rawRow.name || "Imported Customer",
+            phone: rawRow.phone || "",
+            email: rawRow.email || "",
+            bda_id: bda?.id || null,
+            product_id: product.id,
+            original_product_value_inr: Math.round(basePriceRs * 100),
+            product_value_inr: Math.round(salePriceRs * 100),
+            payment_type: paymentMode,
+            payment_method: paymentMethod,
+            amount_inr: Math.round(collectedAmountRs * 100),
+            token_amount: paymentMode === "TOKEN" ? Math.round(collectedAmountRs * 100) : 0,
+            reference_code: String(rawRow.reference_code || rawRow.transaction_id || rawRow.receipt_number || rawRow.utr || `IMPORT-${Date.now()}-${index + 1}`).trim(),
+            transaction_id: String(rawRow.transaction_id || rawRow.reference_code || rawRow.receipt_number || rawRow.utr || `IMPORT-${Date.now()}-${index + 1}`).trim(),
+            source: String(rawRow.source || rawRow.campaign_source || "csv-import").trim(),
+            campaign: String(rawRow.campaign || "csv-import").trim(),
+            batch_month_key: rawRow.batch_month_key || rawRow.batch || "",
+            promise_date: promiseDate || null,
+            source_type: bda?.id ? "BDA" : "MANUAL",
+            created_at: paidAt,
+            paid_at: paidAt,
+            status: "PAID",
+            language: rawRow.language || "English",
+            learning_schedule: rawRow.learning_schedule || rawRow.schedule_type || "WEEKDAY",
+            collect_customer_details_on_checkout: false,
+          }, actor);
+
+          created.push({
+            row_number: index + 2,
+            order_id: createdEntry.order.id,
+            order_number: createdEntry.order.order_number,
+            customer_name: createdEntry.order.student?.name || rawRow.customer_name || rawRow.student_name || "",
+          });
+        } catch (error) {
+          errors.push({
+            row_number: index + 2,
+            message: error instanceof Error ? error.message : "Unable to import row.",
+          });
+        }
+      });
+
+      if (created.length) {
+        store.persist("payment-import");
+      }
+
+      return {
+        created,
+        errors,
+      };
     },
     requestAccessRevoke(orderId, actor = {}) {
       const order = store.data.orders.find((entry) => entry.id === orderId);

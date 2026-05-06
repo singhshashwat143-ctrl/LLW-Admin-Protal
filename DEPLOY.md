@@ -23,14 +23,16 @@ This application must run as a single Node service that serves:
 - Same-origin hosting is strongly recommended.
 - Reverse proxy must support WebSocket upgrades on `/socket.io/`.
 - Keep `PUBLIC_APP_URL` aligned with the real public domain.
-- Keep `db/app-data.json` writable and persistent across restarts.
+- Keep `DATA_FILE` on persistent storage across restarts and redeploys.
+- Set `DATA_BACKUP_DIR` on persistent storage so JSON snapshots survive writes and restarts.
 - Do not run multiple app replicas with the current JSON-file store.
 
 ## Docker
 
 The Dockerfile can run the app, but remember:
 
-- persist the `db/` directory
+- persist the directory that holds `DATA_FILE`
+- persist the directory that holds `DATA_BACKUP_DIR`
 - provide production environment variables
 - the repo's `docker-compose.yml` is only for PostgreSQL and is not the active runtime path for this app
 

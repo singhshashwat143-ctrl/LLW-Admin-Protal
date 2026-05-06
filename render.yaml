@@ -2,10 +2,14 @@ services:
   - type: web
     name: webinar-classroom
     runtime: node
-    plan: starter
+    plan: standard
     autoDeploy: true
     buildCommand: npm install && npm run build
     startCommand: node server/webinar-server.mjs
+    disk:
+      name: app-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: 22
@@ -35,6 +39,10 @@ services:
         fromDatabase:
           name: llw-admin-db
           property: connectionString
+      - key: DATA_FILE
+        value: /var/data/app-data.json
+      - key: DATA_BACKUP_DIR
+        value: /var/data/backups
 
 databases:
   - name: llw-admin-db
