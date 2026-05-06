@@ -17,3 +17,4 @@ pnpm-debug.log*
 
 # Runtime data store — keep local bootstrap data out of future commits once untracked.
 db/app-data.json
+data/
