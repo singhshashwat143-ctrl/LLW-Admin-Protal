@@ -12,11 +12,22 @@ type ProductBatch = {
   is_active: boolean;
 };
 
+type ProductSessionDate = {
+  key: string;
+  mode: string;
+  language: string;
+  learning_schedule: string;
+  label: string;
+  session_date: string;
+};
+
 type ProductRow = {
   id: string;
   name: string;
+  mode: string;
   discounted_price: number;
   batches: ProductBatch[];
+  session_dates: ProductSessionDate[];
 };
 
 type CouponRow = {
@@ -52,6 +63,7 @@ type OnboardingResult = {
   productName?: string;
   batchName?: string;
   senderName?: string;
+  sessionDate?: string;
 };
 
 const initialForm = {
@@ -66,6 +78,8 @@ const initialForm = {
   payment_method: "RAZORPAY",
   token_amount: "",
   promise_date: "",
+  learning_schedule: "WEEKDAY",
+  language: "English",
   alias_suffix: "",
   reference_code: "",
   coupon_code: "",
@@ -80,6 +94,7 @@ function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: numbe
 
 export function OnboardingPage() {
   const { user } = useAuth();
+  const role = normalizeRole(user?.role);
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
   const teamApi = useApi<TeamResponse>("/api/team", { bdas: [], salesOwners: [] });
   const couponsApi = useApi<{ coupons: CouponRow[] }>("/api/coupons", { coupons: [] });
@@ -94,7 +109,6 @@ export function OnboardingPage() {
 
   useEffect(() => {
     if (!form.bda_id && teamApi.data.salesOwners.length) {
-      const role = normalizeRole(user?.role);
       const preferred =
         role === "BDA" || role === "BDM"
           ? teamApi.data.salesOwners.find((entry) => entry.id === user?.id)?.id || user?.id || ""
@@ -161,6 +175,20 @@ export function OnboardingPage() {
     () => availableBatches.find((batch) => batch.key === form.batch_month_key) ?? null,
     [availableBatches, form.batch_month_key],
   );
+  const availableLanguages = useMemo(() => {
+    const fromProduct = [...new Set((selectedProduct?.session_dates || []).map((session) => session.language))];
+    return fromProduct.length ? fromProduct : ["English", "Hindi", "Malayalam"];
+  }, [selectedProduct]);
+  const availableSchedules = useMemo(() => {
+    const fromProduct = [...new Set((selectedProduct?.session_dates || []).map((session) => session.learning_schedule))];
+    return fromProduct.length ? fromProduct : ["WEEKDAY", "WEEKEND"];
+  }, [selectedProduct]);
+  const selectedSession = useMemo(
+    () => (selectedProduct?.session_dates || []).find((session) => (
+      session.language === form.language && session.learning_schedule === form.learning_schedule
+    )) ?? null,
+    [form.language, form.learning_schedule, selectedProduct],
+  );
 
   useEffect(() => {
     if (!selectedProduct) {
@@ -174,6 +202,18 @@ export function OnboardingPage() {
       setForm((current) => ({ ...current, batch_month_key: nextBatchKey }));
     }
   }, [availableBatches, form.batch_month_key, selectedProduct]);
+
+  useEffect(() => {
+    if (!availableLanguages.includes(form.language)) {
+      updateField("language", availableLanguages[0] || "English");
+    }
+  }, [availableLanguages, form.language]);
+
+  useEffect(() => {
+    if (!availableSchedules.includes(form.learning_schedule)) {
+      updateField("learning_schedule", availableSchedules[0] || "WEEKDAY");
+    }
+  }, [availableSchedules, form.learning_schedule]);
 
   const visibleCoupons = useMemo(() => {
     return couponsApi.data.coupons.filter((coupon) => (
@@ -210,6 +250,10 @@ export function OnboardingPage() {
       setError("Enter a token amount that is lower than the full course value.");
       return;
     }
+    if (!selectedSession?.session_date) {
+      setError("Set the session date for this product, language, and schedule in Products before creating the enrollment.");
+      return;
+    }
     if ((form.payment_method === "CASH" || form.payment_method === "BANK_TRANSFER") && !form.reference_code.trim()) {
       setError("Add the cash receipt or transfer reference before saving a manual payment.");
       return;
@@ -232,6 +276,8 @@ export function OnboardingPage() {
           batch_month_key: form.batch_month_key,
           amount_inr: form.payment_type === "TOKEN" ? tokenAmount : fullAmount,
           original_product_value_inr: grossAmount,
+          session_date: selectedSession.session_date,
+          product_mode: selectedProduct?.mode || "",
           token_amount: form.payment_type === "TOKEN" ? tokenAmount : 0,
           campaign_source: form.source,
           collect_customer_details_on_checkout: false,
@@ -247,6 +293,7 @@ export function OnboardingPage() {
         productName: selectedProduct?.name || "",
         batchName: selectedBatch?.label || "",
         senderName: user?.role === "ADMIN" || user?.role === "SUPER_ADMIN" ? assignedBda?.name || user?.name || "" : user?.name || "",
+        sessionDate: selectedSession.session_date,
       });
       setNotice(
         form.payment_method === "RAZORPAY"
@@ -399,6 +446,34 @@ export function OnboardingPage() {
                 <option value="CASH">Cash</option>
               </select>
             </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">Schedule preference</span>
+              <select className="input-dark" value={form.learning_schedule} onChange={(event) => updateField("learning_schedule", event.target.value)}>
+                {availableSchedules.map((schedule) => (
+                  <option key={schedule} value={schedule}>
+                    {schedule === "WEEKDAY" ? "Weekday" : "Weekend"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">Preferred language</span>
+              <select className="input-dark" value={form.language} onChange={(event) => updateField("language", event.target.value)}>
+                {availableLanguages.map((language) => (
+                  <option key={language} value={language}>{language}</option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">Session date</span>
+              <input
+                className="input-dark"
+                type="date"
+                value={selectedSession?.session_date || ""}
+                readOnly
+                placeholder="Set in Products"
+              />
+            </label>
             {form.payment_type === "TOKEN" ? (
               <>
                 <label className="grid gap-2">
@@ -488,6 +563,7 @@ export function OnboardingPage() {
                 <div className="font-semibold text-[var(--text-strong)]">Latest result</div>
                 <div className="mt-2 text-[var(--text-secondary)]">Order ID: <span className="font-mono text-[var(--text-strong)]">{result.orderId}</span></div>
                 {result.transactionId ? <div className="mt-1 text-[var(--text-secondary)]">Transaction ID: <span className="font-mono text-[var(--text-strong)]">{result.transactionId}</span></div> : null}
+                {result.sessionDate ? <div className="mt-1 text-[var(--text-secondary)]">Session date: <span className="text-[var(--text-strong)]">{result.sessionDate}</span></div> : null}
                 {result.senderName ? <div className="mt-1 text-[var(--text-secondary)]">Sender: <span className="text-[var(--text-strong)]">{result.senderName}</span></div> : null}
                 {result.productName ? <div className="mt-1 text-[var(--text-secondary)]">Product: <span className="text-[var(--text-strong)]">{result.productName}</span></div> : null}
                 {result.batchName ? <div className="mt-1 text-[var(--text-secondary)]">Batch: <span className="text-[var(--text-strong)]">{result.batchName}</span></div> : null}

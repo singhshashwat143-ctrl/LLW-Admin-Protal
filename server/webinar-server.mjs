@@ -1320,7 +1320,7 @@ app.post("/api/products", (req, res) => {
 });
 
 app.put("/api/products/:id", (req, res) => {
-  const user = requireAdminPermission(req, res, "Only admin users can update product batches.");
+  const user = requireAdminPermission(req, res, "Only admin users can update product details.");
   if (!user) return;
   const index = store.data.products.findIndex((item) => item.id === req.params.id);
   if (index < 0) return res.status(404).json({ ok: false, message: "Product not found" });

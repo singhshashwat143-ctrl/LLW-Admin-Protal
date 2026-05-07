@@ -54,6 +54,11 @@ const productBatchMonths = [
   { key: "DEC", label: "Dec" },
 ];
 const productBatchMonthByKey = new Map(productBatchMonths.map((month) => [month.key, month]));
+const supportedProductLanguages = ["English", "Hindi", "Malayalam"];
+const supportedLearningSchedules = [
+  { key: "WEEKDAY", label: "Weekday" },
+  { key: "WEEKEND", label: "Weekend" },
+];
 const couponResetRevision = 1;
 
 function nowIso() {
@@ -538,14 +543,52 @@ function normalizeProductBatches(batches = []) {
   });
 }
 
+function normalizeSessionDateValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const timestamp = new Date(raw).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 10) : "";
+}
+
+function normalizeProductSessionDates(sessionDates = [], mode = "ONLINE") {
+  const sessionMap = new Map();
+
+  (Array.isArray(sessionDates) ? sessionDates : []).forEach((session) => {
+    const language = normalizePreferredLanguage(session?.language);
+    const learningSchedule = normalizeLearningSchedule(session?.learning_schedule || session?.learningSchedule || session?.schedule);
+    sessionMap.set(`${language}:${learningSchedule}`, {
+      language,
+      learning_schedule: learningSchedule,
+      session_date: normalizeSessionDateValue(session?.session_date || session?.sessionDate || session?.date),
+    });
+  });
+
+  return supportedProductLanguages.flatMap((language) => (
+    supportedLearningSchedules.map((schedule) => {
+      const key = `${language}:${schedule.key}`;
+      const existing = sessionMap.get(key);
+      return {
+        key: `${language.toUpperCase()}_${schedule.key}`,
+        mode: String(mode || "ONLINE").toUpperCase(),
+        language,
+        learning_schedule: schedule.key,
+        label: `${language} • ${schedule.label}`,
+        session_date: existing?.session_date || "",
+      };
+    })
+  ));
+}
+
 function normalizeProductRecord(record, index = 0) {
   const createdAt = record.created_at || record.createdAt || nowIso();
+  const mode = String(record.mode || "ONLINE").toUpperCase();
   return {
     ...record,
     id: record.id || `product-${String(index + 1).padStart(3, "0")}`,
     name: String(record.name || `Product ${index + 1}`).trim(),
     slug: record.slug || slugify(record.name || `product-${index + 1}`),
-    mode: String(record.mode || "ONLINE").toUpperCase(),
+    mode,
     category: String(record.category || "GENERAL").toUpperCase(),
     price: Number(record.price ?? 0),
     discounted_price: Number(record.discounted_price ?? record.discountedPrice ?? record.price ?? 0),
@@ -558,6 +601,7 @@ function normalizeProductRecord(record, index = 0) {
     razorpay_plan_id: record.razorpay_plan_id || record.razorpayPlanId || "",
     is_active: record.is_active ?? record.isActive ?? true,
     batches: normalizeProductBatches(record.batches || record.batch_availability || record.batchAvailability),
+    session_dates: normalizeProductSessionDates(record.session_dates || record.sessionDates, mode),
     created_at: createdAt,
     updated_at: record.updated_at || record.updatedAt || createdAt,
   };
@@ -626,6 +670,7 @@ function getProductValue(order, data) {
 function normalizeOrderRecord(order, data) {
   const productValue = getProductValue(order, data);
   const initialAmount = Number(order.amount_inr || 0);
+  const product = data.products.find((item) => item.id === order.product_id) ?? null;
   const batchKey = normalizeBatchKey(
     order.batch_month_key
     || order.batchMonthKey
@@ -658,6 +703,8 @@ function normalizeOrderRecord(order, data) {
     created_by_role: order.created_by_role || order.createdByRole || "",
     manager_name: order.manager_name || order.managerName || "",
     team_name: order.team_name || order.teamName || "",
+    product_mode: String(order.product_mode || order.productMode || product?.mode || "").toUpperCase(),
+    session_date: normalizeSessionDateValue(order.session_date || order.sessionDate),
     batch_month_key: batchKey || "",
     batch_month_label: batchKey ? productBatchMonthByKey.get(batchKey)?.label || batchKey : "",
     access_revocation_requested: Boolean(order.access_revocation_requested ?? order.accessRevocationRequested),
@@ -1307,7 +1354,7 @@ function withComputedPayment(order, data) {
         : null,
     can_send_recovery: amountDue > 0,
     transaction_count: paymentHistory.length,
-    cohort_start_date: webinar?.start_time || bootcamp?.created_at || order.created_at,
+    cohort_start_date: order.session_date || webinar?.start_time || bootcamp?.created_at || order.created_at,
     operations: {
       portal_access_done: Boolean(order.portal_access_done),
       broker_setup_done: Boolean(order.broker_setup_done),
@@ -2606,6 +2653,7 @@ export async function createDashboardStore() {
       if (!product && !webinar && !bootcamp) {
         throw new Error("Product or class is required");
       }
+      const productSessionDate = normalizeSessionDateValue(input.session_date || input.sessionDate);
       const originalProductValue = Number(
         input.original_product_value_inr
         || product?.discounted_price
@@ -2680,6 +2728,8 @@ export async function createDashboardStore() {
         created_by_role: actorRole,
         manager_name: managerName,
         team_name: teamName,
+        product_mode: product?.mode || "",
+        session_date: productSessionDate,
         promise_date: promiseDate,
         batch_month_key: batchMonthKey,
         batch_month_label: batchMonthKey ? productBatchMonthByKey.get(batchMonthKey)?.label || batchMonthKey : "",
