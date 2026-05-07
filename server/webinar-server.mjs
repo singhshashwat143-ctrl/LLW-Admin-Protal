@@ -1706,6 +1706,70 @@ app.post("/api/payment-links", async (req, res) => {
   }
 });
 
+app.post("/api/public/webinar-enrollments", async (req, res) => {
+  const attendanceId = String(req.body?.attendance_id || req.body?.attendanceId || "").trim();
+  const webinarId = String(req.body?.webinar_id || req.body?.webinarId || "").trim();
+
+  if (!attendanceId || !webinarId) {
+    return res.status(400).json({ ok: false, message: "Attendance and webinar details are required." });
+  }
+
+  const attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId) ?? null;
+  if (!attendance || attendance.role !== "ATTENDEE" || attendance.webinar_id !== webinarId) {
+    return res.status(403).json({ ok: false, message: "This attendee session is not allowed to create a payment." });
+  }
+
+  const webinar = store.data.webinars.find((item) => item.id === webinarId) ?? null;
+  if (!webinar) {
+    return res.status(404).json({ ok: false, message: "Webinar not found." });
+  }
+
+  let created;
+  try {
+    created = store.createPaymentLink({
+      ...req.body,
+      webinar_id: webinarId,
+      student_name: String(req.body?.student_name || req.body?.customer_name || attendance.name || "Attendee").trim(),
+      phone: String(req.body?.phone || attendance.phone || "").trim(),
+      email: String(req.body?.email || attendance.email || "").trim(),
+      source: String(req.body?.source || webinar.title || "Webinar").trim(),
+      source_type: "WEBINAR",
+      campaign: String(req.body?.campaign || "webinar-enroll-now").trim(),
+      collect_customer_details_on_checkout: false,
+    }, {
+      role: "ATTENDEE",
+      name: attendance.name || "Attendee",
+      email: attendance.email || "",
+    });
+    const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    await flushStore();
+    res.status(201).json({ ok: true, ...finalized });
+  } catch (error) {
+    if (created?.payment?.id) {
+      store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
+      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
+    }
+    if (created?.order?.id) {
+      store.data.orders = store.data.orders.filter((item) => item.id !== created.order.id);
+      const studentId = created.order.student?.id || created.order.student_id;
+      const hasOtherOrders = store.data.orders.some((item) => item.student_id === studentId);
+      if (!hasOtherOrders) {
+        store.data.students = store.data.students.filter((item) => item.id !== studentId);
+      }
+    }
+    if (created?.order?.coupon_id) {
+      const coupon = store.data.coupons.find((item) => item.id === created.order.coupon_id);
+      if (coupon) {
+        coupon.usage_count = Math.max(Number(coupon.usage_count || 0) - 1, 0);
+        coupon.updated_at = new Date().toISOString();
+      }
+    }
+    store.save();
+    await flushStore();
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Payment creation failed" });
+  }
+});
+
 app.post("/api/enrollments", async (req, res) => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;

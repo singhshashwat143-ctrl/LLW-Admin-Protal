@@ -1778,9 +1778,10 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
       await api(`/api/attendance/${connection.attendanceId}/enroll-click`, { method: "POST" });
 
-      const created = await api<{ order: { id: string; status?: string } }>("/api/payment-links", {
+      const created = await api<{ order: { id: string; status?: string } }>("/api/public/webinar-enrollments", {
         method: "POST",
         body: JSON.stringify({
+          attendance_id: connection.attendanceId,
           webinar_id: connection.webinar.id,
           amount_inr: getActiveEnrollAmountInPaise(),
           original_product_value_inr: Number(connection.webinar.price_inr || getActiveEnrollAmountInPaise()),
