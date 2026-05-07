@@ -32,11 +32,11 @@ services:
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: LIVEKIT_URL
-        sync: false
+        value: wss://livekit.187.127.155.86.sslip.io
       - key: LIVEKIT_API_KEY
-        sync: false
+        value: myapp
       - key: LIVEKIT_API_SECRET
-        sync: false
+        value: c58c9e8f6ff32981cf52387e850002f216464d95fff37bc452df3baa188ff3a7
       - key: DATABASE_SSL
         value: true
       - key: REQUIRE_DATABASE_PERSISTENCE
