@@ -11,6 +11,7 @@ import { Server } from "socket.io";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
+import { createGoogleSheetsMirror } from "./google-sheets-sync.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,6 +27,7 @@ const pyMdApiKey = process.env.PYMD_API_KEY || "";
 const pyMdBaseUrl = "https://py.md/api";
 const pyMdCustomDomain = process.env.PYMD_DOMAIN || "";
 const publicAppUrl = (process.env.PUBLIC_APP_URL || "").replace(/\/$/, "");
+const googleSheetsMirror = createGoogleSheetsMirror({ appUrl: publicAppUrl });
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID || "";
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
 const razorpayBaseUrl = "https://api.razorpay.com/v1";
@@ -62,6 +64,11 @@ function withAbsolute(req, path) {
 
 async function flushStore() {
   await store.flush();
+  try {
+    await googleSheetsMirror.syncDiff(store, { reason: "store-flush" });
+  } catch (error) {
+    console.error("Google Sheets incremental sync failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 function serializeWebinar(req, webinar) {
@@ -1197,6 +1204,7 @@ app.get("/health", (_req, res) => {
     service: "llw-api",
     port,
     persistence: store.getPersistenceStatus(),
+    googleSheets: googleSheetsMirror.getStatus(),
   });
 });
 
@@ -1320,7 +1328,7 @@ app.post("/api/products", (req, res) => {
 });
 
 app.put("/api/products/:id", (req, res) => {
-  const user = requireAdminPermission(req, res, "Only admin users can update product batches.");
+  const user = requireAdminPermission(req, res, "Only admin users can update product details.");
   if (!user) return;
   const index = store.data.products.findIndex((item) => item.id === req.params.id);
   if (index < 0) return res.status(404).json({ ok: false, message: "Product not found" });
@@ -1706,6 +1714,70 @@ app.post("/api/payment-links", async (req, res) => {
   }
 });
 
+app.post("/api/public/webinar-enrollments", async (req, res) => {
+  const attendanceId = String(req.body?.attendance_id || req.body?.attendanceId || "").trim();
+  const webinarId = String(req.body?.webinar_id || req.body?.webinarId || "").trim();
+
+  if (!attendanceId || !webinarId) {
+    return res.status(400).json({ ok: false, message: "Attendance and webinar details are required." });
+  }
+
+  const attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId) ?? null;
+  if (!attendance || attendance.role !== "ATTENDEE" || attendance.webinar_id !== webinarId) {
+    return res.status(403).json({ ok: false, message: "This attendee session is not allowed to create a payment." });
+  }
+
+  const webinar = store.data.webinars.find((item) => item.id === webinarId) ?? null;
+  if (!webinar) {
+    return res.status(404).json({ ok: false, message: "Webinar not found." });
+  }
+
+  let created;
+  try {
+    created = store.createPaymentLink({
+      ...req.body,
+      webinar_id: webinarId,
+      student_name: String(req.body?.student_name || req.body?.customer_name || attendance.name || "Attendee").trim(),
+      phone: String(req.body?.phone || attendance.phone || "").trim(),
+      email: String(req.body?.email || attendance.email || "").trim(),
+      source: String(req.body?.source || webinar.title || "Webinar").trim(),
+      source_type: "WEBINAR",
+      campaign: String(req.body?.campaign || "webinar-enroll-now").trim(),
+      collect_customer_details_on_checkout: false,
+    }, {
+      role: "ATTENDEE",
+      name: attendance.name || "Attendee",
+      email: attendance.email || "",
+    });
+    const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    await flushStore();
+    res.status(201).json({ ok: true, ...finalized });
+  } catch (error) {
+    if (created?.payment?.id) {
+      store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
+      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
+    }
+    if (created?.order?.id) {
+      store.data.orders = store.data.orders.filter((item) => item.id !== created.order.id);
+      const studentId = created.order.student?.id || created.order.student_id;
+      const hasOtherOrders = store.data.orders.some((item) => item.student_id === studentId);
+      if (!hasOtherOrders) {
+        store.data.students = store.data.students.filter((item) => item.id !== studentId);
+      }
+    }
+    if (created?.order?.coupon_id) {
+      const coupon = store.data.coupons.find((item) => item.id === created.order.coupon_id);
+      if (coupon) {
+        coupon.usage_count = Math.max(Number(coupon.usage_count || 0) - 1, 0);
+        coupon.updated_at = new Date().toISOString();
+      }
+    }
+    store.save();
+    await flushStore();
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Payment creation failed" });
+  }
+});
+
 app.post("/api/enrollments", async (req, res) => {
   const user = requireAuthenticatedUser(req, res);
   if (!user) return;
@@ -1763,6 +1835,28 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
     }
     await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to create recovery link" });
+  }
+});
+
+app.post("/api/payment-imports", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can import payment CSVs.");
+  if (!user) return;
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!rows.length) {
+    return res.status(400).json({ ok: false, message: "At least one CSV row is required." });
+  }
+  try {
+    const result = store.importPaymentRows(rows, user);
+    await flushStore();
+    res.status(201).json({
+      ok: true,
+      created_count: result.created.length,
+      error_count: result.errors.length,
+      created: result.created,
+      errors: result.errors,
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to import payments." });
   }
 });
 
@@ -2185,6 +2279,36 @@ app.get("/api/settings", (req, res) => {
       liveServers: constants.serverOptions,
     },
   });
+});
+
+app.get("/api/google-sheets/status", (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can view Google Sheets sync status.");
+  if (!user) return;
+  res.json({ ok: true, googleSheets: googleSheetsMirror.getStatus() });
+});
+
+app.post("/api/google-sheets/sync", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can sync Google Sheets.");
+  if (!user) return;
+
+  try {
+    const result = await googleSheetsMirror.syncFull(store, {
+      reason: String(req.body?.reason || "manual-admin-sync").trim() || "manual-admin-sync",
+      force: Boolean(req.body?.force),
+    });
+
+    res.json({
+      ok: true,
+      result,
+      googleSheets: googleSheetsMirror.getStatus(),
+    });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      message: error instanceof Error ? error.message : "Google Sheets sync failed.",
+      googleSheets: googleSheetsMirror.getStatus(),
+    });
+  }
 });
 
 app.patch("/api/settings/notifications", (req, res) => {
@@ -2616,6 +2740,12 @@ if (existsSync(distPath)) {
   app.get(/^(?!\/api|\/health|\/socket\.io).*/, (req, res) => {
     res.sendFile(join(distPath, "index.html"));
   });
+}
+
+try {
+  await googleSheetsMirror.initialize(store);
+} catch (error) {
+  console.error("Google Sheets startup sync failed:", error instanceof Error ? error.message : error);
 }
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
