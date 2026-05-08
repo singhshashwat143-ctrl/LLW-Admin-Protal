@@ -4,6 +4,7 @@ import { Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track } from "livek
 import { TrackSource as ProtoTrackSource } from "@livekit/protocol";
 import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
+import brandLogo from "../assets/logo.png";
 import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
@@ -185,6 +186,19 @@ function describeMediaError(kind: "microphone" | "camera" | "screen share" | "ro
     return "Could not connect to the webinar media server.";
   }
   return `Could not start ${kind}. ${message || "Please try again."}`;
+}
+
+function describePublishPermissionError(
+  role: "HOST" | "ATTENDEE",
+  capability: "microphone" | "camera" | "screen share",
+) {
+  if (role === "ATTENDEE") {
+    if (capability === "microphone") {
+      return "The host has not enabled your microphone yet.";
+    }
+    return `Only hosts can use ${capability} in this webinar room. Open the host link if you should be on stage.`;
+  }
+  return `This host session does not have ${capability} permission. Rejoin through the host link after signing in again with your admin account.`;
 }
 
 const defaultMeetingForm = {
@@ -1115,8 +1129,90 @@ function ControlIcon({ name }: { name: string }) {
   }
 }
 
+function PrejoinIcon({ name }: { name: "target" | "compass" | "user" | "mail" | "phone" | "arrow-right" }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  switch (name) {
+    case "target":
+      return <svg {...common}><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="M2 12h2" /><path d="M20 12h2" /></svg>;
+    case "compass":
+      return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="m16 8-2.7 6.3L7 17l2.7-6.3L16 8Z" /></svg>;
+    case "user":
+      return <svg {...common}><path d="M20 21a8 8 0 0 0-16 0" /><circle cx="12" cy="8" r="4" /></svg>;
+    case "mail":
+      return <svg {...common}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m4 7 8 6 8-6" /></svg>;
+    case "phone":
+      return <svg {...common}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.86 19.86 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.86 19.86 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.89.32 1.76.59 2.6a2 2 0 0 1-.45 2.11L8 9.91a16 16 0 0 0 6.09 6.09l1.48-1.25a2 2 0 0 1 2.11-.45c.84.27 1.71.47 2.6.59A2 2 0 0 1 22 16.92Z" /></svg>;
+    case "arrow-right":
+      return <svg {...common}><path d="M5 12h14" /><path d="m13 5 7 7-7 7" /></svg>;
+    default:
+      return null;
+  }
+}
+
+function PrejoinInfoCard({
+  icon,
+  title,
+  body,
+}: {
+  icon: "target" | "compass";
+  title: string;
+  body: ReactNode;
+}) {
+  return (
+    <div className="gm-prejoin-info-card">
+      <div className="gm-prejoin-info-head">
+        <span className="gm-prejoin-info-icon">
+          <PrejoinIcon name={icon} />
+        </span>
+        <h3>{title}</h3>
+      </div>
+      <p>{body}</p>
+    </div>
+  );
+}
+
+function PrejoinField({
+  icon,
+  placeholder,
+  type = "text",
+  value,
+  onChange,
+}: {
+  icon: "user" | "mail" | "phone";
+  placeholder: string;
+  type?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="gm-prejoin-field">
+      <span className="gm-prejoin-field-icon">
+        <PrejoinIcon name={icon} />
+      </span>
+      <input
+        className="gm-prejoin-input"
+        type={type}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 function useClassMedia({
   joined,
+  role,
   canPublishAudio,
   canPublishVideo,
   canShareScreen,
@@ -1124,6 +1220,7 @@ function useClassMedia({
   sendMediaState,
 }: {
   joined: boolean;
+  role: "HOST" | "ATTENDEE";
   canPublishAudio: boolean;
   canPublishVideo: boolean;
   canShareScreen: boolean;
@@ -1392,7 +1489,7 @@ function useClassMedia({
     if (!room) return false;
     const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
     if (next && !currentPermissions.canPublishAudio) {
-      setMediaError("The host has not enabled your microphone yet.");
+      setMediaError(describePublishPermissionError(role, "microphone"));
       return false;
     }
     try {
@@ -1415,7 +1512,10 @@ function useClassMedia({
     const room = roomRef.current;
     if (!room) return false;
     const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
-    if (next && !currentPermissions.canPublishVideo) return false;
+    if (next && !currentPermissions.canPublishVideo) {
+      setMediaError(describePublishPermissionError(role, "camera"));
+      return false;
+    }
     try {
       setMediaError("");
       await room.localParticipant.setCameraEnabled(next);
@@ -1433,7 +1533,10 @@ function useClassMedia({
     const next = !isScreenSharing;
     if (!room) return false;
     const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
-    if (next && !currentPermissions.canShareScreen) return false;
+    if (next && !currentPermissions.canShareScreen) {
+      setMediaError(describePublishPermissionError(role, "screen share"));
+      return false;
+    }
     try {
       setMediaError("");
       const micWasOn = room.localParticipant.isMicrophoneEnabled;
@@ -1521,6 +1624,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const canHostRoom = role === "HOST" && ["ADMIN", "SUPER_ADMIN"].includes(String(user?.role || "").toUpperCase());
   const media = useClassMedia({
     joined,
+    role,
     canPublishAudio: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canPublishAudio),
     canPublishVideo: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canPublishVideo),
     canShareScreen: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canShareScreen),
@@ -1982,43 +2086,167 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     setLinkCopyNotice(`${label} link copied.`);
   }
 
+  const joinHeading = role === "HOST" ? "Join As Host" : "Join Webinar";
+  const joinButtonLabel = role === "HOST" ? "Join As Host" : "Join Webinar";
+  const rightPanelTitle = role === "HOST" ? "Host Console" : "Join Webinar";
+  const rightPanelCopy = role === "HOST"
+    ? "Enter your host details to open the live controls and run the room."
+    : "Enter your details to open the attendee room.";
+  const helperCopy = role === "HOST"
+    ? "Host access stays restricted to signed-in admin accounts."
+    : "Payments, chat, and live participation continue inside the room.";
+
   if (!joined) {
     return (
       <div className="gm-prejoin-shell">
-        <div className="gm-prejoin-brand">
-          <div>
-            <div className="gm-prejoin-logo">LW</div>
-            <h1 className="gm-prejoin-title">{role === "HOST" ? "Join As Host" : "Join Webinar"}</h1>
-            <p className="gm-prejoin-copy">
-              {role === "HOST"
-                ? "Enter your host details before joining so multiple hosts can run the room together."
-                : "Real-time video, live chat, and in-room Razorpay checkout without sending people away."}
-            </p>
+        <div className="gm-prejoin-ambient gm-prejoin-ambient-left" />
+        <div className="gm-prejoin-ambient gm-prejoin-ambient-right" />
+
+        <section className="gm-prejoin-brand">
+          <svg className="gm-prejoin-watermark" viewBox="0 0 200 200" fill="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="gm-prejoin-gold-stroke" x1="0" y1="200" x2="200" y2="0">
+                <stop offset="0%" stopColor="#D4AF37" />
+                <stop offset="100%" stopColor="#FFD700" />
+              </linearGradient>
+            </defs>
+            <rect x="20" y="140" width="18" height="40" fill="url(#gm-prejoin-gold-stroke)" />
+            <rect x="50" y="115" width="18" height="65" fill="url(#gm-prejoin-gold-stroke)" />
+            <rect x="80" y="85" width="18" height="95" fill="url(#gm-prejoin-gold-stroke)" />
+            <rect x="110" y="55" width="18" height="125" fill="url(#gm-prejoin-gold-stroke)" />
+            <path d="M30 160 L80 110 L110 140 L170 60" stroke="url(#gm-prejoin-gold-stroke)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M150 60 L180 60 L180 90" stroke="url(#gm-prejoin-gold-stroke)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+
+          <div className="gm-prejoin-brand-content">
+            <img src={brandLogo} alt="Livelong Wealth" className="gm-prejoin-logo" draggable="false" />
+
+            <div className="gm-prejoin-hero">
+              <p className="gm-prejoin-kicker">Livelong Wealth Webinar Room</p>
+              <h1 className="gm-prejoin-title">
+                Expert financial
+                <br />
+                <span>guidance</span>
+              </h1>
+              <p className="gm-prejoin-copy">Now at your fingertips, with live room access, chat, and checkout in one flow.</p>
+            </div>
+
             <div className="gm-prejoin-points">
-              <div>Live webinar stage</div>
-              <div>Chat + people drawer</div>
-              <div>Offer banner inside the room</div>
-              <div>Same-page payment modal</div>
+              <PrejoinInfoCard
+                icon="compass"
+                title="Our Vision"
+                body={<>Become the one stop solution for all trading, <strong>wealth management</strong> &amp; market related financial needs in India.</>}
+              />
+              <PrejoinInfoCard
+                icon="target"
+                title="Our Mission"
+                body="Financially literate and independent Indian youth with technology driven alternative sources of income."
+              />
             </div>
           </div>
-        </div>
+        </section>
 
-        <div className="gm-prejoin-form-shell">
-          <div className="gm-prejoin-form">
-            <h2>{role === "HOST" ? "Host Console" : "Join Webinar"}</h2>
-            <p>{role === "HOST" ? "Enter your host name, phone, and email to open the host controls." : "Enter your details to open the attendee room."}</p>
-            <div className="gm-prejoin-preview">
-              <div className="gm-prejoin-avatar">{form.name?.slice(0, 1)?.toUpperCase() || "G"}</div>
+        <section className="gm-prejoin-form-shell">
+          <div className="gm-prejoin-divider" aria-hidden="true" />
+          <div className="gm-prejoin-card-shell">
+            <div className="gm-prejoin-card-glow" aria-hidden="true" />
+            <div className="gm-prejoin-form">
+              <div className="gm-prejoin-badges">
+                <span className="gm-prejoin-chip">{role === "HOST" ? "Host Access" : "Attendee Access"}</span>
+                <span className="gm-prejoin-chip">{roomName}</span>
+              </div>
+
+              <div className="gm-prejoin-preview">
+                <div className="gm-prejoin-avatar">{form.name?.slice(0, 1)?.toUpperCase() || "G"}</div>
+              </div>
+
+              <h2>{rightPanelTitle}</h2>
+              <p>{rightPanelCopy}</p>
+
+              <form
+                className="gm-prejoin-fields"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  submitJoin();
+                }}
+              >
+                <PrejoinField
+                  icon="user"
+                  placeholder={role === "HOST" ? "Host Name" : "Your Name"}
+                  value={form.name}
+                  onChange={(value) => setForm({ ...form, name: value })}
+                />
+                <PrejoinField
+                  icon="mail"
+                  type="email"
+                  placeholder="Email"
+                  value={form.email}
+                  onChange={(value) => setForm({ ...form, email: value })}
+                />
+                <PrejoinField
+                  icon="phone"
+                  type="tel"
+                  placeholder="Phone Number"
+                  value={form.phone}
+                  onChange={(value) => setForm({ ...form, phone: value })}
+                />
+
+                <button className="gm-prejoin-btn" type="submit">
+                  {joinButtonLabel}
+                  <PrejoinIcon name="arrow-right" />
+                </button>
+
+                {paymentNotice ? <div className="gm-payment-note">{paymentNotice}</div> : null}
+              </form>
+
+              <p className="gm-prejoin-legal">{helperCopy}</p>
             </div>
-            <div className="gm-prejoin-fields">
-              <input className="gm-prejoin-input" placeholder={role === "HOST" ? "Host Name" : "Your Name"} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-              <input className="gm-prejoin-input" placeholder="Email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
-              <input className="gm-prejoin-input" placeholder="Phone Number" value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} />
-              <button className="gm-prejoin-btn" type="button" onClick={submitJoin}>{role === "HOST" ? "Join As Host" : "Join Webinar"}</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (connection.joining && !connection.attendanceId) {
+    return (
+      <div className="gm-prejoin-shell">
+        <div className="gm-prejoin-ambient gm-prejoin-ambient-left" />
+        <div className="gm-prejoin-ambient gm-prejoin-ambient-right" />
+
+        <section className="gm-prejoin-brand">
+          <div className="gm-prejoin-brand-content">
+            <img src={brandLogo} alt="Livelong Wealth" className="gm-prejoin-logo" draggable="false" />
+            <div className="gm-prejoin-hero">
+              <p className="gm-prejoin-kicker">Connecting your live room</p>
+              <h1 className="gm-prejoin-title">
+                Joining the
+                <br />
+                <span>webinar now</span>
+              </h1>
+              <p className="gm-prejoin-copy">We are validating access, opening the room, and preparing your live session.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="gm-prejoin-form-shell">
+          <div className="gm-prejoin-divider" aria-hidden="true" />
+          <div className="gm-prejoin-card-shell">
+            <div className="gm-prejoin-card-glow" aria-hidden="true" />
+            <div className="gm-prejoin-form">
+              <div className="gm-prejoin-badges">
+                <span className="gm-prejoin-chip">{role === "HOST" ? "Host Access" : "Attendee Access"}</span>
+                <span className="gm-prejoin-chip">{roomName}</span>
+              </div>
+              <div className="gm-prejoin-preview">
+                <div className="gm-prejoin-avatar">{form.name?.slice(0, 1)?.toUpperCase() || "G"}</div>
+              </div>
+              <h2>{joinHeading}</h2>
+              <p>Just a moment while the room connects.</p>
+              <div className="gm-payment-note">Connecting to the live room...</div>
               {paymentNotice ? <div className="gm-payment-note">{paymentNotice}</div> : null}
             </div>
           </div>
-        </div>
+        </section>
       </div>
     );
   }

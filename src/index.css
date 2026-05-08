@@ -855,119 +855,362 @@ a:hover {
 .gm-prejoin-shell {
   min-height: 100vh;
   display: grid;
-  background: #0f1115;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at top left, rgba(212, 175, 55, 0.08), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(255, 140, 0, 0.08), transparent 34%),
+    #050505;
+  color: #ffffff;
 }
 
 .gm-prejoin-brand {
-  display: none;
-  background: linear-gradient(135deg, #111111, #1b1b1b 55%, #332300);
-  color: white;
-  padding: 3rem;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2.5rem 1.5rem;
+  z-index: 1;
 }
 
 .gm-prejoin-logo {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.18);
-  font-weight: 700;
-  margin-bottom: 2rem;
+  width: auto;
+  height: 64px;
+  max-width: 220px;
+  filter: drop-shadow(0 0 24px rgba(212, 175, 55, 0.22));
+}
+
+.gm-prejoin-brand-content {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.gm-prejoin-hero {
+  margin-top: 2rem;
+}
+
+.gm-prejoin-kicker {
+  margin: 0 0 1rem;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.82rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 
 .gm-prejoin-title {
-  font-size: clamp(2rem, 4vw, 3.2rem);
-  line-height: 1;
   margin: 0;
+  font-size: clamp(3rem, 6vw, 5rem);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+
+.gm-prejoin-title span {
+  background: linear-gradient(90deg, #ffd86f 0%, #d4af37 45%, #b8860b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.gm-prejoin-watermark {
+  position: absolute;
+  right: -5rem;
+  top: 50%;
+  width: min(42rem, 75vw);
+  height: min(42rem, 75vw);
+  transform: translateY(-50%);
+  opacity: 0.06;
+  pointer-events: none;
+}
+
+.gm-prejoin-ambient {
+  position: absolute;
+  border-radius: 999px;
+  pointer-events: none;
+  filter: blur(140px);
+  z-index: 0;
+}
+
+.gm-prejoin-ambient-left {
+  left: -10rem;
+  top: -8rem;
+  width: 26rem;
+  height: 26rem;
+  background: rgba(212, 175, 55, 0.14);
+}
+
+.gm-prejoin-ambient-right {
+  right: -10rem;
+  bottom: -12rem;
+  width: 32rem;
+  height: 32rem;
+  background: rgba(255, 140, 0, 0.12);
 }
 
 .gm-prejoin-copy {
-  margin-top: 1rem;
-  color: rgba(255, 255, 255, 0.82);
-  max-width: 28rem;
-  line-height: 1.7;
+  margin: 1.25rem 0 0;
+  max-width: 32rem;
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 1.02rem;
+  line-height: 1.75;
 }
 
 .gm-prejoin-points {
   display: grid;
-  gap: 0.9rem;
-  margin-top: 2rem;
-  color: rgba(255, 255, 255, 0.92);
+  gap: 1rem;
+}
+
+.gm-prejoin-info-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1.25rem;
+  backdrop-filter: blur(18px);
+}
+
+.gm-prejoin-info-card::after {
+  content: "";
+  position: absolute;
+  right: -2rem;
+  top: -2rem;
+  width: 6rem;
+  height: 6rem;
+  border-radius: 999px;
+  background: rgba(212, 175, 55, 0.09);
+  filter: blur(28px);
+}
+
+.gm-prejoin-info-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  z-index: 1;
+}
+
+.gm-prejoin-info-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(212, 175, 55, 0.32);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.22), transparent);
+  color: #d4af37;
+}
+
+.gm-prejoin-info-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.gm-prejoin-info-card p {
+  position: relative;
+  z-index: 1;
+  margin: 0.85rem 0 0;
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.65;
+  font-size: 0.95rem;
+}
+
+.gm-prejoin-info-card strong {
+  color: #d4af37;
 }
 
 .gm-prejoin-form-shell {
+  position: relative;
   display: grid;
   place-items: center;
-  padding: 2rem;
+  padding: 1.5rem;
+  z-index: 1;
+}
+
+.gm-prejoin-divider {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 1px;
+  height: 66%;
+  transform: translateY(-50%);
+  background: linear-gradient(to bottom, transparent, rgba(212, 175, 55, 0.3), transparent);
+  display: none;
+}
+
+.gm-prejoin-card-shell {
+  position: relative;
+  width: min(100%, 31rem);
+}
+
+.gm-prejoin-card-glow {
+  position: absolute;
+  inset: -1px;
+  border-radius: 28px;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.45), rgba(255, 140, 0, 0.18), transparent 62%);
+  opacity: 0.72;
+  filter: blur(1px);
 }
 
 .gm-prejoin-form {
-  width: min(100%, 440px);
+  position: relative;
+  width: 100%;
+  padding: 2rem;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 32px 72px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(24px);
   color: white;
+}
+
+.gm-prejoin-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.gm-prejoin-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .gm-prejoin-form h2 {
   margin: 0;
-  font-size: 1.75rem;
+  text-align: center;
+  font-size: clamp(1.8rem, 3vw, 2.2rem);
+  letter-spacing: -0.03em;
 }
 
-.gm-prejoin-form p {
-  margin: 0.5rem 0 0;
-  color: #9ca3af;
+.gm-prejoin-form > p {
+  margin: 0.45rem auto 0;
+  max-width: 23rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.56);
+  line-height: 1.6;
 }
 
 .gm-prejoin-preview {
-  margin: 1.5rem 0;
-  aspect-ratio: 16 / 9;
-  border-radius: 20px;
-  background: #181b22;
+  margin: 0 auto 1.4rem;
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 1.25rem;
   display: grid;
   place-items: center;
-  overflow: hidden;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.2), rgba(255, 140, 0, 0.1));
+  border: 1px solid rgba(212, 175, 55, 0.24);
 }
 
 .gm-prejoin-avatar {
-  width: 96px;
-  height: 96px;
-  border-radius: 999px;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
   display: grid;
   place-items: center;
-  background: #232734;
-  color: #6b7280;
-  font-size: 2.25rem;
-  font-weight: 700;
+  color: #dcb24c;
+  font-size: 2rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, rgba(255, 216, 111, 0.12), rgba(212, 175, 55, 0.03));
 }
 
 .gm-prejoin-fields {
   display: grid;
   gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.gm-prejoin-field {
+  position: relative;
+  display: block;
+}
+
+.gm-prejoin-field-icon {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: rgba(255, 255, 255, 0.38);
+  transition: color 180ms ease;
+  pointer-events: none;
 }
 
 .gm-prejoin-input {
   width: 100%;
-  border-radius: 12px;
-  border: 1px solid #3f3f46;
-  background: #18181b;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.42);
   color: white;
-  padding: 0.9rem 1rem;
+  padding: 0.95rem 1rem 0.95rem 2.9rem;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+
+.gm-prejoin-field:focus-within .gm-prejoin-field-icon {
+  color: #d4af37;
+}
+
+.gm-prejoin-input::placeholder {
+  color: rgba(255, 255, 255, 0.38);
 }
 
 .gm-prejoin-input:focus {
   outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 1px #6366f1;
+  border-color: #d4af37;
+  box-shadow: 0 0 0 4px rgba(212, 175, 55, 0.16);
+  background: rgba(0, 0, 0, 0.58);
 }
 
 .gm-prejoin-btn {
   width: 100%;
   border: 0;
-  border-radius: 12px;
-  background: #c62828;
-  color: white;
+  border-radius: 16px;
+  background: linear-gradient(90deg, #d4af37 0%, #e0a93a 48%, #ff8c00 100%);
+  color: #0a0a0a;
   padding: 0.95rem 1rem;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.02em;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  box-shadow: 0 18px 36px rgba(212, 175, 55, 0.18);
+  transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.gm-prejoin-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 22px 42px rgba(255, 140, 0, 0.22);
+}
+
+.gm-prejoin-btn:active {
+  transform: translateY(0);
+}
+
+.gm-prejoin-btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.gm-prejoin-legal {
+  margin: 1rem 0 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 0.74rem;
+  line-height: 1.7;
 }
 
 .gm-root {
@@ -1828,12 +2071,20 @@ a:hover {
 
 @media (min-width: 1024px) {
   .gm-prejoin-shell {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
   }
 
   .gm-prejoin-brand {
-    display: flex;
     align-items: center;
+    padding: 3.5rem 4rem;
+  }
+
+  .gm-prejoin-form-shell {
+    padding: 2rem 4rem;
+  }
+
+  .gm-prejoin-divider {
+    display: block;
   }
 
   .payments-toolbar {
@@ -1851,6 +2102,36 @@ a:hover {
 }
 
 @media (max-width: 900px) {
+  .gm-prejoin-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .gm-prejoin-brand {
+    padding-bottom: 1rem;
+  }
+
+  .gm-prejoin-logo {
+    height: 56px;
+  }
+
+  .gm-prejoin-title {
+    font-size: clamp(2.5rem, 14vw, 3.7rem);
+  }
+
+  .gm-prejoin-form-shell {
+    padding-top: 0;
+  }
+
+  .gm-prejoin-form {
+    padding: 1.5rem;
+  }
+
+  .gm-prejoin-watermark {
+    right: -7rem;
+    width: 28rem;
+    height: 28rem;
+  }
+
   .gm-root {
     flex-direction: column;
   }
