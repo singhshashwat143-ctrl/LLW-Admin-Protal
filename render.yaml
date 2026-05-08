@@ -19,6 +19,12 @@ services:
         generateValue: true
       - key: PUBLIC_APP_URL
         sync: false
+      - key: GOOGLE_SHEETS_AS_PRIMARY_DB
+        value: true
+      - key: GOOGLE_SHEETS_WEB_APP_URL
+        value: https://script.google.com/macros/s/AKfycbzSnSEociIsfEUnuvysPzrjBsiB8pRQwKMBt2I5yHfx7afBGBWDFH3jfCE1OYD0DbQI/exec
+      - key: GOOGLE_SHEETS_SYNC_TIMEOUT_MS
+        value: 20000
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET

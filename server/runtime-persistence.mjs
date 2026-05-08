@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
+import { createGoogleSheetsPrimaryPersistence } from "./google-sheets-primary-persistence.mjs";
 
 const runtimeStateTable = "app_runtime_state";
 const runtimeStateKey = "primary";
 const databaseUrl = String(process.env.DATABASE_URL || "").trim();
 const requireDatabasePersistence = /^(1|true|yes)$/i.test(String(process.env.REQUIRE_DATABASE_PERSISTENCE || ""));
+const useGoogleSheetsAsPrimaryDb = /^(1|true|yes)$/i.test(String(process.env.GOOGLE_SHEETS_AS_PRIMARY_DB || ""));
 const databaseSsl =
   /^(1|true|yes)$/i.test(String(process.env.DATABASE_SSL || ""))
     ? { rejectUnauthorized: false }
@@ -181,6 +183,10 @@ function createDisabledPersistence() {
 }
 
 export async function createRuntimePersistence() {
+  if (useGoogleSheetsAsPrimaryDb) {
+    return createGoogleSheetsPrimaryPersistence();
+  }
+
   if (!databaseUrl) {
     if (requireDatabasePersistence) {
       throw new Error("REQUIRE_DATABASE_PERSISTENCE is enabled, but DATABASE_URL is not configured.");

@@ -11,6 +11,7 @@ import { Server } from "socket.io";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
+import { createGoogleSheetsMirror } from "./google-sheets-sync.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,6 +27,7 @@ const pyMdApiKey = process.env.PYMD_API_KEY || "";
 const pyMdBaseUrl = "https://py.md/api";
 const pyMdCustomDomain = process.env.PYMD_DOMAIN || "";
 const publicAppUrl = (process.env.PUBLIC_APP_URL || "").replace(/\/$/, "");
+const googleSheetsMirror = createGoogleSheetsMirror({ appUrl: publicAppUrl });
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID || "";
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
 const razorpayBaseUrl = "https://api.razorpay.com/v1";
@@ -62,6 +64,11 @@ function withAbsolute(req, path) {
 
 async function flushStore() {
   await store.flush();
+  try {
+    await googleSheetsMirror.syncDiff(store, { reason: "store-flush" });
+  } catch (error) {
+    console.error("Google Sheets incremental sync failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 function serializeWebinar(req, webinar) {
@@ -1197,6 +1204,7 @@ app.get("/health", (_req, res) => {
     service: "llw-api",
     port,
     persistence: store.getPersistenceStatus(),
+    googleSheets: googleSheetsMirror.getStatus(),
   });
 });
 
@@ -1830,6 +1838,28 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
   }
 });
 
+app.post("/api/payment-imports", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can import payment CSVs.");
+  if (!user) return;
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  if (!rows.length) {
+    return res.status(400).json({ ok: false, message: "At least one CSV row is required." });
+  }
+  try {
+    const result = store.importPaymentRows(rows, user);
+    await flushStore();
+    res.status(201).json({
+      ok: true,
+      created_count: result.created.length,
+      error_count: result.errors.length,
+      created: result.created,
+      errors: result.errors,
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to import payments." });
+  }
+});
+
 app.patch("/api/orders/:id/operations", async (req, res) => {
   const user = requireOperationsPermission(req, res);
   if (!user) return;
@@ -2249,6 +2279,36 @@ app.get("/api/settings", (req, res) => {
       liveServers: constants.serverOptions,
     },
   });
+});
+
+app.get("/api/google-sheets/status", (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can view Google Sheets sync status.");
+  if (!user) return;
+  res.json({ ok: true, googleSheets: googleSheetsMirror.getStatus() });
+});
+
+app.post("/api/google-sheets/sync", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can sync Google Sheets.");
+  if (!user) return;
+
+  try {
+    const result = await googleSheetsMirror.syncFull(store, {
+      reason: String(req.body?.reason || "manual-admin-sync").trim() || "manual-admin-sync",
+      force: Boolean(req.body?.force),
+    });
+
+    res.json({
+      ok: true,
+      result,
+      googleSheets: googleSheetsMirror.getStatus(),
+    });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      message: error instanceof Error ? error.message : "Google Sheets sync failed.",
+      googleSheets: googleSheetsMirror.getStatus(),
+    });
+  }
 });
 
 app.patch("/api/settings/notifications", (req, res) => {
@@ -2680,6 +2740,12 @@ if (existsSync(distPath)) {
   app.get(/^(?!\/api|\/health|\/socket\.io).*/, (req, res) => {
     res.sendFile(join(distPath, "index.html"));
   });
+}
+
+try {
+  await googleSheetsMirror.initialize(store);
+} catch (error) {
+  console.error("Google Sheets startup sync failed:", error instanceof Error ? error.message : error);
 }
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
