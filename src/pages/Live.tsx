@@ -8,6 +8,7 @@ import brandLogo from "../assets/logo.png";
 import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
+import { ensureRazorpayLoaded, useRazorpayCheckout } from "../lib/razorpay";
 import { navigate } from "../lib/router";
 
 type Webinar = {
@@ -106,12 +107,6 @@ type LiveKitJoinInfo = {
   canPublishVideo?: boolean;
   canShareScreen?: boolean;
 };
-
-declare global {
-  interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => { open: () => void; on?: (event: string, handler: (payload: any) => void) => void };
-  }
-}
 
 type RoomSnapshot = {
   participants: Array<{ socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string }>;
@@ -213,18 +208,6 @@ const defaultMeetingForm = {
   price_inr: 0,
   is_simulation: false,
 };
-
-function useRazorpayScript() {
-  useEffect(() => {
-    const scriptId = "razorpay-checkout-script";
-    if (document.getElementById(scriptId)) return;
-    const script = document.createElement("script");
-    script.id = scriptId;
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    document.body.appendChild(script);
-  }, []);
-}
 
 function getStoredAuthToken() {
   try {
@@ -1593,8 +1576,8 @@ function useClassMedia({
 }
 
 function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomName: string }) {
-  useRazorpayScript();
   const { user } = useAuth();
+  const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -1859,6 +1842,11 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     return () => window.clearTimeout(timer);
   }, [linkCopyNotice]);
 
+  useEffect(() => {
+    if (!razorpayLoadError || paymentNotice) return;
+    setPaymentNotice(razorpayLoadError);
+  }, [paymentNotice, razorpayLoadError]);
+
   function submitJoin() {
     if (role === "HOST" && !canHostRoom) {
       setPaymentNotice("Sign in as an admin or super-admin account to join as host.");
@@ -1882,24 +1870,27 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
       await api(`/api/attendance/${connection.attendanceId}/enroll-click`, { method: "POST" });
 
-      const created = await api<{ order: { id: string; status?: string } }>("/api/public/webinar-enrollments", {
-        method: "POST",
-        body: JSON.stringify({
-          attendance_id: connection.attendanceId,
-          webinar_id: connection.webinar.id,
-          amount_inr: getActiveEnrollAmountInPaise(),
-          original_product_value_inr: Number(connection.webinar.price_inr || getActiveEnrollAmountInPaise()),
-          payment_type: connection.webinar.payment_mode === "TOKEN" ? "TOKEN" : "FULL",
-          payment_mode: connection.webinar.payment_mode === "TOKEN" ? "TOKEN" : "FULL",
-          token_amount: connection.webinar.payment_mode === "TOKEN" ? getActiveEnrollAmountInPaise() : 0,
-          student_name: form.name,
-          phone: form.phone,
-          email: form.email,
-          source: connection.webinar.title,
-          source_type: "WEBINAR",
-          campaign: "webinar-enroll-now",
+      const [created] = await Promise.all([
+        api<{ order: { id: string; status?: string } }>("/api/public/webinar-enrollments", {
+          method: "POST",
+          body: JSON.stringify({
+            attendance_id: connection.attendanceId,
+            webinar_id: connection.webinar.id,
+            amount_inr: getActiveEnrollAmountInPaise(),
+            original_product_value_inr: Number(connection.webinar.price_inr || getActiveEnrollAmountInPaise()),
+            payment_type: connection.webinar.payment_mode === "TOKEN" ? "TOKEN" : "FULL",
+            payment_mode: connection.webinar.payment_mode === "TOKEN" ? "TOKEN" : "FULL",
+            token_amount: connection.webinar.payment_mode === "TOKEN" ? getActiveEnrollAmountInPaise() : 0,
+            student_name: form.name,
+            phone: form.phone,
+            email: form.email,
+            source: connection.webinar.title,
+            source_type: "WEBINAR",
+            campaign: "webinar-enroll-now",
+          }),
         }),
-      });
+        ensureRazorpayLoaded(),
+      ]);
 
       const session = await api<CheckoutResponse>("/api/orders/checkout-session", {
         method: "POST",
@@ -2853,8 +2844,19 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 <div className="text-xs uppercase tracking-[0.18em] text-orange-200">Offer Panel</div>
                 <div className="mt-2 text-lg font-semibold">{formatCurrency((connection.webinar.price_inr || 0) / 100)}</div>
                 <div className="mt-1 text-slate-300">Enroll without leaving this webinar page.</div>
-                <button className="webinar-cta-button mt-4 w-full" type="button" onClick={launchEnrollNow} disabled={paymentLoading || paymentComplete}>
-                  {paymentComplete ? "Payment Completed" : paymentLoading ? "Opening Razorpay..." : "Enroll Now"}
+                <button
+                  className="webinar-cta-button mt-4 w-full"
+                  type="button"
+                  onClick={launchEnrollNow}
+                  disabled={paymentLoading || paymentComplete || !razorpayReady}
+                >
+                  {paymentComplete
+                    ? "Payment Completed"
+                    : paymentLoading
+                      ? "Preparing Secure Checkout..."
+                      : razorpayReady
+                        ? "Enroll Now"
+                        : "Loading Checkout..."}
                 </button>
               </div>
             ) : null}

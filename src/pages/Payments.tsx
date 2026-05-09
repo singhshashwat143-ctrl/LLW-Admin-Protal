@@ -5,6 +5,7 @@ import { api, useApi } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
 import { hasPermission, normalizeRole } from "../lib/permissions";
+import { ensureRazorpayLoaded, useRazorpayCheckout } from "../lib/razorpay";
 import { navigate } from "../lib/router";
 
 type PaymentHistory = {
@@ -786,12 +787,6 @@ export function PaymentsPage() {
   );
 }
 
-declare global {
-  interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => { open: () => void; on?: (event: string, handler: (payload: any) => void) => void };
-  }
-}
-
 export function PaymentCheckoutPage({ id }: { id: string }) {
   const { data, refresh } = useApi<CheckoutResponse>(`/api/orders/${id}`, {});
   const [paid, setPaid] = useState(false);
@@ -799,6 +794,7 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
   const [loading, setLoading] = useState(false);
   const [customerForm, setCustomerForm] = useState({ name: "", phone: "", email: "" });
   const [reconciling, setReconciling] = useState(false);
+  const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
 
   useEffect(() => {
     if (!data.order) return;
@@ -810,16 +806,6 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
       email: data.order.student?.email || "",
     });
   }, [data.order]);
-
-  useEffect(() => {
-    const scriptId = "razorpay-checkout-script";
-    if (document.getElementById(scriptId)) return;
-    const script = document.createElement("script");
-    script.id = scriptId;
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    document.body.appendChild(script);
-  }, []);
 
   async function reconcilePaymentStatus() {
     if (!data.order?.id || !data.payment?.id || reconciling || paid) return false;
@@ -880,16 +866,19 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
       if (data.linkExpired) {
         throw new Error("This payment link has expired. Please ask the team for a fresh link.");
       }
-      const session = await api<CheckoutResponse>("/api/orders/checkout-session", {
-        method: "POST",
-        body: JSON.stringify({
-          payment_id: data.payment?.id || id,
-          order_id: data.order?.id,
-          customer_name: customerForm.name.trim(),
-          phone: customerForm.phone.trim(),
-          email: customerForm.email.trim(),
+      const [session] = await Promise.all([
+        api<CheckoutResponse>("/api/orders/checkout-session", {
+          method: "POST",
+          body: JSON.stringify({
+            payment_id: data.payment?.id || id,
+            order_id: data.order?.id,
+            customer_name: customerForm.name.trim(),
+            phone: customerForm.phone.trim(),
+            email: customerForm.email.trim(),
+          }),
         }),
-      });
+        ensureRazorpayLoaded(),
+      ]);
 
       if (session.already_paid || session.payment?.status === "PAID") {
         setPaid(true);
@@ -1021,6 +1010,12 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
             </div>
           ) : null}
 
+          {!notice && razorpayLoadError ? (
+            <div className="mt-4 rounded-[22px] border border-[rgba(239,68,68,0.18)] bg-[rgba(239,68,68,0.08)] px-5 py-4 text-sm text-[var(--danger)]">
+              {razorpayLoadError}
+            </div>
+          ) : null}
+
           {data.linkExpired ? (
             <div className="mt-4 rounded-[22px] border border-[rgba(239,68,68,0.18)] bg-[rgba(239,68,68,0.08)] px-5 py-4 text-sm text-[var(--danger)]">
               This payment link has expired. Please request a fresh payment link from the LLW team.
@@ -1053,8 +1048,8 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
 
           {!paid ? (
             <div className="mt-6 flex flex-wrap gap-3">
-              <button className="btn-primary" type="button" onClick={payNow} disabled={loading || data.payment?.method !== "RAZORPAY" || data.linkExpired}>
-                {loading ? "Opening Checkout..." : "Pay with Razorpay"}
+              <button className="btn-primary" type="button" onClick={payNow} disabled={loading || !razorpayReady || data.payment?.method !== "RAZORPAY" || data.linkExpired}>
+                {loading ? "Preparing Secure Checkout..." : !razorpayReady ? "Loading Checkout..." : "Pay with Razorpay"}
               </button>
               <button className="btn-secondary" type="button" onClick={() => navigate("/payments")}>Back to Portal</button>
             </div>

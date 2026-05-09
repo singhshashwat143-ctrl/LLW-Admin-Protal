@@ -2171,7 +2171,9 @@ app.post("/api/orders/checkout-session", async (req, res) => {
       });
       store.attachRazorpayOrderToPayment(payment.id, razorpayOrder);
       store.save();
-      await flushStore();
+      void flushStore().catch((flushError) => {
+        console.error("Deferred payment flush failed:", flushError instanceof Error ? flushError.message : flushError);
+      });
     }
 
     res.json({
