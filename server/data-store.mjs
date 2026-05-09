@@ -7,8 +7,12 @@ import { createRuntimePersistence } from "./runtime-persistence.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const dataFile = process.env.DATA_FILE || join(__dirname, "..", "data", "app-data.json");
+const gitTrackedDataFile = join(__dirname, "..", "data", "app-data.json");
 const seedDataFile = join(__dirname, "..", "db", "app-data.seed.json");
 const backupDir = process.env.DATA_BACKUP_DIR || join(dirname(dataFile), "backups");
+const shouldResetTeamFromGitOnStartup = /^(1|true|yes)$/i.test(String(process.env.RESET_TEAM_FROM_GIT_ON_STARTUP || ""));
+const teamResetMarkerFile = process.env.RESET_TEAM_FROM_GIT_MARKER_FILE || join(dirname(dataFile), ".team-reset-from-git.done");
+const teamResetToken = String(process.env.RESET_TEAM_FROM_GIT_TOKEN || "2026-05-09-admin-access-repair").trim() || "2026-05-09-admin-access-repair";
 const runtimePersistence = await createRuntimePersistence();
 const requiredTeamMembers = [
   { name: "Punith Raj S N", email: "punith@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Punith Raj S N Team" },
@@ -292,6 +296,102 @@ function snapshotDataFile() {
     copyFileSync(dataFile, join(backupDir, `app-data.${day}.json`));
   } catch (error) {
     console.error("backup failed", error);
+  }
+}
+
+function hasAppliedGitTeamResetToken() {
+  if (!existsSync(teamResetMarkerFile)) return false;
+  try {
+    return String(readFileSync(teamResetMarkerFile, "utf8") || "").trim() === teamResetToken;
+  } catch {
+    return false;
+  }
+}
+
+function markGitTeamResetApplied() {
+  mkdirSync(dirname(teamResetMarkerFile), { recursive: true });
+  writeFileSync(teamResetMarkerFile, `${teamResetToken}\n`);
+}
+
+function applyGitTrackedTeamReset(snapshot) {
+  if (!shouldResetTeamFromGitOnStartup || hasAppliedGitTeamResetToken()) {
+    return { data: snapshot, changed: false, reason: "", markDone: false };
+  }
+
+  try {
+    const gitTracked = buildPersistentData(JSON.parse(readFileSync(gitTrackedDataFile, "utf8")));
+    const sourceTeam = Array.isArray(gitTracked.team) ? gitTracked.team : [];
+    if (!sourceTeam.length) {
+      return { data: snapshot, changed: false, reason: "", markDone: false };
+    }
+
+    const next = structuredClone(snapshot);
+    const currentTeam = Array.isArray(next.team) ? next.team : [];
+    const currentByEmail = new Map(
+      currentTeam
+        .filter((member) => member?.email)
+        .map((member) => [String(member.email).toLowerCase(), member]),
+    );
+    const currentById = new Map(
+      currentTeam
+        .filter((member) => member?.id)
+        .map((member) => [String(member.id), member]),
+    );
+
+    let changed = false;
+    let restoredCount = 0;
+
+    sourceTeam.forEach((sourceMember) => {
+      const normalizedEmail = String(sourceMember?.email || "").toLowerCase();
+      const existingMember = currentByEmail.get(normalizedEmail) || currentById.get(String(sourceMember?.id || "")) || null;
+      const mergedMember = existingMember
+        ? {
+            ...existingMember,
+            ...sourceMember,
+            avatar_url: sourceMember.avatar_url || existingMember.avatar_url || "",
+            updated_at: new Date().toISOString(),
+          }
+        : structuredClone(sourceMember);
+
+      if (!existingMember) {
+        currentTeam.push(mergedMember);
+        changed = true;
+        restoredCount += 1;
+        return;
+      }
+
+      const existingSerialized = JSON.stringify(existingMember);
+      const mergedSerialized = JSON.stringify(mergedMember);
+      if (existingSerialized !== mergedSerialized) {
+        const index = currentTeam.findIndex((member) => {
+          if (!member) return false;
+          if (existingMember.id && member.id === existingMember.id) return true;
+          return String(member.email || "").toLowerCase() === String(existingMember.email || "").toLowerCase();
+        });
+        if (index >= 0) {
+          currentTeam[index] = mergedMember;
+          changed = true;
+          restoredCount += 1;
+        }
+      }
+    });
+
+    if (changed) {
+      console.log(`[data-store] Restored ${restoredCount} team records from git-tracked data file.`);
+    } else {
+      console.log("[data-store] Team records already matched the git-tracked data file.");
+    }
+
+    next.team = currentTeam;
+    return {
+      data: next,
+      changed,
+      reason: `git-team-reset-${teamResetToken}`,
+      markDone: true,
+    };
+  } catch (error) {
+    console.error("[data-store] One-time git team reset failed:", error instanceof Error ? error.message : error);
+    return { data: snapshot, changed: false, reason: "", markDone: false };
   }
 }
 
@@ -900,10 +1000,20 @@ async function readDataFile() {
     const normalized = buildPersistentData(parsed);
     const loaded = await runtimePersistence.load(normalized);
     const hydrated = buildPersistentData(loaded);
-    const migrated = applyRuntimeDataMigrations(hydrated);
+    const gitReset = applyGitTrackedTeamReset(hydrated);
+    const migrated = applyRuntimeDataMigrations(gitReset.data);
+    const changed = gitReset.changed || migrated.changed;
+    const reason = gitReset.changed && migrated.changed
+      ? `${gitReset.reason}+${migrated.reason}`
+      : gitReset.changed
+        ? gitReset.reason
+        : migrated.reason;
     writeFileSync(dataFile, JSON.stringify(migrated.data, null, 2));
-    if (migrated.changed) {
-      await runtimePersistence.save(migrated.data, migrated.reason);
+    if (changed) {
+      await runtimePersistence.save(migrated.data, reason);
+    }
+    if (gitReset.markDone) {
+      markGitTeamResetApplied();
     }
     return migrated.data;
   } catch {
@@ -911,10 +1021,20 @@ async function readDataFile() {
     writeFileSync(dataFile, JSON.stringify(fallback, null, 2));
     const loaded = await runtimePersistence.load(fallback);
     const hydrated = buildPersistentData(loaded);
-    const migrated = applyRuntimeDataMigrations(hydrated);
+    const gitReset = applyGitTrackedTeamReset(hydrated);
+    const migrated = applyRuntimeDataMigrations(gitReset.data);
+    const changed = gitReset.changed || migrated.changed;
+    const reason = gitReset.changed && migrated.changed
+      ? `${gitReset.reason}+${migrated.reason}`
+      : gitReset.changed
+        ? gitReset.reason
+        : migrated.reason;
     writeFileSync(dataFile, JSON.stringify(migrated.data, null, 2));
-    if (migrated.changed) {
-      await runtimePersistence.save(migrated.data, migrated.reason);
+    if (changed) {
+      await runtimePersistence.save(migrated.data, reason);
+    }
+    if (gitReset.markDone) {
+      markGitTeamResetApplied();
     }
     return migrated.data;
   }
