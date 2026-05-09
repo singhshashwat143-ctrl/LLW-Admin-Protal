@@ -71,6 +71,12 @@ async function flushStore() {
   }
 }
 
+function deferFlushStore(reason) {
+  void flushStore().catch((flushError) => {
+    console.error(`${reason}:`, flushError instanceof Error ? flushError.message : flushError);
+  });
+}
+
 function serializeWebinar(req, webinar) {
   if (!webinar) return null;
   return {
@@ -1686,8 +1692,8 @@ app.post("/api/payment-links", async (req, res) => {
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
+    deferFlushStore("Deferred payment link flush failed");
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
@@ -1709,8 +1715,8 @@ app.post("/api/payment-links", async (req, res) => {
       }
     }
     store.save();
-    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Payment creation failed" });
+    deferFlushStore("Deferred payment link rollback flush failed");
   }
 });
 
@@ -1750,8 +1756,8 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
       email: attendance.email || "",
     });
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
+    deferFlushStore("Deferred webinar enrollment flush failed");
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
@@ -1773,8 +1779,8 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
       }
     }
     store.save();
-    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Payment creation failed" });
+    deferFlushStore("Deferred webinar enrollment rollback flush failed");
   }
 });
 
@@ -1785,8 +1791,8 @@ app.post("/api/enrollments", async (req, res) => {
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
+    deferFlushStore("Deferred enrollment flush failed");
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
@@ -1809,8 +1815,8 @@ app.post("/api/enrollments", async (req, res) => {
       }
       store.save();
     }
-    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Enrollment creation failed" });
+    deferFlushStore("Deferred enrollment rollback flush failed");
   }
 });
 
@@ -1825,16 +1831,16 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
   try {
     created = store.createRecoveryLink(req.params.id, req.body ?? {});
     const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
     res.status(201).json({ ok: true, ...finalized });
+    deferFlushStore("Deferred recovery link flush failed");
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
       store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
       store.save();
     }
-    await flushStore();
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to create recovery link" });
+    deferFlushStore("Deferred recovery link rollback flush failed");
   }
 });
 
