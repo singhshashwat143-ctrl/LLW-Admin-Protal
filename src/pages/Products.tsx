@@ -120,7 +120,6 @@ export function ProductsPage() {
         eyebrow="Products"
         title="Course pricing matrix"
         description="Manage product pricing, batch availability, and product-wise session dates for language and weekday or weekend delivery."
-        description="Manage product pricing, batch availability, and product-wise session dates for language and weekday or weekend delivery."
       />
 
       {notice ? (
@@ -131,7 +130,6 @@ export function ProductsPage() {
 
       <SectionCard
         title="Product Catalog"
-        subtitle={canEditProducts ? "Admins can toggle batches and update the session dates that appear in onboarding for each product." : "Product availability and session dates are read-only for your role."}
         subtitle={canEditProducts ? "Admins can toggle batches and update the session dates that appear in onboarding for each product." : "Product availability and session dates are read-only for your role."}
       >
         <div className="mb-4 flex justify-end">
@@ -217,7 +215,6 @@ export function ProductsPage() {
                           <button
                             className="btn-secondary"
                             type="button"
-                            onClick={() => saveProductDetails(row)}
                             onClick={() => saveProductDetails(row)}
                             disabled={savingProductId === row.id}
                           >

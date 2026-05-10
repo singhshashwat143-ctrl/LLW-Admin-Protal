@@ -2801,7 +2801,6 @@ export async function createDashboardStore() {
       if (!product && !webinar && !bootcamp) {
         throw new Error("Product or class is required");
       }
-      const productSessionDate = normalizeSessionDateValue(input.session_date || input.sessionDate);
       const originalProductValue = Number(
         input.original_product_value_inr
         || product?.discounted_price
