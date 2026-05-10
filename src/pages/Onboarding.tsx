@@ -92,6 +92,14 @@ function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: numbe
   return Math.max(Math.min(capped, amountInr), 0);
 }
 
+function buildDefaultBatchSessionDate(batchKey: string) {
+  const batchKeys = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const today = new Date();
+  const batchIndex = batchKeys.indexOf(batchKey);
+  const monthIndex = batchIndex >= 0 ? batchIndex : today.getMonth();
+  return `${today.getFullYear()}-${String(monthIndex + 1).padStart(2, "0")}-01`;
+}
+
 export function OnboardingPage() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
@@ -189,6 +197,10 @@ export function OnboardingPage() {
     )) ?? null,
     [form.language, form.learning_schedule, selectedProduct],
   );
+  const effectiveSessionDate = useMemo(() => {
+    if (form.batch_month_key) return buildDefaultBatchSessionDate(form.batch_month_key);
+    return selectedSession?.session_date || "";
+  }, [form.batch_month_key, selectedSession]);
 
   useEffect(() => {
     if (!selectedProduct) {
@@ -250,8 +262,8 @@ export function OnboardingPage() {
       setError("Enter a token amount that is lower than the full course value.");
       return;
     }
-    if (!selectedSession?.session_date) {
-      setError("Set the session date for this product, language, and schedule in Products before creating the enrollment.");
+    if (!effectiveSessionDate) {
+      setError("Unable to resolve a batch date for this enrollment.");
       return;
     }
     if ((form.payment_method === "CASH" || form.payment_method === "BANK_TRANSFER") && !form.reference_code.trim()) {
@@ -280,6 +292,7 @@ export function OnboardingPage() {
           product_mode: selectedProduct?.mode || "",
           token_amount: form.payment_type === "TOKEN" ? tokenAmount : 0,
           campaign_source: form.source,
+          session_date: effectiveSessionDate,
           collect_customer_details_on_checkout: false,
         }),
       });
@@ -293,7 +306,7 @@ export function OnboardingPage() {
         productName: selectedProduct?.name || "",
         batchName: selectedBatch?.label || "",
         senderName: user?.role === "ADMIN" || user?.role === "SUPER_ADMIN" ? assignedBda?.name || user?.name || "" : user?.name || "",
-        sessionDate: selectedSession.session_date,
+        sessionDate: effectiveSessionDate,
       });
       setNotice(
         form.payment_method === "RAZORPAY"
@@ -437,6 +450,15 @@ export function OnboardingPage() {
                 <option value="FULL">Full payment</option>
                 <option value="TOKEN">Token payment</option>
               </select>
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-medium text-[var(--text-secondary)]">Session date</span>
+              <input
+                className="input-dark"
+                type="date"
+                value={effectiveSessionDate}
+                readOnly
+              />
             </label>
             <label className="grid gap-2">
               <span className="text-sm font-medium text-[var(--text-secondary)]">Payment method</span>

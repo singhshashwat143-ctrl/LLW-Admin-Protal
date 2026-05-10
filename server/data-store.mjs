@@ -64,9 +64,19 @@ const supportedLearningSchedules = [
   { key: "WEEKEND", label: "Weekend" },
 ];
 const couponResetRevision = 1;
+const productSessionDateDefaultRevision = 1;
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function buildDefaultBatchSessionDate(batchKey = "", referenceValue = nowIso()) {
+  const referenceTimestamp = new Date(referenceValue || nowIso()).getTime();
+  const referenceDate = Number.isFinite(referenceTimestamp) ? new Date(referenceTimestamp) : new Date();
+  const batchIndex = productBatchMonths.findIndex((month) => month.key === batchKey);
+  const monthIndex = batchIndex >= 0 ? batchIndex : referenceDate.getUTCMonth();
+  const year = referenceDate.getUTCFullYear();
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-01`;
 }
 
 function coerceIsoTimestamp(value, fallback = nowIso()) {
@@ -674,7 +684,7 @@ function normalizeProductSessionDates(sessionDates = [], mode = "ONLINE") {
         language,
         learning_schedule: schedule.key,
         label: `${language} • ${schedule.label}`,
-        session_date: existing?.session_date || "",
+        session_date: existing?.session_date || buildDefaultBatchSessionDate("", nowIso()),
       };
     })
   ));
@@ -804,7 +814,7 @@ function normalizeOrderRecord(order, data) {
     manager_name: order.manager_name || order.managerName || "",
     team_name: order.team_name || order.teamName || "",
     product_mode: String(order.product_mode || order.productMode || product?.mode || "").toUpperCase(),
-    session_date: normalizeSessionDateValue(order.session_date || order.sessionDate),
+    session_date: normalizeSessionDateValue(order.session_date || order.sessionDate) || buildDefaultBatchSessionDate(batchKey, order.created_at || order.createdAt || nowIso()),
     batch_month_key: batchKey || "",
     batch_month_label: batchKey ? productBatchMonthByKey.get(batchKey)?.label || batchKey : "",
     access_revocation_requested: Boolean(order.access_revocation_requested ?? order.accessRevocationRequested),
@@ -976,6 +986,7 @@ function buildPersistentData(data) {
 function applyRuntimeDataMigrations(data) {
   const next = buildPersistentData(structuredClone(data));
   const currentRevision = Number(next.settings?.coupon_reset_revision || 0);
+  const currentProductSessionRevision = Number(next.settings?.product_session_date_default_revision || 0);
   let changed = false;
   let reason = "";
 
@@ -988,6 +999,23 @@ function applyRuntimeDataMigrations(data) {
     });
     changed = true;
     reason = `coupon-reset-revision-${couponResetRevision}`;
+  }
+
+  if (currentProductSessionRevision < productSessionDateDefaultRevision) {
+    next.products = (next.products || []).map((product) => ({
+      ...product,
+      session_dates: normalizeProductSessionDates(product?.session_dates || product?.sessionDates, product?.mode || "ONLINE"),
+      updated_at: nowIso(),
+    }));
+    next.settings = normalizeSettings({
+      ...next.settings,
+      product_session_date_default_revision: productSessionDateDefaultRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = reason
+      ? `${reason}+product-session-date-default-revision-${productSessionDateDefaultRevision}`
+      : `product-session-date-default-revision-${productSessionDateDefaultRevision}`;
   }
 
   return { data: next, changed, reason };
@@ -2788,6 +2816,7 @@ export async function createDashboardStore() {
       }
       validateCouponForOrder(store.data, coupon, product, actor);
       const batchMonthKey = normalizeBatchKey(input.batch_month_key || input.batchMonthKey || input.batch || "");
+      const productSessionDate = normalizeSessionDateValue(input.session_date || input.sessionDate) || buildDefaultBatchSessionDate(batchMonthKey, createdAt);
       if (product && batchMonthKey) {
         const selectedBatch = (product.batches || []).find((batch) => batch.key === batchMonthKey) ?? null;
         if (!selectedBatch?.is_active) {
