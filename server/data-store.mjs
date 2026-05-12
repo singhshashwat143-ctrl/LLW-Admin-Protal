@@ -38,6 +38,7 @@ const requiredTeamMembers = [
   { name: "Bibin", email: "bibin@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Abhinav", email: "abhinav@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Dhanush", email: "dhanush@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
+  { name: "Arun", email: "arun@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Vaisakh V S", email: "vaisakh.vs@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Drisya", email: "drisya@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
   { name: "Sravani", email: "sravani@livelongwealth.com", role: "ADMIN", manager_name: "", team_name: "Operations" },
@@ -1002,16 +1003,27 @@ function applyRuntimeDataMigrations(data) {
   }
 
   if (currentProductSessionRevision < productSessionDateDefaultRevision) {
-    next.products = (next.products || []).map((product) => ({
-      ...product,
-      session_dates: normalizeProductSessionDates(product?.session_dates || product?.sessionDates, product?.mode || "ONLINE"),
-      updated_at: nowIso(),
-    }));
+    let productsChanged = false;
+    next.products = (next.products || []).map((product) => {
+      const normalizedSessionDates = normalizeProductSessionDates(product?.session_dates || product?.sessionDates, product?.mode || "ONLINE");
+      const currentSessionDates = Array.isArray(product?.session_dates) ? product.session_dates : [];
+      if (JSON.stringify(currentSessionDates) === JSON.stringify(normalizedSessionDates)) {
+        return product;
+      }
+      productsChanged = true;
+      return {
+        ...product,
+        session_dates: normalizedSessionDates,
+        updated_at: nowIso(),
+      };
+    });
+
     next.settings = normalizeSettings({
       ...next.settings,
       product_session_date_default_revision: productSessionDateDefaultRevision,
       updated_at: nowIso(),
     });
+
     changed = true;
     reason = reason
       ? `${reason}+product-session-date-default-revision-${productSessionDateDefaultRevision}`
@@ -1758,10 +1770,7 @@ function isCouponVisibleForActor(data, coupon = {}, actor = {}) {
   }
 
   if (actorRole === "BDA") {
-    return (
-      ["ADMIN", "SUPER_ADMIN"].includes(ownerRole)
-      || (ownerRole === "BDM" && owner?.name === actorMember?.manager_name)
-    );
+    return ownerRole === "BDM" && owner?.name === actorMember?.manager_name;
   }
 
   return false;
