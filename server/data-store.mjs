@@ -7,12 +7,16 @@ import { createRuntimePersistence } from "./runtime-persistence.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const dataFile = process.env.DATA_FILE || join(__dirname, "..", "data", "app-data.json");
-const gitTrackedDataFile = join(__dirname, "..", "data", "app-data.json");
 const seedDataFile = join(__dirname, "..", "db", "app-data.seed.json");
+const defaultGitTrackedDataFile = join(__dirname, "..", "data", "app-data.json");
+const gitTrackedDataFile = existsSync(defaultGitTrackedDataFile) ? defaultGitTrackedDataFile : seedDataFile;
 const backupDir = process.env.DATA_BACKUP_DIR || join(dirname(dataFile), "backups");
 const shouldResetTeamFromGitOnStartup = /^(1|true|yes)$/i.test(String(process.env.RESET_TEAM_FROM_GIT_ON_STARTUP || ""));
 const teamResetMarkerFile = process.env.RESET_TEAM_FROM_GIT_MARKER_FILE || join(dirname(dataFile), ".team-reset-from-git.done");
 const teamResetToken = String(process.env.RESET_TEAM_FROM_GIT_TOKEN || "2026-05-09-admin-access-repair").trim() || "2026-05-09-admin-access-repair";
+const shouldResetCouponsFromGitOnStartup = /^(1|true|yes)$/i.test(String(process.env.RESET_COUPONS_FROM_GIT_ON_STARTUP || ""));
+const couponResetMarkerFile = process.env.RESET_COUPONS_FROM_GIT_MARKER_FILE || join(dirname(dataFile), ".coupon-reset-from-git.done");
+const gitCouponResetToken = String(process.env.RESET_COUPONS_FROM_GIT_TOKEN || "2026-05-13-price-update-coupons").trim() || "2026-05-13-price-update-coupons";
 const runtimePersistence = await createRuntimePersistence();
 const requiredTeamMembers = [
   { name: "Punith Raj S N", email: "punith@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Punith Raj S N Team" },
@@ -324,6 +328,20 @@ function markGitTeamResetApplied() {
   writeFileSync(teamResetMarkerFile, `${teamResetToken}\n`);
 }
 
+function hasAppliedGitCouponResetToken() {
+  if (!existsSync(couponResetMarkerFile)) return false;
+  try {
+    return String(readFileSync(couponResetMarkerFile, "utf8") || "").trim() === gitCouponResetToken;
+  } catch {
+    return false;
+  }
+}
+
+function markGitCouponResetApplied() {
+  mkdirSync(dirname(couponResetMarkerFile), { recursive: true });
+  writeFileSync(couponResetMarkerFile, `${gitCouponResetToken}\n`);
+}
+
 function applyGitTrackedTeamReset(snapshot) {
   if (!shouldResetTeamFromGitOnStartup || hasAppliedGitTeamResetToken()) {
     return { data: snapshot, changed: false, reason: "", markDone: false };
@@ -402,6 +420,69 @@ function applyGitTrackedTeamReset(snapshot) {
     };
   } catch (error) {
     console.error("[data-store] One-time git team reset failed:", error instanceof Error ? error.message : error);
+    return { data: snapshot, changed: false, reason: "", markDone: false };
+  }
+}
+
+function applyGitTrackedCouponReset(snapshot) {
+  if (!shouldResetCouponsFromGitOnStartup || hasAppliedGitCouponResetToken()) {
+    return { data: snapshot, changed: false, reason: "", markDone: false };
+  }
+
+  try {
+    const gitTracked = buildPersistentData(JSON.parse(readFileSync(gitTrackedDataFile, "utf8")));
+    const sourceCoupons = (Array.isArray(gitTracked.coupons) ? gitTracked.coupons : [])
+      .map(normalizeCoupon)
+      .filter((coupon) => coupon.code);
+    if (!sourceCoupons.length) {
+      return { data: snapshot, changed: false, reason: "", markDone: false };
+    }
+
+    const next = structuredClone(snapshot);
+    const currentCoupons = (Array.isArray(next.coupons) ? next.coupons : [])
+      .map(normalizeCoupon)
+      .filter((coupon) => coupon.code);
+    const currentByCode = new Map(currentCoupons.map((coupon) => [coupon.code, coupon]));
+
+    let changed = false;
+    let syncedCount = 0;
+    const mergedCoupons = sourceCoupons.map((sourceCoupon) => {
+      const existingCoupon = currentByCode.get(sourceCoupon.code);
+      const mergedCoupon = existingCoupon
+        ? normalizeCoupon({
+            ...existingCoupon,
+            ...sourceCoupon,
+            id: existingCoupon.id || sourceCoupon.id,
+            created_at: existingCoupon.created_at || sourceCoupon.created_at,
+            usage_count: Math.max(Number(existingCoupon.usage_count || 0), Number(sourceCoupon.usage_count || 0)),
+            updated_at: nowIso(),
+          })
+        : sourceCoupon;
+
+      if (!existingCoupon || JSON.stringify(existingCoupon) !== JSON.stringify(mergedCoupon)) {
+        changed = true;
+        syncedCount += 1;
+      }
+
+      currentByCode.delete(sourceCoupon.code);
+      return mergedCoupon;
+    });
+
+    next.coupons = [...mergedCoupons, ...currentByCode.values()];
+    if (changed) {
+      console.log(`[data-store] Restored ${syncedCount} coupon records from git-tracked data file.`);
+    } else {
+      console.log("[data-store] Coupons already matched the git-tracked data file.");
+    }
+
+    return {
+      data: next,
+      changed,
+      reason: `git-coupon-reset-${gitCouponResetToken}`,
+      markDone: true,
+    };
+  } catch (error) {
+    console.error("[data-store] One-time git coupon reset failed:", error instanceof Error ? error.message : error);
     return { data: snapshot, changed: false, reason: "", markDone: false };
   }
 }
@@ -1041,19 +1122,19 @@ async function readDataFile() {
     const loaded = await runtimePersistence.load(normalized);
     const hydrated = buildPersistentData(loaded);
     const gitReset = applyGitTrackedTeamReset(hydrated);
-    const migrated = applyRuntimeDataMigrations(gitReset.data);
-    const changed = gitReset.changed || migrated.changed;
-    const reason = gitReset.changed && migrated.changed
-      ? `${gitReset.reason}+${migrated.reason}`
-      : gitReset.changed
-        ? gitReset.reason
-        : migrated.reason;
+    const gitCouponReset = applyGitTrackedCouponReset(gitReset.data);
+    const migrated = applyRuntimeDataMigrations(gitCouponReset.data);
+    const changed = gitReset.changed || gitCouponReset.changed || migrated.changed;
+    const reason = [gitReset.reason, gitCouponReset.reason, migrated.reason].filter(Boolean).join("+");
     writeFileSync(dataFile, JSON.stringify(migrated.data, null, 2));
     if (changed) {
       await runtimePersistence.save(migrated.data, reason);
     }
     if (gitReset.markDone) {
       markGitTeamResetApplied();
+    }
+    if (gitCouponReset.markDone) {
+      markGitCouponResetApplied();
     }
     return migrated.data;
   } catch {
@@ -1062,19 +1143,19 @@ async function readDataFile() {
     const loaded = await runtimePersistence.load(fallback);
     const hydrated = buildPersistentData(loaded);
     const gitReset = applyGitTrackedTeamReset(hydrated);
-    const migrated = applyRuntimeDataMigrations(gitReset.data);
-    const changed = gitReset.changed || migrated.changed;
-    const reason = gitReset.changed && migrated.changed
-      ? `${gitReset.reason}+${migrated.reason}`
-      : gitReset.changed
-        ? gitReset.reason
-        : migrated.reason;
+    const gitCouponReset = applyGitTrackedCouponReset(gitReset.data);
+    const migrated = applyRuntimeDataMigrations(gitCouponReset.data);
+    const changed = gitReset.changed || gitCouponReset.changed || migrated.changed;
+    const reason = [gitReset.reason, gitCouponReset.reason, migrated.reason].filter(Boolean).join("+");
     writeFileSync(dataFile, JSON.stringify(migrated.data, null, 2));
     if (changed) {
       await runtimePersistence.save(migrated.data, reason);
     }
     if (gitReset.markDone) {
       markGitTeamResetApplied();
+    }
+    if (gitCouponReset.markDone) {
+      markGitCouponResetApplied();
     }
     return migrated.data;
   }
@@ -1770,6 +1851,9 @@ function isCouponVisibleForActor(data, coupon = {}, actor = {}) {
   }
 
   if (actorRole === "BDA") {
+    if (["ADMIN", "SUPER_ADMIN"].includes(ownerRole)) {
+      return true;
+    }
     return ownerRole === "BDM" && owner?.name === actorMember?.manager_name;
   }
 

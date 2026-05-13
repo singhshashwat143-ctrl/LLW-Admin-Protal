@@ -239,6 +239,7 @@ function buildRuntimeSnapshotFromSheets() {
     "team",
     "students",
     "products",
+    "coupons",
     "orders",
     "payment_records",
     "due_promises",

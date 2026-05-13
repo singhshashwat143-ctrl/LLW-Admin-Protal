@@ -28,6 +28,7 @@ const collectionIdentitySpecs = {
   team: [["id"], ["email"]],
   students: [["id"], ["email"], ["phone"]],
   products: [["id"], ["slug"], ["name"]],
+  coupons: [["id"], ["code"]],
   orders: [["id"], ["order_number"]],
   payment_records: [["id"], ["transaction_id"], ["reference_code"], ["order_id", "amount_inr", "paid_at"], ["order_id", "amount_inr", "created_at"]],
   due_promises: [["id"], ["order_id"]],

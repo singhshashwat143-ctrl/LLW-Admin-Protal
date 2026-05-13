@@ -59,6 +59,10 @@ services:
         value: true
       - key: RESET_TEAM_FROM_GIT_TOKEN
         value: 2026-05-09-admin-access-repair
+      - key: RESET_COUPONS_FROM_GIT_ON_STARTUP
+        value: true
+      - key: RESET_COUPONS_FROM_GIT_TOKEN
+        value: 2026-05-13-price-update-coupons
 
 databases:
   - name: llw-admin-db
