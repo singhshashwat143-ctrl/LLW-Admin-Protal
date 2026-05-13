@@ -816,7 +816,6 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
     && data.payment?.type === "ENROLLMENT"
     && data.payment?.status !== "PAID"
     && data.payment?.method === "RAZORPAY"
-    && !data.payment?.razorpay_order_id
     && !data.linkExpired,
   );
 

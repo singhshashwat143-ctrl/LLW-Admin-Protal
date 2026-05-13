@@ -1950,9 +1950,6 @@ export async function createDashboardStore() {
       if (payment.method !== "RAZORPAY") {
         throw new Error("Coupons can only be applied to Razorpay payment links.");
       }
-      if (payment.razorpay_order_id) {
-        throw new Error("This payment link is already initialized. Please request a fresh link to use a coupon.");
-      }
       if (String(order.payment_mode || "").toUpperCase() !== "FULL" || String(payment.type || "").toUpperCase() !== "ENROLLMENT") {
         throw new Error("Coupons on the public page are only supported for full enrollment links.");
       }
@@ -1999,6 +1996,9 @@ export async function createDashboardStore() {
       order.updated_at = updatedAt;
 
       payment.amount_inr = productValue;
+      payment.razorpay_order_id = "";
+      payment.razorpay_payment_id = "";
+      payment.razorpay_signature = "";
       payment.updated_at = updatedAt;
 
       coupon.usage_count = Number(coupon.usage_count || 0) + 1;
