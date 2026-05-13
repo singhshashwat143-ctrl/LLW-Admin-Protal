@@ -69,7 +69,22 @@ const supportedLearningSchedules = [
   { key: "WEEKEND", label: "Weekend" },
 ];
 const couponResetRevision = 1;
+const priceUpdateCouponRevision = 1;
 const productSessionDateDefaultRevision = 1;
+const priceUpdateCouponSpecs = [
+  { productName: "Indian Market (Online)", code: "IMO30000", finalPriceInr: 30000, valueInr: 9999 },
+  { productName: "Forex Market (Online)", code: "FMO35000", finalPriceInr: 35000, valueInr: 4999 },
+  { productName: "Indian + Forex CTP (Online)", code: "CTPO50000", finalPriceInr: 50000, valueInr: 9999 },
+  { productName: "Indian + LiveX0 (Online)", code: "ILXO45000", finalPriceInr: 45000, valueInr: 9999 },
+  { productName: "Forex + LiveX0 (Online)", code: "FLXO45000", finalPriceInr: 45000, valueInr: 9999 },
+  { productName: "CTP + LiveX0 (Online)", code: "CLXO55000", finalPriceInr: 55000, valueInr: 14999 },
+  { productName: "Indian Market (Offline)", code: "IMOFF50000", finalPriceInr: 50000, valueInr: 19999 },
+  { productName: "Forex Market (Offline)", code: "FMOFF50000", finalPriceInr: 50000, valueInr: 19999 },
+  { productName: "Indian + Forex CTP (Offline)", code: "CTPOFF80000", finalPriceInr: 80000, valueInr: 59999 },
+  { productName: "Indian + LiveX0 (Offline)", code: "ILXOFF60000", finalPriceInr: 60000, valueInr: 24999 },
+  { productName: "Forex + LiveX0 (Offline)", code: "FLXOFF60000", finalPriceInr: 60000, valueInr: 24999 },
+  { productName: "CTP + LiveX0 (Offline)", code: "CLXOFF85000", finalPriceInr: 85000, valueInr: 84999 },
+];
 
 function nowIso() {
   return new Date().toISOString();
@@ -542,6 +557,7 @@ function normalizeSettings(settings = {}) {
     ...settings,
     bdm_coupon_limit_inr: Number(settings.bdm_coupon_limit_inr ?? settings.bdmCouponLimitInr ?? 1000000),
     coupon_reset_revision: Number(settings.coupon_reset_revision ?? settings.couponResetRevision ?? 0),
+    price_update_coupon_revision: Number(settings.price_update_coupon_revision ?? settings.priceUpdateCouponRevision ?? 0),
     aisensy_payment_link_campaign:
       settings.aisensy_payment_link_campaign
       || settings.aisensyPaymentLinkCampaign
@@ -1065,9 +1081,47 @@ function buildPersistentData(data) {
   };
 }
 
+function buildPriceUpdateCoupons(products = [], currentCoupons = []) {
+  const productByName = new Map((products || []).map((product) => [String(product.name || "").trim(), product]));
+  const couponByCode = new Map((currentCoupons || []).map((coupon) => [String(coupon.code || "").trim().toUpperCase(), coupon]));
+  const createdAt = nowIso();
+
+  return priceUpdateCouponSpecs.flatMap((spec, index) => {
+    const product = productByName.get(spec.productName);
+    if (!product?.id) return [];
+    const existingCoupon = couponByCode.get(spec.code) || null;
+    return [
+      normalizeCoupon({
+        id: existingCoupon?.id || `coupon-price-update-${String(index + 1).padStart(12, "0")}`,
+        code: spec.code,
+        title: `${spec.productName} @ Rs ${spec.finalPriceInr.toLocaleString("en-IN")}`,
+        description: `Auto-seeded price update coupon. Final payable price Rs ${spec.finalPriceInr.toLocaleString("en-IN")}.`,
+        type: "FLAT",
+        value: spec.valueInr * 100,
+        max_discount_inr: null,
+        applicable_product_id: product.id,
+        applies_to: "PRODUCT",
+        is_active: true,
+        usage_frequency: "UNLIMITED",
+        usage_limit_total: null,
+        expires_at: null,
+        created_by: existingCoupon?.created_by || "shashwat@livelongwealth.com",
+        created_by_user_id: existingCoupon?.created_by_user_id || "10000000-0000-0000-0000-000000000001",
+        created_by_name: existingCoupon?.created_by_name || "Shashwat Singh",
+        created_by_email: existingCoupon?.created_by_email || "shashwat@livelongwealth.com",
+        created_by_role: existingCoupon?.created_by_role || "SUPER_ADMIN",
+        created_at: existingCoupon?.created_at || createdAt,
+        updated_at: createdAt,
+        usage_count: Number(existingCoupon?.usage_count || 0),
+      }),
+    ];
+  });
+}
+
 function applyRuntimeDataMigrations(data) {
   const next = buildPersistentData(structuredClone(data));
   const currentRevision = Number(next.settings?.coupon_reset_revision || 0);
+  const currentPriceUpdateCouponRevision = Number(next.settings?.price_update_coupon_revision || 0);
   const currentProductSessionRevision = Number(next.settings?.product_session_date_default_revision || 0);
   let changed = false;
   let reason = "";
@@ -1081,6 +1135,31 @@ function applyRuntimeDataMigrations(data) {
     });
     changed = true;
     reason = `coupon-reset-revision-${couponResetRevision}`;
+  }
+
+  const requiredPriceUpdateCoupons = buildPriceUpdateCoupons(next.products || [], next.coupons || []);
+  const requiredCodes = new Set(requiredPriceUpdateCoupons.map((coupon) => coupon.code));
+  const missingRequiredCoupon = requiredPriceUpdateCoupons.some((coupon) => {
+    const currentCoupon = (next.coupons || []).find((entry) => entry.code === coupon.code);
+    return !currentCoupon
+      || currentCoupon.applicable_product_id !== coupon.applicable_product_id
+      || Number(currentCoupon.value || 0) !== Number(coupon.value || 0)
+      || String(currentCoupon.usage_frequency || "").toUpperCase() !== "UNLIMITED"
+      || currentCoupon.is_active !== true;
+  });
+
+  if (currentPriceUpdateCouponRevision < priceUpdateCouponRevision || missingRequiredCoupon) {
+    const remainingCoupons = (next.coupons || []).filter((coupon) => !requiredCodes.has(coupon.code));
+    next.coupons = [...requiredPriceUpdateCoupons, ...remainingCoupons];
+    next.settings = normalizeSettings({
+      ...next.settings,
+      price_update_coupon_revision: priceUpdateCouponRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = reason
+      ? `${reason}+price-update-coupons-${priceUpdateCouponRevision}`
+      : `price-update-coupons-${priceUpdateCouponRevision}`;
   }
 
   if (currentProductSessionRevision < productSessionDateDefaultRevision) {
