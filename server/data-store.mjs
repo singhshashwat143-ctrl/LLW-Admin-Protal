@@ -1933,6 +1933,83 @@ export async function createDashboardStore() {
     attachOrder(record) {
       return withComputedPayment(record, store.data);
     },
+    applyCouponToPaymentLink(input = {}) {
+      const payment = input.payment_id ? store.getPaymentRecord(input.payment_id) : null;
+      const order = payment
+        ? store.data.orders.find((entry) => entry.id === payment.order_id)
+        : store.data.orders.find((entry) => entry.id === input.order_id || entry.order_number === input.order_number);
+      if (!order) {
+        throw new Error("Order not found");
+      }
+      if (!payment) {
+        throw new Error("Payment record not found");
+      }
+      if (payment.status === "PAID" || ["ACTIVE", "OPERATIONS_IN_PROGRESS"].includes(String(order.status || "").toUpperCase())) {
+        throw new Error("Payment has already been completed for this link.");
+      }
+      if (payment.method !== "RAZORPAY") {
+        throw new Error("Coupons can only be applied to Razorpay payment links.");
+      }
+      if (payment.razorpay_order_id) {
+        throw new Error("This payment link is already initialized. Please request a fresh link to use a coupon.");
+      }
+      if (String(order.payment_mode || "").toUpperCase() !== "FULL" || String(payment.type || "").toUpperCase() !== "ENROLLMENT") {
+        throw new Error("Coupons on the public page are only supported for full enrollment links.");
+      }
+
+      const code = String(input.coupon_code || "").trim().toUpperCase();
+      if (!code) {
+        throw new Error("Coupon code is required");
+      }
+      if (order.coupon_code) {
+        if (String(order.coupon_code).toUpperCase() === code) {
+          return {
+            order: withComputedPayment(order, store.data),
+            payment: store.getPaymentRecord(payment.id),
+          };
+        }
+        throw new Error("A coupon has already been applied to this payment link.");
+      }
+
+      const product = order.product_id ? store.data.products.find((entry) => entry.id === order.product_id) ?? null : null;
+      if (!product) {
+        throw new Error("This payment link is not attached to a coupon-enabled product.");
+      }
+      const coupon = store.getCouponByCode(code, {});
+      if (!coupon) {
+        throw new Error("Coupon code not found");
+      }
+      validateCouponForOrder(store.data, coupon, product, {});
+
+      const originalProductValue = Number(order.original_product_value_inr || product.discounted_price || order.product_value_inr || payment.amount_inr || 0);
+      const productValue = Math.max(originalProductValue - calculateCouponDiscount(coupon, originalProductValue), 0);
+      if (productValue <= 0) {
+        throw new Error("Coupon discount cannot reduce order value to zero");
+      }
+      const discountInr = Math.max(originalProductValue - productValue, 0);
+      const updatedAt = nowIso();
+
+      order.original_product_value_inr = originalProductValue;
+      order.discount_inr = discountInr;
+      order.coupon_id = coupon.id || null;
+      order.coupon_code = coupon.code || "";
+      order.coupon_title = coupon.title || coupon.code || "";
+      order.product_value_inr = productValue;
+      order.amount_inr = productValue;
+      order.updated_at = updatedAt;
+
+      payment.amount_inr = productValue;
+      payment.updated_at = updatedAt;
+
+      coupon.usage_count = Number(coupon.usage_count || 0) + 1;
+      coupon.updated_at = updatedAt;
+
+      store.persist();
+      return {
+        order: withComputedPayment(order, store.data),
+        payment: store.getPaymentRecord(payment.id),
+      };
+    },
     getOrders() {
       return store.data.orders
         .map((order) => withComputedPayment(order, store.data))

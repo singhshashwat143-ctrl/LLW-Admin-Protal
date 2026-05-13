@@ -2193,6 +2193,21 @@ app.post("/api/orders/checkout-session", async (req, res) => {
   }
 });
 
+app.post("/api/orders/apply-coupon", async (req, res) => {
+  try {
+    const result = store.applyCouponToPaymentLink({
+      payment_id: req.body?.payment_id,
+      order_id: req.body?.order_id,
+      order_number: req.body?.order_number,
+      coupon_code: req.body?.coupon_code,
+    });
+    await flushStore();
+    res.json({ ok: true, ...result, linkExpired: result.payment ? isPaymentExpired(result.payment) : false });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to apply coupon." });
+  }
+});
+
 app.get("/api/orders/:id", (req, res) => {
   const payment = store.getPaymentRecord(req.params.id);
   if (payment) {

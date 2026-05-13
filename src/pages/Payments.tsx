@@ -788,10 +788,12 @@ export function PaymentsPage() {
 }
 
 export function PaymentCheckoutPage({ id }: { id: string }) {
-  const { data, refresh } = useApi<CheckoutResponse>(`/api/orders/${id}`, {});
+  const { data, refresh, setData } = useApi<CheckoutResponse>(`/api/orders/${id}`, {});
   const [paid, setPaid] = useState(false);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [applyingCoupon, setApplyingCoupon] = useState(false);
+  const [couponCode, setCouponCode] = useState("");
   const [customerForm, setCustomerForm] = useState({ name: "", phone: "", email: "" });
   const [reconciling, setReconciling] = useState(false);
   const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
@@ -805,7 +807,18 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
       phone: data.order.student?.phone || "",
       email: data.order.student?.email || "",
     });
+    setCouponCode(data.order.coupon_code || "");
   }, [data.order]);
+
+  const canApplyPublicCoupon = Boolean(
+    data.order?.product?.id
+    && data.order?.payment_mode === "FULL"
+    && data.payment?.type === "ENROLLMENT"
+    && data.payment?.status !== "PAID"
+    && data.payment?.method === "RAZORPAY"
+    && !data.payment?.razorpay_order_id
+    && !data.linkExpired,
+  );
 
   async function reconcilePaymentStatus() {
     if (!data.order?.id || !data.payment?.id || reconciling || paid) return false;
@@ -959,6 +972,32 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
     }
   }
 
+  async function applyCoupon() {
+    if (!couponCode.trim()) {
+      setNotice("Enter a coupon code first.");
+      return;
+    }
+    try {
+      setApplyingCoupon(true);
+      setNotice("");
+      const response = await api<CheckoutResponse>("/api/orders/apply-coupon", {
+        method: "POST",
+        body: JSON.stringify({
+          payment_id: data.payment?.id || id,
+          order_id: data.order?.id,
+          coupon_code: couponCode.trim().toUpperCase(),
+        }),
+      });
+      setData(response);
+      setCouponCode(response.order?.coupon_code || couponCode.trim().toUpperCase());
+      setNotice(`Coupon ${response.order?.coupon_code || couponCode.trim().toUpperCase()} applied.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to apply coupon.");
+    } finally {
+      setApplyingCoupon(false);
+    }
+  }
+
   if (!data.order) {
     return <div className="min-h-screen bg-slate-50" />;
   }
@@ -994,6 +1033,7 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
               <div className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Product value</div>
               <div className="mt-2 font-semibold text-[var(--text-strong)]">{formatCurrency((data.order.product_value_inr || 0) / 100)}</div>
               {(data.order.discount_inr || 0) > 0 ? <div className="mt-1 text-sm text-[var(--text-secondary)]">Gross {formatCurrency(((data.order.original_product_value_inr || 0)) / 100)} • Discount {formatCurrency(((data.order.discount_inr || 0)) / 100)}</div> : null}
+              {data.order.coupon_code ? <div className="mt-1 text-sm text-[var(--text-secondary)]">Coupon {data.order.coupon_code}</div> : null}
               <div className="mt-1 text-sm text-[var(--text-secondary)]">Collected so far {formatCurrency((data.order.amount_paid_inr || 0) / 100)}</div>
               {(data.order.refunded_amount_inr || 0) > 0 ? <div className="mt-1 text-sm text-[var(--text-secondary)]">Refunded {formatCurrency(((data.order.refunded_amount_inr || 0)) / 100)} • Net cash {formatCurrency(((data.order.net_cash_in_hand_inr || 0)) / 100)}</div> : null}
             </div>
@@ -1043,6 +1083,21 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
                 onChange={(event) => setCustomerForm((current) => ({ ...current, email: event.target.value }))}
                 placeholder="Email address"
               />
+            </div>
+          ) : null}
+
+          {!paid && canApplyPublicCoupon ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+              <input
+                className="input-dark"
+                value={couponCode}
+                onChange={(event) => setCouponCode(event.target.value.toUpperCase())}
+                placeholder="Enter coupon code"
+                disabled={Boolean(data.order.coupon_code)}
+              />
+              <button className="btn-secondary" type="button" onClick={applyCoupon} disabled={applyingCoupon || Boolean(data.order.coupon_code)}>
+                {data.order.coupon_code ? "Coupon Applied" : applyingCoupon ? "Applying..." : "Apply Coupon"}
+              </button>
             </div>
           ) : null}
 
