@@ -71,6 +71,7 @@ const supportedLearningSchedules = [
 const couponResetRevision = 1;
 const priceUpdateCouponRevision = 1;
 const productSessionDateDefaultRevision = 1;
+const teamIdentityDedupRevision = 1;
 const priceUpdateCouponSpecs = [
   { productName: "Indian Market (Online)", code: "IMO30000", finalPriceInr: 30000, valueInr: 9999 },
   { productName: "Forex Market (Online)", code: "FMO35000", finalPriceInr: 35000, valueInr: 4999 },
@@ -552,12 +553,118 @@ function normalizeTeamMembers(team = []) {
   return normalized;
 }
 
+function getRecordTimestampValue(record = {}) {
+  const updatedAt = new Date(record.updated_at || record.updatedAt || "").getTime();
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const createdAt = new Date(record.created_at || record.createdAt || "").getTime();
+  if (Number.isFinite(createdAt)) return createdAt;
+  return 0;
+}
+
+function pickCanonicalTeamMember(members = [], requiredMember = null) {
+  return [...members].sort((left, right) => {
+    const leftRequiredMatch = requiredMember && left.manager_name === requiredMember.manager_name && left.team_name === requiredMember.team_name ? 1 : 0;
+    const rightRequiredMatch = requiredMember && right.manager_name === requiredMember.manager_name && right.team_name === requiredMember.team_name ? 1 : 0;
+    if (leftRequiredMatch !== rightRequiredMatch) return rightRequiredMatch - leftRequiredMatch;
+
+    const leftActive = left.is_active !== false ? 1 : 0;
+    const rightActive = right.is_active !== false ? 1 : 0;
+    if (leftActive !== rightActive) return rightActive - leftActive;
+
+    const leftAuth = left.auth_provider || left.avatar_url ? 1 : 0;
+    const rightAuth = right.auth_provider || right.avatar_url ? 1 : 0;
+    if (leftAuth !== rightAuth) return rightAuth - leftAuth;
+
+    const timeDiff = getRecordTimestampValue(right) - getRecordTimestampValue(left);
+    if (timeDiff !== 0) return timeDiff;
+
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  })[0] || null;
+}
+
+function dedupeTeamMembersAndReassignOwnership(data) {
+  const next = structuredClone(data);
+  const team = Array.isArray(next.team) ? next.team : [];
+  const membersByEmail = new Map();
+
+  team.forEach((member) => {
+    const email = String(member.email || "").trim().toLowerCase();
+    if (!email) return;
+    const current = membersByEmail.get(email) || [];
+    current.push(member);
+    membersByEmail.set(email, current);
+  });
+
+  const idRemap = new Map();
+  let changed = false;
+
+  const dedupedTeam = [];
+  const seenIds = new Set();
+
+  team.forEach((member) => {
+    const email = String(member.email || "").trim().toLowerCase();
+    if (!email) {
+      if (!seenIds.has(member.id)) {
+        dedupedTeam.push(member);
+        seenIds.add(member.id);
+      }
+      return;
+    }
+
+    const group = membersByEmail.get(email) || [member];
+    const requiredMember = requiredTeamMemberByEmail.get(email) || null;
+    const canonicalMember = pickCanonicalTeamMember(group, requiredMember);
+    if (!canonicalMember) return;
+
+    if (seenIds.has(canonicalMember.id)) return;
+
+    group.forEach((entry) => {
+      if (entry.id && canonicalMember.id && entry.id !== canonicalMember.id) {
+        idRemap.set(entry.id, canonicalMember.id);
+        changed = true;
+      }
+    });
+
+    dedupedTeam.push({
+      ...canonicalMember,
+      name: requiredMember?.name || canonicalMember.name,
+      role: requiredMember?.role || canonicalMember.role,
+      manager_name: requiredMember?.manager_name ?? canonicalMember.manager_name,
+      team_name: requiredMember?.team_name ?? canonicalMember.team_name,
+      updated_at: nowIso(),
+    });
+    seenIds.add(canonicalMember.id);
+
+    if (group.length > 1) {
+      changed = true;
+    }
+  });
+
+  if (idRemap.size) {
+    next.orders = (next.orders || []).map((order) => (
+      idRemap.has(order?.bda_id)
+        ? { ...order, bda_id: idRemap.get(order.bda_id), updated_at: nowIso() }
+        : order
+    ));
+
+    next.students = (next.students || []).map((student) => (
+      idRemap.has(student?.bda_id)
+        ? { ...student, bda_id: idRemap.get(student.bda_id), updated_at: nowIso() }
+        : student
+    ));
+  }
+
+  next.team = normalizeTeamMembers(dedupedTeam);
+  return { data: next, changed };
+}
+
 function normalizeSettings(settings = {}) {
   return {
     ...settings,
     bdm_coupon_limit_inr: Number(settings.bdm_coupon_limit_inr ?? settings.bdmCouponLimitInr ?? 1000000),
     coupon_reset_revision: Number(settings.coupon_reset_revision ?? settings.couponResetRevision ?? 0),
     price_update_coupon_revision: Number(settings.price_update_coupon_revision ?? settings.priceUpdateCouponRevision ?? 0),
+    team_identity_dedup_revision: Number(settings.team_identity_dedup_revision ?? settings.teamIdentityDedupRevision ?? 0),
     aisensy_payment_link_campaign:
       settings.aisensy_payment_link_campaign
       || settings.aisensyPaymentLinkCampaign
@@ -1123,6 +1230,7 @@ function applyRuntimeDataMigrations(data) {
   const currentRevision = Number(next.settings?.coupon_reset_revision || 0);
   const currentPriceUpdateCouponRevision = Number(next.settings?.price_update_coupon_revision || 0);
   const currentProductSessionRevision = Number(next.settings?.product_session_date_default_revision || 0);
+  const currentTeamIdentityDedupRevision = Number(next.settings?.team_identity_dedup_revision || 0);
   let changed = false;
   let reason = "";
 
@@ -1188,6 +1296,25 @@ function applyRuntimeDataMigrations(data) {
     reason = reason
       ? `${reason}+product-session-date-default-revision-${productSessionDateDefaultRevision}`
       : `product-session-date-default-revision-${productSessionDateDefaultRevision}`;
+  }
+
+  if (currentTeamIdentityDedupRevision < teamIdentityDedupRevision) {
+    const deduped = dedupeTeamMembersAndReassignOwnership(next);
+    if (deduped.changed) {
+      next.team = deduped.data.team;
+      next.orders = deduped.data.orders;
+      next.students = deduped.data.students;
+      changed = true;
+    }
+    next.settings = normalizeSettings({
+      ...next.settings,
+      team_identity_dedup_revision: teamIdentityDedupRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = reason
+      ? `${reason}+team-identity-dedup-${teamIdentityDedupRevision}`
+      : `team-identity-dedup-${teamIdentityDedupRevision}`;
   }
 
   return { data: next, changed, reason };
@@ -1270,6 +1397,41 @@ function getOrderPayments(data, orderId) {
   return data.payment_records
     .filter((record) => record.order_id === orderId)
     .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+}
+
+function buildTeamGroups(team = [], allowedRoles = null) {
+  const roleSet = allowedRoles ? new Set(allowedRoles.map((role) => String(role || "").toUpperCase())) : null;
+  const groups = new Map();
+
+  (Array.isArray(team) ? team : []).forEach((member) => {
+    const role = String(member.role || "").toUpperCase();
+    if (roleSet && !roleSet.has(role)) return;
+    const email = String(member.email || "").trim().toLowerCase();
+    const key = email || `id:${member.id || crypto.randomUUID()}`;
+    const current = groups.get(key) || [];
+    current.push(member);
+    groups.set(key, current);
+  });
+
+  return [...groups.values()];
+}
+
+function dedupeTeamCollection(team = [], allowedRoles = null) {
+  return buildTeamGroups(team, allowedRoles)
+    .map((group) => {
+      const email = String(group[0]?.email || "").trim().toLowerCase();
+      const requiredMember = email ? requiredTeamMemberByEmail.get(email) || null : null;
+      const canonicalMember = pickCanonicalTeamMember(group, requiredMember);
+      if (!canonicalMember) return null;
+      return normalizeTeamMembers([{
+        ...canonicalMember,
+        name: requiredMember?.name || canonicalMember.name,
+        role: requiredMember?.role || canonicalMember.role,
+        manager_name: requiredMember?.manager_name ?? canonicalMember.manager_name,
+        team_name: requiredMember?.team_name ?? canonicalMember.team_name,
+      }])[0];
+    })
+    .filter(Boolean);
 }
 
 function getAmountPaid(order, data) {
@@ -1445,30 +1607,41 @@ function buildCashVsValueSeries(orders, paymentRecords, data, days = 30) {
 }
 
 function buildLeaderboard(data) {
-  const bdas = data.team.filter((member) => member.role === "BDA");
+  const bdaGroups = buildTeamGroups(data.team, ["BDA"]);
 
-  return bdas
-    .map((bda) => {
-      const bdaOrders = data.orders.filter((order) => order.bda_id === bda.id);
+  return bdaGroups
+    .map((group) => {
+      const email = String(group[0]?.email || "").trim().toLowerCase();
+      const requiredMember = email ? requiredTeamMemberByEmail.get(email) || null : null;
+      const bda = pickCanonicalTeamMember(group, requiredMember);
+      if (!bda) return null;
+
+      const canonicalBda = normalizeTeamMembers([{
+        ...bda,
+        manager_name: requiredMember?.manager_name ?? bda.manager_name,
+        team_name: requiredMember?.team_name ?? bda.team_name,
+      }])[0];
+      const ownerIds = new Set(group.map((member) => member.id).filter(Boolean));
+      const bdaOrders = data.orders.filter((order) => ownerIds.has(order.bda_id));
       const bdaPayments = data.payment_records.filter((payment) => {
         if (!isPaidStatus(payment.status)) return false;
         const order = data.orders.find((entry) => entry.id === payment.order_id);
-        return order?.bda_id === bda.id;
+        return ownerIds.has(order?.bda_id);
       });
       const recoveryPipeline = data.due_promises
         .filter((promise) => !promise.fulfilled)
-        .filter((promise) => data.orders.find((order) => order.id === promise.order_id)?.bda_id === bda.id)
+        .filter((promise) => ownerIds.has(data.orders.find((order) => order.id === promise.order_id)?.bda_id))
         .reduce((sum, promise) => sum + Number(promise.amount_inr || 0), 0);
       const refundedAmount = getApprovedRefunds(data)
-        .filter((refund) => data.orders.find((order) => order.id === refund.order_id)?.bda_id === bda.id)
+        .filter((refund) => ownerIds.has(data.orders.find((order) => order.id === refund.order_id)?.bda_id))
         .reduce((sum, refund) => sum + Number(refund.amount_inr || 0), 0);
       const grossRevenue = bdaPayments.reduce((sum, payment) => sum + Number(payment.amount_inr || 0), 0);
 
       return {
-        id: bda.id,
-        name: bda.name,
-        email: bda.email,
-        manager_name: bda.manager_name || "",
+        id: canonicalBda.id,
+        name: canonicalBda.name,
+        email: canonicalBda.email,
+        manager_name: canonicalBda.manager_name || "",
         grossRevenue,
         refundedAmount,
         netRevenue: Math.max(grossRevenue - refundedAmount, 0),
@@ -1484,6 +1657,7 @@ function buildLeaderboard(data) {
         customers: new Set(bdaOrders.map((order) => order.student_id).filter(Boolean)).size,
       };
     })
+    .filter(Boolean)
     .sort((left, right) => right.totalRevenue - left.totalRevenue);
 }
 
@@ -2300,11 +2474,12 @@ export async function createDashboardStore() {
     getTeamSummary() {
       const leaderboard = buildLeaderboard(store.data);
       const managers = buildManagerSummary(store.data, leaderboard);
+      const dedupedTeam = dedupeTeamCollection(store.data.team);
       return {
-        team: store.data.team,
-        admins: store.data.team.filter((member) => ["ADMIN", "SUPER_ADMIN", "OPERATIONS"].includes(member.role)),
-        bdas: store.data.team.filter((member) => member.role === "BDA"),
-        salesOwners: store.data.team.filter((member) => ["BDA", "BDM"].includes(member.role)),
+        team: dedupedTeam,
+        admins: dedupeTeamCollection(store.data.team, ["ADMIN", "SUPER_ADMIN", "OPERATIONS"]),
+        bdas: dedupeTeamCollection(store.data.team, ["BDA"]),
+        salesOwners: dedupeTeamCollection(store.data.team, ["BDA", "BDM"]),
         managers,
         leaderboard,
       };
