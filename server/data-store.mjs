@@ -13,7 +13,7 @@ const gitTrackedDataFile = existsSync(defaultGitTrackedDataFile) ? defaultGitTra
 const backupDir = process.env.DATA_BACKUP_DIR || join(dirname(dataFile), "backups");
 const shouldResetTeamFromGitOnStartup = /^(1|true|yes)$/i.test(String(process.env.RESET_TEAM_FROM_GIT_ON_STARTUP || ""));
 const teamResetMarkerFile = process.env.RESET_TEAM_FROM_GIT_MARKER_FILE || join(dirname(dataFile), ".team-reset-from-git.done");
-const teamResetToken = String(process.env.RESET_TEAM_FROM_GIT_TOKEN || "2026-05-09-admin-access-repair").trim() || "2026-05-09-admin-access-repair";
+const teamResetToken = String(process.env.RESET_TEAM_FROM_GIT_TOKEN || "2026-05-19-bda-team-remap").trim() || "2026-05-19-bda-team-remap";
 const shouldResetCouponsFromGitOnStartup = /^(1|true|yes)$/i.test(String(process.env.RESET_COUPONS_FROM_GIT_ON_STARTUP || ""));
 const couponResetMarkerFile = process.env.RESET_COUPONS_FROM_GIT_MARKER_FILE || join(dirname(dataFile), ".coupon-reset-from-git.done");
 const gitCouponResetToken = String(process.env.RESET_COUPONS_FROM_GIT_TOKEN || "2026-05-13-price-update-coupons").trim() || "2026-05-13-price-update-coupons";
@@ -23,17 +23,17 @@ const requiredTeamMembers = [
   { name: "Aman Israr", email: "aman@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Harshitha Gowda", email: "harshitha@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Kavya P P", email: "kavya@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
-  { name: "Sharadhi Bhat", email: "sharadhi@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
+  { name: "Sharadhi Bhat", email: "sharadhi@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Ankit Saxena", email: "ankit@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Ankit Saxena Team" },
   { name: "Arpitha Fernandes", email: "arpitha@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Darshini M D", email: "darshini@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Kashif Abbas", email: "kashif@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Yeswitha Kadiri", email: "yeswitha@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Saravana Kumar", email: "saravana@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Saravana Kumar Team" },
-  { name: "Naresh M", email: "naresh@livelongwealth.com", role: "BDA", manager_name: "Saravana Kumar", team_name: "Saravana Kumar Team" },
-  { name: "Rohan A R", email: "rohan@livelongwealth.com", role: "BDA", manager_name: "Saravana Kumar", team_name: "Saravana Kumar Team" },
+  { name: "Naresh M", email: "naresh@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
+  { name: "Rohan A R", email: "rohan@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Sateesh N S", email: "sateesh@livelongwealth.com", role: "BDA", manager_name: "Saravana Kumar", team_name: "Saravana Kumar Team" },
-  { name: "Shreya Sarvade", email: "shreya@livelongwealth.com", role: "BDA", manager_name: "Saravana Kumar", team_name: "Saravana Kumar Team" },
+  { name: "Shreya Sarvade", email: "shreya@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Akhila", email: "akhila@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Akhila Team" },
   { name: "Adarsh", email: "adarsh@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
   { name: "Aswin", email: "aswin@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },

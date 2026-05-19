@@ -24,7 +24,9 @@ services:
       - key: GOOGLE_SHEETS_WEB_APP_URL
         value: https://script.google.com/macros/s/AKfycbzSnSEociIsfEUnuvysPzrjBsiB8pRQwKMBt2I5yHfx7afBGBWDFH3jfCE1OYD0DbQI/exec
       - key: GOOGLE_SHEETS_SYNC_TIMEOUT_MS
-        value: 20000
+        value: 60000
+      - key: GOOGLE_SHEETS_FAIL_OPEN_ON_LOAD
+        value: true
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET
@@ -32,6 +34,12 @@ services:
       - key: PYMD_API_KEY
         sync: false
       - key: PYMD_DOMAIN
+        sync: false
+      - key: AISSENSY_API_KEY
+        sync: false
+      - key: AISSENSY_PAYMENT_LINK_CAMPAIGN
+        value: payment_link_onboarding_3
+      - key: AISSENSY_WEBHOOK_URL
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
@@ -58,7 +66,7 @@ services:
       - key: RESET_TEAM_FROM_GIT_ON_STARTUP
         value: true
       - key: RESET_TEAM_FROM_GIT_TOKEN
-        value: 2026-05-09-admin-access-repair
+        value: 2026-05-19-bda-team-remap
       - key: RESET_COUPONS_FROM_GIT_ON_STARTUP
         value: true
       - key: RESET_COUPONS_FROM_GIT_TOKEN
