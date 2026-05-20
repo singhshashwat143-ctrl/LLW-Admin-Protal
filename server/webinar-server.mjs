@@ -71,6 +71,12 @@ async function flushStore() {
   }
 }
 
+function queueStoreFlush(context = "Deferred store flush failed") {
+  void flushStore().catch((error) => {
+    console.error(context, error instanceof Error ? error.message : error);
+  });
+}
+
 function serializeWebinar(req, webinar) {
   if (!webinar) return null;
   return {
@@ -321,62 +327,94 @@ function updatePaymentLinkRecord(paymentId, shortUrl) {
   return payment;
 }
 
-async function finalizePaymentCreation(req, created, payload = {}) {
+function queueDeferredPaymentSetup(req, created, payload = {}) {
+  const paymentId = created?.payment?.id;
+  if (!paymentId) return;
+
+  void (async () => {
+    const payment = store.getPaymentRecord(paymentId);
+    if (!payment || payment.method !== "RAZORPAY") {
+      return;
+    }
+
+    const shouldCollectCustomerDetails = Boolean(created.order?.collect_customer_details_on_checkout);
+    let changed = false;
+
+    try {
+      if (!shouldCollectCustomerDetails && !payment.razorpay_order_id) {
+        const student = created.order.student || created.order?.student || {};
+        const razorpayOrder = await createRazorpayOrder(
+          {
+            id: payment.id,
+            order_id: payment.order_id,
+            order_number: created.order.order_number,
+            transaction_id: payment.transaction_id,
+            amount_inr: payment.amount_inr,
+            utm_source: created.order.source || created.order.utm_source,
+          },
+          {
+            student_name: student?.name,
+            phone: student?.phone,
+            email: student?.email,
+            source: created.order.source || created.order.utm_source,
+          },
+        );
+        store.attachRazorpayOrderToPayment(payment.id, razorpayOrder);
+        changed = true;
+      }
+
+      if (pyMdApiKey) {
+        const target = resolveShortenerTarget(req, `/payment/__placeholder__`, true);
+        const external = await createPyMdShortLink({
+          target: target.replace("/__placeholder__", `/${payment.id}`),
+          label: `Payment ${created.order.offer_title || created.order.product?.name || created.order.student?.name || created.order.order_number || payment.id}`,
+          preferredSlug: createEditableAlias(
+            payload?.alias_suffix || payload?.short_alias || payload?.shortAlias,
+            created.order.offer_title || created.order.product?.name || created.order.student?.name || created.order.order_number || "payment",
+          ),
+        });
+        updatePaymentLinkRecord(payment.id, external.short_url);
+        changed = true;
+      }
+
+      if (changed) {
+        store.save();
+        queueStoreFlush("Deferred payment setup flush failed:");
+      }
+    } catch (error) {
+      console.error("Deferred payment setup failed:", error instanceof Error ? error.message : error);
+    }
+  })();
+}
+
+function finalizePaymentCreation(req, created, payload = {}) {
   const payment = store.getPaymentRecord(created.payment.id);
   if (!payment) {
     throw new Error("Payment record not found");
   }
-  const shouldCollectCustomerDetails = Boolean(created.order?.collect_customer_details_on_checkout);
 
   if (payment.method === "RAZORPAY") {
-    if (!shouldCollectCustomerDetails) {
-      const student = created.order.student || created.order?.student || {};
-      const razorpayOrder = await createRazorpayOrder(
-        {
-          id: payment.id,
-          order_id: payment.order_id,
-          order_number: created.order.order_number,
-          transaction_id: payment.transaction_id,
-          amount_inr: payment.amount_inr,
-          utm_source: created.order.source || created.order.utm_source,
-        },
-        {
-          student_name: student?.name,
-          phone: student?.phone,
-          email: student?.email,
-          source: created.order.source || created.order.utm_source,
-        },
-      );
-
-      store.attachRazorpayOrderToPayment(payment.id, razorpayOrder);
-    }
-
-    try {
-      const target = resolveShortenerTarget(req, `/payment/__placeholder__`, true);
-      const external = await createPyMdShortLink({
-        target: target.replace("/__placeholder__", `/${payment.id}`),
-        label: `Payment ${created.order.offer_title || created.order.product?.name || created.order.student?.name || created.order.order_number || payment.id}`,
-        preferredSlug: createEditableAlias(
-          payload?.alias_suffix || payload?.short_alias || payload?.shortAlias,
-          created.order.offer_title || created.order.product?.name || created.order.student?.name || created.order.order_number || "payment",
-        ),
-      });
-      updatePaymentLinkRecord(payment.id, external.short_url);
-    } catch {
-      updatePaymentLinkRecord(payment.id, withAbsolute(req, payment.payment_link || `/payment/${payment.id}`));
-    }
+    // Persist the working local link immediately and warm up external integrations in the background.
+    queueDeferredPaymentSetup(req, created, payload);
   }
 
-  store.refreshOrderState(payment.order_id);
-  store.save();
+  const responsePayment = store.getPaymentRecord(payment.id);
+  const responsePaymentLink = responsePayment?.payment_link
+    ? withAbsolute(req, responsePayment.payment_link)
+    : "";
 
   return {
     order: store.attachOrder(store.data.orders.find((entry) => entry.id === payment.order_id)),
-    payment: store.getPaymentRecord(payment.id),
-    link: payment.payment_link
+    payment: responsePayment
       ? {
-          short_url: store.getPaymentRecord(payment.id)?.payment_link,
-          slug: store.getPaymentRecord(payment.id)?.slug || extractSlugFromLink(store.getPaymentRecord(payment.id)?.payment_link),
+          ...responsePayment,
+          payment_link: responsePaymentLink || responsePayment.payment_link,
+        }
+      : null,
+    link: responsePayment?.payment_link
+      ? {
+          short_url: responsePaymentLink || responsePayment.payment_link,
+          slug: responsePayment.slug || extractSlugFromLink(responsePayment.payment_link),
         }
       : null,
   };
@@ -1689,7 +1727,7 @@ app.post("/api/payment-links", async (req, res) => {
   const wasExistingOrder = Boolean(req.body?.existing_order_id || req.body?.order_id);
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
-    const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    const finalized = finalizePaymentCreation(req, created, req.body ?? {});
     await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
@@ -1753,7 +1791,7 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
       name: attendance.name || "Attendee",
       email: attendance.email || "",
     });
-    const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    const finalized = finalizePaymentCreation(req, created, req.body ?? {});
     await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
@@ -1788,7 +1826,7 @@ app.post("/api/enrollments", async (req, res) => {
   let created;
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
-    const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    const finalized = finalizePaymentCreation(req, created, req.body ?? {});
     await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
@@ -1828,7 +1866,7 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
   let created;
   try {
     created = store.createRecoveryLink(req.params.id, req.body ?? {});
-    const finalized = await finalizePaymentCreation(req, created, req.body ?? {});
+    const finalized = finalizePaymentCreation(req, created, req.body ?? {});
     await flushStore();
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {

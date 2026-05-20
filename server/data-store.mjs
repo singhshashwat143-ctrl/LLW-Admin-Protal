@@ -2506,7 +2506,7 @@ export async function createDashboardStore() {
       webinar.updated_at = nowIso();
       return webinar;
     },
-    createShortLink(input) {
+    createShortLink(input, options = {}) {
       const slug = input.slug ? slugify(input.slug) : createPrettySlug(input.label || input.original_url || "custom-link");
       const record = {
         id: crypto.randomUUID(),
@@ -2518,7 +2518,9 @@ export async function createDashboardStore() {
         created_at: nowIso(),
       };
       store.data.links.unshift(record);
-      store.persist();
+      if (options.persist !== false) {
+        store.persist();
+      }
       return record;
     },
     createWebinar(input) {
@@ -3162,7 +3164,7 @@ export async function createDashboardStore() {
           const link = store.createShortLink({
             label: `Recovery ${existingOrder.order_number}`,
             original_url: `/payment/${payment.id}`,
-          });
+          }, { persist: false });
           payment.payment_link = link.short_url;
           payment.slug = link.slug;
         }
@@ -3337,7 +3339,7 @@ export async function createDashboardStore() {
         const link = store.createShortLink({
           label: collectCustomerDetailsOnCheckout ? `Payment ${product?.name || webinar?.title || bootcamp?.title || order.order_number}` : `Payment ${student.name}`,
           original_url: `/payment/${payment.id}`,
-        });
+        }, { persist: false });
         payment.payment_link = link.short_url;
         payment.slug = link.slug;
       } else {
