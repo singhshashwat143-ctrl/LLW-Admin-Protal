@@ -401,12 +401,6 @@ export async function createGoogleSheetsPrimaryPersistence() {
       syncedAt,
       syncRunId,
     });
-    const changedSheets = force
-      ? Object.keys(nextCollections)
-      : Array.from(new Set(events.map((event) => String(event.__sheet || "")).filter(Boolean)));
-    const changedCollections = Object.fromEntries(
-      changedSheets.map((sheet) => [sheet, nextCollections[sheet] || []]),
-    );
 
     await postPayload({
       type: "runtime_snapshot",
@@ -417,7 +411,8 @@ export async function createGoogleSheetsPrimaryPersistence() {
       reason,
       revision: nextRevision,
       checksum,
-      collections: changedCollections,
+      snapshot: cloned,
+      collections: nextCollections,
       events,
     });
 
