@@ -77,6 +77,32 @@ function queueStoreFlush(context = "Deferred store flush failed") {
   });
 }
 
+async function flushStoreWithResponseBudget({
+  timeoutMs = 1500,
+  context = "Deferred store flush failed",
+} = {}) {
+  let completed = false;
+  const flushPromise = flushStore()
+    .then(() => {
+      completed = true;
+    })
+    .catch((error) => {
+      completed = true;
+      throw error;
+    });
+
+  await Promise.race([
+    flushPromise,
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+
+  if (!completed) {
+    void flushPromise.catch((error) => {
+      console.error(context, error instanceof Error ? error.message : error);
+    });
+  }
+}
+
 function serializeWebinar(req, webinar) {
   if (!webinar) return null;
   return {
@@ -1728,7 +1754,7 @@ app.post("/api/payment-links", async (req, res) => {
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
     const finalized = finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
+    await flushStoreWithResponseBudget({ context: "Deferred payment creation flush failed:" });
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
@@ -1792,7 +1818,7 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
       email: attendance.email || "",
     });
     const finalized = finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
+    await flushStoreWithResponseBudget({ context: "Deferred webinar enrollment flush failed:" });
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
@@ -1827,7 +1853,7 @@ app.post("/api/enrollments", async (req, res) => {
   try {
     created = store.createPaymentLink(req.body ?? {}, user);
     const finalized = finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
+    await flushStoreWithResponseBudget({ context: "Deferred enrollment flush failed:" });
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
@@ -1867,7 +1893,7 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
   try {
     created = store.createRecoveryLink(req.params.id, req.body ?? {});
     const finalized = finalizePaymentCreation(req, created, req.body ?? {});
-    await flushStore();
+    await flushStoreWithResponseBudget({ context: "Deferred recovery-link flush failed:" });
     res.status(201).json({ ok: true, ...finalized });
   } catch (error) {
     if (created?.payment?.id) {
