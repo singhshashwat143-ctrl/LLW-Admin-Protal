@@ -25,14 +25,12 @@ const requiredTeamMembers = [
   { name: "Kavya P P", email: "kavya@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Sharadhi Bhat", email: "sharadhi@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Ankit Saxena", email: "ankit@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Ankit Saxena Team" },
-  { name: "Arpitha Fernandes", email: "arpitha@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Darshini M D", email: "darshini@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Kashif Abbas", email: "kashif@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
-  { name: "Yeswitha Kadiri", email: "yeswitha@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Saravana Kumar", email: "saravana@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Saravana Kumar Team" },
   { name: "Naresh M", email: "naresh@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Rohan A R", email: "rohan@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
-  { name: "Sateesh N S", email: "sateesh@livelongwealth.com", role: "BDA", manager_name: "Saravana Kumar", team_name: "Saravana Kumar Team" },
+  { name: "Sateesh N S", email: "sateesh@livelongwealth.com", role: "BDA", manager_name: "Ankit Saxena", team_name: "Ankit Saxena Team" },
   { name: "Shreya Sarvade", email: "shreya@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Akhila", email: "akhila@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Akhila Team" },
   { name: "Adarsh", email: "adarsh@livelongwealth.com", role: "BDA", manager_name: "Akhila", team_name: "Akhila Team" },
@@ -72,6 +70,12 @@ const couponResetRevision = 1;
 const priceUpdateCouponRevision = 1;
 const productSessionDateDefaultRevision = 1;
 const teamIdentityDedupRevision = 1;
+const teamRosterRevision = 1;
+const teamRosterReassignEmail = "ankit@livelongwealth.com";
+const teamRosterRemovalEmails = [
+  "arpitha@livelongwealth.com",
+  "yeswitha@livelongwealth.com",
+];
 const priceUpdateCouponSpecs = [
   { productName: "Indian Market (Online)", code: "IMO30000", finalPriceInr: 30000, valueInr: 9999 },
   { productName: "Forex Market (Online)", code: "FMO35000", finalPriceInr: 35000, valueInr: 4999 },
@@ -658,6 +662,42 @@ function dedupeTeamMembersAndReassignOwnership(data) {
   return { data: next, changed };
 }
 
+function applyTeamRosterRevision(data) {
+  const next = structuredClone(data);
+  const team = Array.isArray(next.team) ? next.team : [];
+  const removalSet = new Set(teamRosterRemovalEmails.map((email) => String(email).toLowerCase()));
+  const filteredTeam = team.filter((member) => !removalSet.has(String(member?.email || "").toLowerCase()));
+  const normalizedTeam = normalizeTeamMembers(filteredTeam);
+  const targetMember = normalizedTeam.find((member) => String(member?.email || "").toLowerCase() === teamRosterReassignEmail) || null;
+  const removedIds = new Set(
+    team
+      .filter((member) => removalSet.has(String(member?.email || "").toLowerCase()))
+      .map((member) => String(member?.id || ""))
+      .filter(Boolean),
+  );
+
+  let changed = filteredTeam.length !== team.length || JSON.stringify(filteredTeam) !== JSON.stringify(normalizedTeam);
+
+  if (removedIds.size && targetMember?.id) {
+    next.orders = (next.orders || []).map((order) => (
+      removedIds.has(String(order?.bda_id || ""))
+        ? { ...order, bda_id: targetMember.id, updated_at: nowIso() }
+        : order
+    ));
+
+    next.students = (next.students || []).map((student) => (
+      removedIds.has(String(student?.bda_id || ""))
+        ? { ...student, bda_id: targetMember.id, updated_at: nowIso() }
+        : student
+    ));
+
+    changed = true;
+  }
+
+  next.team = normalizedTeam;
+  return { data: next, changed };
+}
+
 function normalizeSettings(settings = {}) {
   return {
     ...settings,
@@ -665,6 +705,7 @@ function normalizeSettings(settings = {}) {
     coupon_reset_revision: Number(settings.coupon_reset_revision ?? settings.couponResetRevision ?? 0),
     price_update_coupon_revision: Number(settings.price_update_coupon_revision ?? settings.priceUpdateCouponRevision ?? 0),
     team_identity_dedup_revision: Number(settings.team_identity_dedup_revision ?? settings.teamIdentityDedupRevision ?? 0),
+    team_roster_revision: Number(settings.team_roster_revision ?? settings.teamRosterRevision ?? 0),
     aisensy_payment_link_campaign:
       settings.aisensy_payment_link_campaign
       || settings.aisensyPaymentLinkCampaign
@@ -1231,6 +1272,7 @@ function applyRuntimeDataMigrations(data) {
   const currentPriceUpdateCouponRevision = Number(next.settings?.price_update_coupon_revision || 0);
   const currentProductSessionRevision = Number(next.settings?.product_session_date_default_revision || 0);
   const currentTeamIdentityDedupRevision = Number(next.settings?.team_identity_dedup_revision || 0);
+  const currentTeamRosterRevision = Number(next.settings?.team_roster_revision || 0);
   let changed = false;
   let reason = "";
 
@@ -1315,6 +1357,25 @@ function applyRuntimeDataMigrations(data) {
     reason = reason
       ? `${reason}+team-identity-dedup-${teamIdentityDedupRevision}`
       : `team-identity-dedup-${teamIdentityDedupRevision}`;
+  }
+
+  if (currentTeamRosterRevision < teamRosterRevision) {
+    const rosterUpdated = applyTeamRosterRevision(next);
+    if (rosterUpdated.changed) {
+      next.team = rosterUpdated.data.team;
+      next.orders = rosterUpdated.data.orders;
+      next.students = rosterUpdated.data.students;
+      changed = true;
+    }
+    next.settings = normalizeSettings({
+      ...next.settings,
+      team_roster_revision: teamRosterRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = reason
+      ? `${reason}+team-roster-revision-${teamRosterRevision}`
+      : `team-roster-revision-${teamRosterRevision}`;
   }
 
   return { data: next, changed, reason };
