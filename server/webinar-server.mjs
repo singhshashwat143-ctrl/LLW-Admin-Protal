@@ -2251,7 +2251,8 @@ app.get("/api/settings", (req, res) => {
   const systemSettings = store.getSystemSettings();
   const sharedSettings = {
     couponPolicy: {
-      bdm_max_coupon_percent: 20,
+      bdm_max_coupon_percent: null,
+      bdm_coupon_cap_enabled: false,
     },
     aisensyPaymentLinkCampaign: systemSettings.aisensy_payment_link_campaign || aisensyPaymentLinkCampaign,
   };

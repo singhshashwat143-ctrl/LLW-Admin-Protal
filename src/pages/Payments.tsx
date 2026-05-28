@@ -127,6 +127,7 @@ const initialPaymentForm = {
   alias_suffix: "",
   reference_code: "",
   coupon_code: "",
+  sale_price: "",
 };
 
 function statusTone(status: string): "green" | "red" | "purple" | "gold" | "blue" | "teal" {
@@ -188,10 +189,27 @@ function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: numbe
   return Math.max(Math.min(capped, amountInr), 0);
 }
 
+function hasFlexiblePaymentLinkAccess(user?: { role?: string | null; email?: string | null; name?: string | null } | null) {
+  const role = normalizeRole(user?.role);
+  if (role === "ADMIN" || role === "SUPER_ADMIN") {
+    return true;
+  }
+
+  const email = String(user?.email || "").trim().toLowerCase();
+  const name = String(user?.name || "").trim().toLowerCase();
+
+  if (email === "admin@livelongwealth.com" || email === "shashwat@livelongwealth.com") {
+    return true;
+  }
+
+  return name.includes("vaishakh") || name.includes("shashwat") || email.includes("vaishakh");
+}
+
 export function PaymentsPage() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
   const canViewProgramOps = role === "ADMIN" || role === "SUPER_ADMIN" || role === "OPERATIONS";
+  const canOverridePricing = hasFlexiblePaymentLinkAccess(user);
   const isRevenueScopedRole = role === "BDA" || role === "BDM";
   const paymentsApi = useApi<{ payments: PaymentRow[] }>("/api/payments", { payments: [] });
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
@@ -235,7 +253,9 @@ export function PaymentsPage() {
 
   const grossOrderValue = Number(selectedProduct?.discounted_price || 0);
   const couponDiscount = calculateCouponDiscount(selectedCoupon, grossOrderValue);
-  const netOrderValue = Math.max(grossOrderValue - couponDiscount, 0);
+  const defaultNetOrderValue = Math.max(grossOrderValue - couponDiscount, 0);
+  const explicitSalePrice = canOverridePricing ? Math.max(Number(paymentForm.sale_price || 0) * 100, 0) : 0;
+  const netOrderValue = explicitSalePrice > 0 ? explicitSalePrice : defaultNetOrderValue;
 
   const filteredPayments = useMemo(() => {
     return paymentsApi.data.payments.filter((row) => {
@@ -285,6 +305,7 @@ export function PaymentsPage() {
           source_type: "MANUAL",
           amount_inr: amount,
           original_product_value_inr: grossOrderValue,
+          product_value_inr: fullAmount,
           token_amount: paymentForm.payment_type === "TOKEN" ? tokenAmount : 0,
           collect_customer_details_on_checkout: paymentForm.payment_method === "RAZORPAY",
         }),
@@ -541,6 +562,17 @@ export function PaymentsPage() {
               </>
             ) : null}
 
+            {canOverridePricing ? (
+              <input
+                className="input-dark"
+                type="number"
+                min="1"
+                value={paymentForm.sale_price}
+                onChange={(event) => setPaymentForm({ ...paymentForm, sale_price: event.target.value })}
+                placeholder="Custom sold value (₹)"
+              />
+            ) : null}
+
             <input className="input-dark" value={paymentForm.alias_suffix} onChange={(event) => setPaymentForm({ ...paymentForm, alias_suffix: event.target.value })} placeholder="Alias suffix" />
             <input
               className="input-dark"
@@ -567,8 +599,9 @@ export function PaymentsPage() {
               <div className="mt-2 flex flex-wrap gap-4 text-[var(--text-secondary)]">
                 <span>Gross {formatCurrency(grossOrderValue / 100)}</span>
                 <span>Discount {formatCurrency(couponDiscount / 100)}</span>
-                <span className="font-medium text-[var(--text-strong)]">Net {formatCurrency(netOrderValue / 100)}</span>
+                <span className="font-medium text-[var(--text-strong)]">Sold {formatCurrency(netOrderValue / 100)}</span>
                 {selectedCoupon ? <span>Coupon {selectedCoupon.code}</span> : null}
+                {canOverridePricing && explicitSalePrice > 0 ? <span>Custom price override</span> : null}
               </div>
             </div>
           ) : null}
