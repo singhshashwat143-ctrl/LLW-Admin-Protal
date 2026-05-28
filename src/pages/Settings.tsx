@@ -66,7 +66,7 @@ export function SettingsPage() {
 
   async function createCoupon() {
     if (!canManageCoupons) {
-      setNotice("Only admins and super admins can create coupons.");
+      setNotice("Only admin, super-admin, and BDM users can create coupons.");
       return;
     }
 
@@ -165,9 +165,9 @@ export function SettingsPage() {
       ) : null}
 
       {canManageCoupons ? (
-        <SectionCard title="Coupon Tools" subtitle="Admin and super-admin users can create any coupon. BDM users can create general or product-specific coupons, but the effective discount cannot go beyond 20% of the product value.">
+        <SectionCard title="Coupon Tools" subtitle="Admin, super-admin, and BDM users can create general or product-specific coupons. Coupon visibility stays role-based in onboarding and payments.">
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 text-sm text-[var(--text-secondary)]">
-            BDM coupon cap: {settings?.couponPolicy?.bdm_max_coupon_percent || 20}% of product value. Coupon visibility is role-based in onboarding and payments.
+            BDM coupon creation is enabled without the earlier product-value cap.
           </div>
 
           <div className="flex flex-wrap gap-3">

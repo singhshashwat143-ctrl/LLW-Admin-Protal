@@ -128,6 +128,7 @@ const initialPaymentForm = {
   alias_suffix: "",
   reference_code: "",
   coupon_code: "",
+  sale_price: "",
 };
 
 function statusTone(status: string): "green" | "red" | "purple" | "gold" | "blue" | "teal" {
@@ -189,6 +190,22 @@ function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: numbe
   return Math.max(Math.min(capped, amountInr), 0);
 }
 
+function hasFlexiblePaymentLinkAccess(user?: { role?: string | null; email?: string | null; name?: string | null } | null) {
+  const role = normalizeRole(user?.role);
+  if (role === "ADMIN" || role === "SUPER_ADMIN") {
+    return true;
+  }
+
+  const email = String(user?.email || "").trim().toLowerCase();
+  const name = String(user?.name || "").trim().toLowerCase();
+
+  if (email === "admin@livelongwealth.com" || email === "shashwat@livelongwealth.com") {
+    return true;
+  }
+
+  return name.includes("vaishakh") || name.includes("shashwat") || email.includes("vaishakh");
+}
+
 export function PaymentsPage() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
@@ -236,7 +253,9 @@ export function PaymentsPage() {
 
   const grossOrderValue = Number(selectedProduct?.discounted_price || 0);
   const couponDiscount = calculateCouponDiscount(selectedCoupon, grossOrderValue);
-  const netOrderValue = Math.max(grossOrderValue - couponDiscount, 0);
+  const defaultNetOrderValue = Math.max(grossOrderValue - couponDiscount, 0);
+  const explicitSalePrice = canOverridePricing ? Math.max(Number(paymentForm.sale_price || 0) * 100, 0) : 0;
+  const netOrderValue = explicitSalePrice > 0 ? explicitSalePrice : defaultNetOrderValue;
 
   const filteredPayments = useMemo(() => {
     return paymentsApi.data.payments.filter((row) => {
@@ -540,6 +559,17 @@ export function PaymentsPage() {
                 <input className="input-dark" type="number" min="1" value={paymentForm.token_amount} onChange={(event) => setPaymentForm({ ...paymentForm, token_amount: event.target.value })} placeholder="Token amount (₹)" />
                 <input className="input-dark" type="date" value={paymentForm.promise_date} onChange={(event) => setPaymentForm({ ...paymentForm, promise_date: event.target.value })} />
               </>
+            ) : null}
+
+            {canOverridePricing ? (
+              <input
+                className="input-dark"
+                type="number"
+                min="1"
+                value={paymentForm.sale_price}
+                onChange={(event) => setPaymentForm({ ...paymentForm, sale_price: event.target.value })}
+                placeholder="Custom sold value (₹)"
+              />
             ) : null}
 
             <input className="input-dark" value={paymentForm.alias_suffix} onChange={(event) => setPaymentForm({ ...paymentForm, alias_suffix: event.target.value })} placeholder="Alias suffix" />

@@ -2128,6 +2128,22 @@ function getActorTeamMember(data, actor = {}) {
   return null;
 }
 
+function hasFlexiblePaymentLinkAccess(actor = {}) {
+  const actorRole = String(actor.role || "").toUpperCase();
+  if (["ADMIN", "SUPER_ADMIN"].includes(actorRole)) {
+    return true;
+  }
+
+  const email = String(actor.email || "").trim().toLowerCase();
+  const name = String(actor.name || "").trim().toLowerCase();
+
+  if (email === "admin@livelongwealth.com" || email === "shashwat@livelongwealth.com") {
+    return true;
+  }
+
+  return name.includes("vaishakh") || name.includes("shashwat") || email.includes("vaishakh");
+}
+
 function getCouponOwnerTeamMember(data, coupon = {}) {
   const byId = coupon.created_by_user_id ? data.team.find((member) => member.id === coupon.created_by_user_id) : null;
   if (byId) return byId;
@@ -2196,16 +2212,6 @@ function validateCouponForOrder(data, coupon, product, actor = {}) {
     throw new Error("You do not have access to use this coupon.");
   }
 
-  const ownerRole = getCouponOwnerRole(data, coupon);
-  const productValue = Number(product?.discounted_price || 0);
-  const discountValue = calculateCouponDiscount(coupon, productValue);
-
-  if (ownerRole === "BDM") {
-    const maxAllowed = Math.round(productValue * 0.2);
-    if (discountValue > maxAllowed) {
-      throw new Error("BDM coupons cannot exceed 20% of the selected product value.");
-    }
-  }
 }
 
 export async function createDashboardStore() {
@@ -3062,23 +3068,6 @@ export async function createDashboardStore() {
             ? 1
             : Math.max(Number(input.usage_limit_total ?? input.usageLimitTotal ?? 0), 1);
       const expiresAt = toEndOfDayIso(input.expires_at || input.expiresAt || input.valid_until || input.validUntil);
-      if (actorRole === "BDM") {
-        if (type === "PERCENT" && value > 20) {
-          throw new Error("BDM coupons cannot exceed 20% of the product value.");
-        }
-        if (applicableProduct) {
-          const maxAllowed = Math.round(Number(applicableProduct.discounted_price || 0) * 0.2);
-          const previewDiscount = calculateCouponDiscount({
-            type,
-            value,
-            max_discount_inr: input.max_discount_inr || input.maxDiscountInr || null,
-            is_active: true,
-          }, Number(applicableProduct.discounted_price || 0));
-          if (previewDiscount > maxAllowed) {
-            throw new Error("BDM coupons cannot exceed 20% of the selected product value.");
-          }
-        }
-      }
 
       const coupon = normalizeCoupon({
         id: crypto.randomUUID(),
@@ -3266,7 +3255,7 @@ export async function createDashboardStore() {
       const webinar = input.webinar_id ? store.data.webinars.find((item) => item.id === input.webinar_id) ?? null : null;
       const bootcamp = input.bootcamp_id ? store.data.bootcamps.find((item) => item.id === input.bootcamp_id) ?? null : null;
       const collectCustomerDetailsOnCheckout = Boolean(input.collect_customer_details_on_checkout);
-      const isAdminOverrideAllowed = ["ADMIN", "SUPER_ADMIN"].includes(actorRole);
+      const isAdminOverrideAllowed = hasFlexiblePaymentLinkAccess(actor);
       const managerName =
         bda?.manager_name
         || (actorRole === "BDM" ? actorTeamMember?.name || actor.name || "" : "")
@@ -3312,7 +3301,7 @@ export async function createDashboardStore() {
       const defaultSoldValue = Math.max(originalProductValue - (coupon ? calculateCouponDiscount(coupon, originalProductValue) : 0), 0);
       const explicitSoldValue = Number(input.product_value_inr ?? input.sale_price_inr ?? 0);
       if (explicitSoldValue > 0 && !isAdminOverrideAllowed && explicitSoldValue !== defaultSoldValue) {
-        throw new Error("Only admin and super-admin users can override the sold price.");
+        throw new Error("You do not have permission to override the sold price.");
       }
       const productValue = explicitSoldValue > 0 ? explicitSoldValue : defaultSoldValue;
       const discountInr = Math.max(originalProductValue - productValue, 0);
