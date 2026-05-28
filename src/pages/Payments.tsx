@@ -210,6 +210,7 @@ export function PaymentsPage() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
   const canViewProgramOps = role === "ADMIN" || role === "SUPER_ADMIN" || role === "OPERATIONS";
+  const canOverridePricing = hasFlexiblePaymentLinkAccess(user);
   const isRevenueScopedRole = role === "BDA" || role === "BDM";
   const paymentsApi = useApi<{ payments: PaymentRow[] }>("/api/payments", { payments: [] });
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
@@ -305,6 +306,7 @@ export function PaymentsPage() {
           source_type: "MANUAL",
           amount_inr: amount,
           original_product_value_inr: grossOrderValue,
+          product_value_inr: fullAmount,
           token_amount: paymentForm.payment_type === "TOKEN" ? tokenAmount : 0,
           collect_customer_details_on_checkout: paymentForm.payment_method === "RAZORPAY",
         }),
