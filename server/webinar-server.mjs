@@ -292,6 +292,78 @@ async function fetchRazorpaySubscription(subscriptionId) {
   });
 }
 
+function buildStoredSubscriptionSnapshot(order, payment, product = null) {
+  const subscriptionId = String(
+    payment?.razorpay_subscription_id
+    || order?.razorpay_subscription_id
+    || order?.subscription_id
+    || "",
+  ).trim();
+  const planId = String(
+    payment?.subscription_plan_id
+    || order?.subscription_plan_id
+    || product?.razorpay_plan_id
+    || "",
+  ).trim();
+  const status = String(payment?.subscription_status || order?.subscription_status || "").trim();
+  const shortUrl = String(payment?.subscription_short_url || "").trim();
+
+  if (!subscriptionId && !planId && !status && !shortUrl) {
+    return null;
+  }
+
+  return {
+    id: subscriptionId,
+    status,
+    short_url: shortUrl,
+    plan_id: planId,
+    current_start: payment?.subscription_current_start ? Math.floor(new Date(payment.subscription_current_start).getTime() / 1000) : undefined,
+    current_end: payment?.subscription_current_end ? Math.floor(new Date(payment.subscription_current_end).getTime() / 1000) : undefined,
+    charge_at: payment?.subscription_charge_at ? Math.floor(new Date(payment.subscription_charge_at).getTime() / 1000) : undefined,
+  };
+}
+
+async function ensureSubscriptionCheckoutRecord(order, payment, attachedOrder, { refreshExisting = false } = {}) {
+  const product = attachedOrder?.product || null;
+  const planId = String(attachedOrder?.subscription_plan_id || product?.razorpay_plan_id || "").trim();
+  if (!planId) {
+    throw new Error("Razorpay plan id is missing for this subscription product.");
+  }
+
+  const totalCount = Math.max(Number(product?.subscription_total_count || 1200) || 1200, 1);
+  let subscription = !refreshExisting ? buildStoredSubscriptionSnapshot(order, payment, product) : null;
+  const existingSubscriptionId = String(payment?.razorpay_subscription_id || "").trim();
+
+  if (existingSubscriptionId && (!subscription?.short_url || refreshExisting)) {
+    try {
+      subscription = await fetchRazorpaySubscription(existingSubscriptionId);
+      store.syncSubscriptionOnPayment(payment.id, subscription);
+    } catch (error) {
+      console.error("Unable to refresh existing Razorpay subscription:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  const existingStatus = String(subscription?.status || payment?.subscription_status || "").toLowerCase();
+  if (!subscription || !String(subscription.id || "").trim() || ["cancelled", "completed", "expired", "halted"].includes(existingStatus)) {
+    subscription = await createRazorpaySubscription({
+      planId,
+      totalCount,
+      quantity: 1,
+      customerNotify: true,
+      notes: {
+        local_order_id: order.id,
+        local_payment_id: payment.id,
+        order_number: order.order_number || "",
+        student_name: attachedOrder?.student?.name || "",
+        phone: attachedOrder?.student?.phone || "",
+      },
+    });
+    store.syncSubscriptionOnPayment(payment.id, subscription);
+  }
+
+  return subscription;
+}
+
 function normalizeAiSensyPhone(phone = "") {
   const digits = String(phone || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -411,6 +483,15 @@ function queueDeferredPaymentSetup(req, created, payload = {}) {
         );
         store.attachRazorpayOrderToPayment(payment.id, razorpayOrder);
         changed = true;
+      }
+
+      if (isSubscriptionLink && !payment.razorpay_subscription_id) {
+        const order = store.data.orders.find((item) => item.id === payment.order_id) ?? null;
+        const attachedOrder = order ? store.attachOrder(order) : null;
+        if (order && attachedOrder && String(attachedOrder.billing_model || "").toUpperCase() === "SUBSCRIPTION") {
+          await ensureSubscriptionCheckoutRecord(order, payment, attachedOrder, { refreshExisting: false });
+          changed = true;
+        }
       }
 
       if (pyMdApiKey) {
@@ -2317,41 +2398,7 @@ app.post("/api/subscriptions/checkout-session", async (req, res) => {
       return res.status(400).json({ ok: false, message: "This product does not use subscription checkout." });
     }
 
-    const product = attachedOrder?.product || null;
-    const planId = String(attachedOrder?.subscription_plan_id || product?.razorpay_plan_id || "").trim();
-    if (!planId) {
-      return res.status(400).json({ ok: false, message: "Razorpay plan id is missing for this subscription product." });
-    }
-
-    const totalCount = Math.max(Number(product?.subscription_total_count || 1200) || 1200, 1);
-    let subscription = null;
-
-    if (payment.razorpay_subscription_id) {
-      try {
-        subscription = await fetchRazorpaySubscription(payment.razorpay_subscription_id);
-        store.syncSubscriptionOnPayment(payment.id, subscription);
-      } catch (error) {
-        console.error("Unable to refresh existing Razorpay subscription:", error instanceof Error ? error.message : error);
-      }
-    }
-
-    const existingStatus = String(subscription?.status || payment.subscription_status || "").toLowerCase();
-    if (!subscription || ["cancelled", "completed", "expired", "halted"].includes(existingStatus)) {
-      subscription = await createRazorpaySubscription({
-        planId,
-        totalCount,
-        quantity: 1,
-        customerNotify: true,
-        notes: {
-          local_order_id: order.id,
-          local_payment_id: payment.id,
-          order_number: order.order_number || "",
-          student_name: attachedOrder?.student?.name || "",
-          phone: attachedOrder?.student?.phone || "",
-        },
-      });
-      store.syncSubscriptionOnPayment(payment.id, subscription);
-    }
+    const subscription = await ensureSubscriptionCheckoutRecord(order, payment, attachedOrder, { refreshExisting: false });
 
     await flushStore();
     return res.json({

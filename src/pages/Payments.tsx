@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, PageHeader, SectionCard, StatCard } from "../components/UI";
 import { PRODUCT_BATCH_OPTIONS } from "../lib/batches";
 import { api, useApi } from "../lib/api";
@@ -1466,10 +1466,13 @@ export function PaymentCheckoutPage({ id }: { id: string }) {
 export function SubscriptionCheckoutPage({ id }: { id: string }) {
   const { data, refresh } = useApi<CheckoutResponse>(`/api/orders/${id}`, {});
   const [subscription, setSubscription] = useState<SubscriptionCheckoutResponse["subscription"]>(null);
+  const [preparedSession, setPreparedSession] = useState<SubscriptionCheckoutResponse | null>(null);
   const [authorised, setAuthorised] = useState(false);
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [preparingSession, setPreparingSession] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  const prepareSessionRef = useRef<Promise<null | SubscriptionCheckoutResponse> | null>(null);
   const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
 
   useEffect(() => {
@@ -1482,6 +1485,60 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
       }));
     }
   }, [data.order, data.payment]);
+
+  useEffect(() => {
+    setPreparedSession(null);
+    prepareSessionRef.current = null;
+  }, [data.order?.id, data.payment?.id]);
+
+  async function prepareSubscriptionSession({ silent = false } = {}) {
+    if (!data.order?.id || !data.payment?.id || data.linkExpired) {
+      return null;
+    }
+    if (preparedSession?.payment?.id === data.payment.id && preparedSession?.order?.id === data.order.id) {
+      return preparedSession;
+    }
+    if (prepareSessionRef.current) {
+      return prepareSessionRef.current;
+    }
+
+    const request = (async () => {
+      setPreparingSession(true);
+      const session = await api<SubscriptionCheckoutResponse>("/api/subscriptions/checkout-session", {
+        method: "POST",
+        body: JSON.stringify({
+          payment_id: data.payment.id,
+          order_id: data.order.id,
+        }),
+      });
+      setPreparedSession(session);
+      if (session.subscription) {
+        setSubscription(session.subscription);
+      }
+      if (session.already_authorized || isSubscriptionAuthorized(session.subscription?.status || data.order?.subscription_status)) {
+        setAuthorised(true);
+      }
+      return session;
+    })();
+
+    prepareSessionRef.current = request;
+    try {
+      return await request;
+    } catch (error) {
+      if (!silent) {
+        throw error;
+      }
+      return null;
+    } finally {
+      prepareSessionRef.current = null;
+      setPreparingSession(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!data.order?.id || !data.payment?.id || authorised || data.linkExpired) return;
+    prepareSubscriptionSession({ silent: true }).catch(() => undefined);
+  }, [authorised, data.linkExpired, data.order?.id, data.payment?.id]);
 
   async function reconcileSubscriptionStatus() {
     if (!data.order?.id || !data.payment?.id || reconciling) return false;
@@ -1540,13 +1597,10 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
         throw new Error("This subscription link has expired. Please ask the team for a fresh link.");
       }
 
-      const session = await api<SubscriptionCheckoutResponse>("/api/subscriptions/checkout-session", {
-        method: "POST",
-        body: JSON.stringify({
-          payment_id: data.payment?.id || id,
-          order_id: data.order?.id,
-        }),
-      });
+      const session = await prepareSubscriptionSession();
+      if (!session) {
+        throw new Error("Unable to prepare Razorpay subscription checkout.");
+      }
 
       if (session.subscription) {
         setSubscription(session.subscription);
@@ -1556,6 +1610,12 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
         setAuthorised(true);
         setNotice("Mandate already active for this subscription.");
         refresh();
+        return;
+      }
+
+      if (session.subscription?.short_url) {
+        setNotice("Opening Razorpay secure mandate page...");
+        window.location.assign(session.subscription.short_url);
         return;
       }
 
@@ -1677,16 +1737,24 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
           ) : null}
 
           <div className="mt-4 rounded-2xl border border-dashed border-[var(--border)] p-4 text-sm text-[var(--text-secondary)]">
-            Razorpay will first collect the card mandate authorization. Future monthly charges are then handled automatically by the subscription schedule tied to this plan.
+            Razorpay will first collect the mandate authorization. Future monthly charges are then handled automatically by the subscription schedule tied to this plan.
           </div>
           <div className="mt-4 rounded-2xl border border-[rgba(59,130,246,0.16)] bg-[rgba(59,130,246,0.08)] p-4 text-sm text-[var(--text-secondary)]">
-            Razorpay shows the subscription QR on desktop Standard Checkout when UPI Autopay is enabled for your account. On mobile, or when the account/app/bank combination does not support that mandate flow, Checkout may show card or eMandate options instead of a QR.
+            This page now prepares the subscription mandate in advance and opens Razorpay's hosted page as soon as it is ready. Razorpay shows the subscription QR on desktop Standard Checkout when UPI Autopay is enabled for your account. On mobile, or when the account/app/bank combination does not support that mandate flow, Checkout may show card or eMandate options instead of a QR.
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
             {!authorised ? (
-              <button className="btn-primary" type="button" onClick={startMandateCheckout} disabled={loading || !razorpayReady || data.linkExpired}>
-                {loading ? "Preparing Mandate Checkout..." : !razorpayReady ? "Loading Checkout..." : "Authorize Monthly Mandate"}
+              <button className="btn-primary" type="button" onClick={startMandateCheckout} disabled={loading || data.linkExpired}>
+                {loading
+                  ? "Opening Razorpay..."
+                  : preparingSession && !preparedSession
+                    ? "Preparing Mandate Link..."
+                    : preparedSession?.subscription?.short_url
+                      ? "Open Razorpay Mandate Page"
+                      : !razorpayReady
+                        ? "Preparing Checkout..."
+                        : "Authorize Monthly Mandate"}
               </button>
             ) : (
               <button className="btn-primary" type="button" onClick={() => reconcileSubscriptionStatus()}>
