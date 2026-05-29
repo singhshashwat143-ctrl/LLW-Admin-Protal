@@ -280,6 +280,20 @@ async function createRazorpaySubscription({ planId, totalCount, quantity = 1, cu
   });
 }
 
+function getSubscriptionMaxTotalCount(interval = "MONTHLY") {
+  const normalizedInterval = String(interval || "MONTHLY").toUpperCase();
+  if (normalizedInterval === "DAILY") return 3650;
+  if (normalizedInterval === "WEEKLY") return 520;
+  if (normalizedInterval === "YEARLY") return 10;
+  return 120;
+}
+
+function clampSubscriptionTotalCount(value, interval = "MONTHLY") {
+  const numericValue = Number(value || 0);
+  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : getSubscriptionMaxTotalCount(interval);
+  return Math.min(Math.max(Math.round(safeValue), 1), getSubscriptionMaxTotalCount(interval));
+}
+
 async function fetchRazorpayOrderPayments(razorpayOrderId) {
   return razorpayRequest(`/orders/${razorpayOrderId}/payments`, {
     method: "GET",
@@ -330,11 +344,13 @@ async function ensureSubscriptionCheckoutRecord(order, payment, attachedOrder, {
     throw new Error("Razorpay plan id is missing for this subscription product.");
   }
 
-  const totalCount = Math.max(Number(product?.subscription_total_count || 1200) || 1200, 1);
+  const subscriptionInterval = String(product?.subscription_interval || attachedOrder?.subscription_interval || "MONTHLY").toUpperCase();
+  const totalCount = clampSubscriptionTotalCount(product?.subscription_total_count || attachedOrder?.subscription_total_count || 0, subscriptionInterval);
   let subscription = !refreshExisting ? buildStoredSubscriptionSnapshot(order, payment, product) : null;
   const existingSubscriptionId = String(payment?.razorpay_subscription_id || "").trim();
+  const localStatus = String(subscription?.status || payment?.subscription_status || "").toLowerCase();
 
-  if (existingSubscriptionId && (!subscription?.short_url || refreshExisting)) {
+  if (existingSubscriptionId && (!subscription?.short_url || refreshExisting || ["created", "pending"].includes(localStatus))) {
     try {
       subscription = await fetchRazorpaySubscription(existingSubscriptionId);
       store.syncSubscriptionOnPayment(payment.id, subscription);
@@ -344,7 +360,9 @@ async function ensureSubscriptionCheckoutRecord(order, payment, attachedOrder, {
   }
 
   const existingStatus = String(subscription?.status || payment?.subscription_status || "").toLowerCase();
-  if (!subscription || !String(subscription.id || "").trim() || ["cancelled", "completed", "expired", "halted"].includes(existingStatus)) {
+  const existingTotalCount = Number(subscription?.total_count || 0);
+  const hasInvalidLifecycle = existingTotalCount > getSubscriptionMaxTotalCount(subscriptionInterval);
+  if (!subscription || !String(subscription.id || "").trim() || hasInvalidLifecycle || ["cancelled", "completed", "expired", "halted"].includes(existingStatus)) {
     subscription = await createRazorpaySubscription({
       planId,
       totalCount,

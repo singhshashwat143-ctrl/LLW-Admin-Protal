@@ -69,7 +69,7 @@ const supportedLearningSchedules = [
 const couponResetRevision = 1;
 const priceUpdateCouponRevision = 1;
 const productSessionDateDefaultRevision = 1;
-const productCatalogRevision = 1;
+const productCatalogRevision = 2;
 const teamIdentityDedupRevision = 1;
 const teamRosterRevision = 1;
 const teamRosterReassignEmail = "ankit@livelongwealth.com";
@@ -98,6 +98,20 @@ function normalizeBillingModel(value = "ONE_TIME") {
   return String(value || "ONE_TIME").toUpperCase() === "SUBSCRIPTION" ? "SUBSCRIPTION" : "ONE_TIME";
 }
 
+function getSubscriptionMaxTotalCount(interval = "MONTHLY") {
+  const normalizedInterval = String(interval || "MONTHLY").toUpperCase();
+  if (normalizedInterval === "DAILY") return 3650;
+  if (normalizedInterval === "WEEKLY") return 520;
+  if (normalizedInterval === "YEARLY") return 10;
+  return 120;
+}
+
+function clampSubscriptionTotalCount(value, interval = "MONTHLY") {
+  const numericValue = Number(value || 0);
+  const safeValue = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : getSubscriptionMaxTotalCount(interval);
+  return Math.min(Math.max(Math.round(safeValue), 1), getSubscriptionMaxTotalCount(interval));
+}
+
 function buildRequiredProductCatalog() {
   return [
     normalizeProductRecord({
@@ -119,7 +133,7 @@ function buildRequiredProductCatalog() {
       billing_model: "SUBSCRIPTION",
       subscription_amount_inr: 199900,
       subscription_interval: "MONTHLY",
-      subscription_total_count: 1200,
+      subscription_total_count: 120,
       requires_batch: false,
       batches: [],
       session_dates: normalizeProductSessionDates([], "ONLINE"),
@@ -985,6 +999,7 @@ function normalizeProductRecord(record, index = 0) {
   const createdAt = record.created_at || record.createdAt || nowIso();
   const mode = String(record.mode || "ONLINE").toUpperCase();
   const billingModel = normalizeBillingModel(record.billing_model || record.billingModel);
+  const subscriptionInterval = String(record.subscription_interval || record.subscriptionInterval || "MONTHLY").toUpperCase();
   return {
     ...record,
     id: record.id || `product-${String(index + 1).padStart(3, "0")}`,
@@ -1003,8 +1018,8 @@ function normalizeProductRecord(record, index = 0) {
     razorpay_plan_id: record.razorpay_plan_id || record.razorpayPlanId || "",
     billing_model: billingModel,
     subscription_amount_inr: Number(record.subscription_amount_inr ?? record.subscriptionAmountInr ?? record.discounted_price ?? record.discountedPrice ?? record.price ?? 0),
-    subscription_interval: String(record.subscription_interval || record.subscriptionInterval || "MONTHLY").toUpperCase(),
-    subscription_total_count: Number(record.subscription_total_count ?? record.subscriptionTotalCount ?? 1200),
+    subscription_interval: subscriptionInterval,
+    subscription_total_count: clampSubscriptionTotalCount(record.subscription_total_count ?? record.subscriptionTotalCount ?? getSubscriptionMaxTotalCount(subscriptionInterval), subscriptionInterval),
     requires_batch: record.requires_batch ?? record.requiresBatch ?? billingModel !== "SUBSCRIPTION",
     is_active: record.is_active ?? record.isActive ?? true,
     batches: normalizeProductBatches(record.batches || record.batch_availability || record.batchAvailability),
