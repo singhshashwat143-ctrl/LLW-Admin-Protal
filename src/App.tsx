@@ -18,6 +18,7 @@ function lazyNamed<M, K extends keyof M>(loader: () => Promise<M>, name: K) {
 const Bootcamps = () => import("./pages/Bootcamps");
 const Live = () => import("./pages/Live");
 const Payments = () => import("./pages/Payments");
+const PublicPayments = () => import("./pages/PublicPayments");
 const Webinars = () => import("./pages/Webinars");
 
 const BootcampLandingPage = lazyNamed(Bootcamps, "BootcampLandingPage");
@@ -35,9 +36,9 @@ const MarketingPage = lazyNamed(() => import("./pages/Marketing"), "MarketingPag
 const OrdersPage = lazyNamed(() => import("./pages/Orders"), "OrdersPage");
 const OperationsPage = lazyNamed(() => import("./pages/Operations"), "OperationsPage");
 const PaymentImportsPage = lazyNamed(() => import("./pages/PaymentImports"), "PaymentImportsPage");
-const PaymentCheckoutPage = lazyNamed(Payments, "PaymentCheckoutPage");
 const PaymentsPage = lazyNamed(Payments, "PaymentsPage");
-const SubscriptionCheckoutPage = lazyNamed(Payments, "SubscriptionCheckoutPage");
+const PaymentCheckoutPage = lazyNamed(PublicPayments, "PaymentCheckoutPage");
+const SubscriptionCheckoutPage = lazyNamed(PublicPayments, "SubscriptionCheckoutPage");
 const SubscriptionPaymentsPage = lazyNamed(Payments, "SubscriptionPaymentsPage");
 const PrivacyPolicyPage = lazyNamed(() => import("./pages/PrivacyPolicy"), "PrivacyPolicyPage");
 const OnboardingPage = lazyNamed(() => import("./pages/Onboarding"), "OnboardingPage");

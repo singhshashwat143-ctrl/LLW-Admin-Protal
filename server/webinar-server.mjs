@@ -3064,6 +3064,9 @@ io.on("connection", (socket) => {
 
 if (existsSync(distPath)) {
   app.use(express.static(distPath));
+  app.get(["/payment/:id", "/subscription/:id", "/privacy-policy"], (req, res) => {
+    res.sendFile(join(distPath, "payment.html"));
+  });
   app.get(/^(?!\/api|\/health|\/socket\.io).*/, (req, res) => {
     res.sendFile(join(distPath, "index.html"));
   });
