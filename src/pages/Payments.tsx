@@ -1613,12 +1613,6 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
         return;
       }
 
-      if (session.subscription?.short_url) {
-        setNotice("Opening Razorpay secure mandate page...");
-        window.location.assign(session.subscription.short_url);
-        return;
-      }
-
       await ensureRazorpayLoaded();
 
       if (!window.Razorpay || !session.subscription?.id || !session.razorpayKeyId) {
@@ -1737,10 +1731,10 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
           ) : null}
 
           <div className="mt-4 rounded-2xl border border-dashed border-[var(--border)] p-4 text-sm text-[var(--text-secondary)]">
-            Razorpay will first collect the mandate authorization. Future monthly charges are then handled automatically by the subscription schedule tied to this plan.
+            Razorpay will open the subscription checkout on this page and collect the mandate authorization here. Future monthly charges are then handled automatically by the subscription schedule tied to this plan.
           </div>
           <div className="mt-4 rounded-2xl border border-[rgba(59,130,246,0.16)] bg-[rgba(59,130,246,0.08)] p-4 text-sm text-[var(--text-secondary)]">
-            This page now prepares the subscription mandate in advance and opens Razorpay's hosted page as soon as it is ready. Razorpay shows the subscription QR on desktop Standard Checkout when UPI Autopay is enabled for your account. On mobile, or when the account/app/bank combination does not support that mandate flow, Checkout may show card or eMandate options instead of a QR.
+            This page prepares the subscription mandate in advance and opens Razorpay Standard Checkout inside your current site. Razorpay's own docs say the QR appears on desktop Standard Checkout for UPI Autopay and is enabled by default there. If QR still does not appear, Razorpay is falling back to card or eMandate for that customer, bank, app, or device combination.
           </div>
 
           <div className="mt-6 flex flex-wrap gap-3">
@@ -1749,12 +1743,10 @@ export function SubscriptionCheckoutPage({ id }: { id: string }) {
                 {loading
                   ? "Opening Razorpay..."
                   : preparingSession && !preparedSession
-                    ? "Preparing Mandate Link..."
-                    : preparedSession?.subscription?.short_url
-                      ? "Open Razorpay Mandate Page"
-                      : !razorpayReady
-                        ? "Preparing Checkout..."
-                        : "Authorize Monthly Mandate"}
+                    ? "Preparing Mandate Checkout..."
+                    : !razorpayReady
+                      ? "Preparing Checkout..."
+                      : "Authorize Monthly Mandate"}
               </button>
             ) : (
               <button className="btn-primary" type="button" onClick={() => reconcileSubscriptionStatus()}>
