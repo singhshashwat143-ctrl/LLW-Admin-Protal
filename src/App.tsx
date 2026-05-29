@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { AccessDenied } from "./components/AccessDenied";
 import { LoginGate } from "./components/LoginGate";
 import { Sidebar } from "./components/Sidebar";
@@ -7,27 +7,54 @@ import { useAuth } from "./lib/auth";
 import { canAccessRoute, getRouteRestrictionCopy, hasPermission } from "./lib/permissions";
 import { navigate, useRoute } from "./lib/router";
 import { persistTheme, resolvePreferredTheme } from "./lib/theme";
-import { BootcampLandingPage, BootcampListPage, BootcampFormPage } from "./pages/Bootcamps";
-import { DashboardPage } from "./pages/Dashboard";
-import { ExportsPage } from "./pages/Exports";
-import { InstructorsPage } from "./pages/Instructors";
-import { LinksPage } from "./pages/Links";
-import { LiveClassesPage, WebinarDetailPage, WebinarAttendPage, WebinarHostPage } from "./pages/Live";
-import { MarketingPage } from "./pages/Marketing";
-import { OrdersPage } from "./pages/Orders";
-import { OperationsPage } from "./pages/Operations";
-import { PaymentImportsPage } from "./pages/PaymentImports";
-import { PaymentCheckoutPage, PaymentsPage, SubscriptionCheckoutPage, SubscriptionPaymentsPage } from "./pages/Payments";
-import { PrivacyPolicyPage } from "./pages/PrivacyPolicy";
-import { OnboardingPage } from "./pages/Onboarding";
-import { ProductsPage } from "./pages/Products";
-import { RefundsPage } from "./pages/Refunds";
-import { SaleStatsPage } from "./pages/SaleStats";
-import { SettingsPage } from "./pages/Settings";
-import { StudentsPage } from "./pages/Students";
-import { TeamPage } from "./pages/Team";
-import { DailyTrackerPage } from "./pages/Tracker";
-import { MasterclassLandingPage, WebinarFormPage, WebinarsPage } from "./pages/Webinars";
+
+// Pages are lazy-loaded so each route ships its own chunk. This keeps the heavy
+// admin code (LiveKit, socket.io, dashboards) out of the customer-facing
+// payment/subscription pages, which otherwise had to download the whole app.
+function lazyNamed<M, K extends keyof M>(loader: () => Promise<M>, name: K) {
+  return lazy(() => loader().then((module) => ({ default: module[name] as ComponentType<any> })));
+}
+
+const Bootcamps = () => import("./pages/Bootcamps");
+const Live = () => import("./pages/Live");
+const Payments = () => import("./pages/Payments");
+const Webinars = () => import("./pages/Webinars");
+
+const BootcampLandingPage = lazyNamed(Bootcamps, "BootcampLandingPage");
+const BootcampListPage = lazyNamed(Bootcamps, "BootcampListPage");
+const BootcampFormPage = lazyNamed(Bootcamps, "BootcampFormPage");
+const DashboardPage = lazyNamed(() => import("./pages/Dashboard"), "DashboardPage");
+const ExportsPage = lazyNamed(() => import("./pages/Exports"), "ExportsPage");
+const InstructorsPage = lazyNamed(() => import("./pages/Instructors"), "InstructorsPage");
+const LinksPage = lazyNamed(() => import("./pages/Links"), "LinksPage");
+const LiveClassesPage = lazyNamed(Live, "LiveClassesPage");
+const WebinarDetailPage = lazyNamed(Live, "WebinarDetailPage");
+const WebinarAttendPage = lazyNamed(Live, "WebinarAttendPage");
+const WebinarHostPage = lazyNamed(Live, "WebinarHostPage");
+const MarketingPage = lazyNamed(() => import("./pages/Marketing"), "MarketingPage");
+const OrdersPage = lazyNamed(() => import("./pages/Orders"), "OrdersPage");
+const OperationsPage = lazyNamed(() => import("./pages/Operations"), "OperationsPage");
+const PaymentImportsPage = lazyNamed(() => import("./pages/PaymentImports"), "PaymentImportsPage");
+const PaymentCheckoutPage = lazyNamed(Payments, "PaymentCheckoutPage");
+const PaymentsPage = lazyNamed(Payments, "PaymentsPage");
+const SubscriptionCheckoutPage = lazyNamed(Payments, "SubscriptionCheckoutPage");
+const SubscriptionPaymentsPage = lazyNamed(Payments, "SubscriptionPaymentsPage");
+const PrivacyPolicyPage = lazyNamed(() => import("./pages/PrivacyPolicy"), "PrivacyPolicyPage");
+const OnboardingPage = lazyNamed(() => import("./pages/Onboarding"), "OnboardingPage");
+const ProductsPage = lazyNamed(() => import("./pages/Products"), "ProductsPage");
+const RefundsPage = lazyNamed(() => import("./pages/Refunds"), "RefundsPage");
+const SaleStatsPage = lazyNamed(() => import("./pages/SaleStats"), "SaleStatsPage");
+const SettingsPage = lazyNamed(() => import("./pages/Settings"), "SettingsPage");
+const StudentsPage = lazyNamed(() => import("./pages/Students"), "StudentsPage");
+const TeamPage = lazyNamed(() => import("./pages/Team"), "TeamPage");
+const DailyTrackerPage = lazyNamed(() => import("./pages/Tracker"), "DailyTrackerPage");
+const MasterclassLandingPage = lazyNamed(Webinars, "MasterclassLandingPage");
+const WebinarFormPage = lazyNamed(Webinars, "WebinarFormPage");
+const WebinarsPage = lazyNamed(Webinars, "WebinarsPage");
+
+function RouteFallback() {
+  return <div className="min-h-screen bg-[var(--bg-primary)]" />;
+}
 
 function AdminLayout({
   children,
@@ -96,32 +123,34 @@ export default function App() {
     setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"));
   };
 
+  const publicRoute = (node: ReactNode) => <Suspense fallback={<RouteFallback />}>{node}</Suspense>;
+
   if (route.pattern === "/webinar/attend/:roomName") {
-    return <WebinarAttendPage roomName={route.params.roomName} />;
+    return publicRoute(<WebinarAttendPage roomName={route.params.roomName} />);
   }
 
   if (route.pattern === "/webinar/host/:roomName") {
-    return <WebinarHostPage roomName={route.params.roomName} />;
+    return publicRoute(<WebinarHostPage roomName={route.params.roomName} />);
   }
 
   if (route.pattern === "/payment/:id") {
-    return <PaymentCheckoutPage id={route.params.id} />;
+    return publicRoute(<PaymentCheckoutPage id={route.params.id} />);
   }
 
   if (route.pattern === "/subscription/:id") {
-    return <SubscriptionCheckoutPage id={route.params.id} />;
+    return publicRoute(<SubscriptionCheckoutPage id={route.params.id} />);
   }
 
   if (route.pattern === "/privacy-policy") {
-    return <PrivacyPolicyPage />;
+    return publicRoute(<PrivacyPolicyPage />);
   }
 
   if (route.pattern === "/masterclass/:slug") {
-    return <MasterclassLandingPage slug={route.params.slug} />;
+    return publicRoute(<MasterclassLandingPage slug={route.params.slug} />);
   }
 
   if (route.pattern === "/bootcamp/:slug") {
-    return <BootcampLandingPage slug={route.params.slug} />;
+    return publicRoute(<BootcampLandingPage slug={route.params.slug} />);
   }
 
   if (!ready) {
@@ -144,7 +173,7 @@ export default function App() {
     >
       {routeRestriction ? <AccessDenied title={routeRestriction.title} description={routeRestriction.description} /> : null}
       {!routeRestriction && (
-        <>
+        <Suspense fallback={<RouteFallback />}>
           {route.pattern === "/" && <DashboardPage />}
           {route.pattern === "/sales" && <SaleStatsPage />}
           {route.pattern === "/tracker" && <DailyTrackerPage />}
@@ -169,7 +198,7 @@ export default function App() {
           {route.pattern === "/team" && <TeamPage />}
           {route.pattern === "/links" && <LinksPage />}
           {route.pattern === "/settings" && <SettingsPage />}
-        </>
+        </Suspense>
       )}
     </AdminLayout>
   );
