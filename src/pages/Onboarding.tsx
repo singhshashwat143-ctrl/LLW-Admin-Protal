@@ -26,6 +26,10 @@ type ProductRow = {
   name: string;
   mode: string;
   discounted_price: number;
+  billing_model?: "ONE_TIME" | "SUBSCRIPTION";
+  subscription_interval?: string;
+  subscription_amount_inr?: number;
+  requires_batch?: boolean;
   batches: ProductBatch[];
   session_dates: ProductSessionDate[];
 };
@@ -83,6 +87,7 @@ const initialForm = {
   alias_suffix: "",
   reference_code: "",
   coupon_code: "",
+  sale_price: "",
 };
 
 function calculateCouponDiscount(coupon: CouponRow | undefined, amountInr: number) {
@@ -103,6 +108,7 @@ function buildDefaultBatchSessionDate(batchKey: string) {
 export function OnboardingPage() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
+  const canOverridePricing = role === "ADMIN" || role === "SUPER_ADMIN";
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
   const teamApi = useApi<TeamResponse>("/api/team", { bdas: [], salesOwners: [] });
   const couponsApi = useApi<{ coupons: CouponRow[] }>("/api/coupons", { coupons: [] });
@@ -179,6 +185,8 @@ export function OnboardingPage() {
     () => (selectedProduct?.batches || []).filter((batch) => batch.is_active),
     [selectedProduct],
   );
+  const isSubscriptionProduct = selectedProduct?.billing_model === "SUBSCRIPTION";
+  const requiresBatch = selectedProduct?.requires_batch !== false;
   const selectedBatch = useMemo(
     () => availableBatches.find((batch) => batch.key === form.batch_month_key) ?? null,
     [availableBatches, form.batch_month_key],
@@ -216,6 +224,20 @@ export function OnboardingPage() {
   }, [availableBatches, form.batch_month_key, selectedProduct]);
 
   useEffect(() => {
+    if (!isSubscriptionProduct) return;
+    setForm((current) => ({
+      ...current,
+      batch_month_key: "",
+      payment_type: "FULL",
+      payment_method: "RAZORPAY",
+      token_amount: "",
+      promise_date: "",
+      coupon_code: "",
+      sale_price: "",
+    }));
+  }, [isSubscriptionProduct]);
+
+  useEffect(() => {
     if (!availableLanguages.includes(form.language)) {
       updateField("language", availableLanguages[0] || "English");
     }
@@ -228,10 +250,11 @@ export function OnboardingPage() {
   }, [availableSchedules, form.learning_schedule]);
 
   const visibleCoupons = useMemo(() => {
+    if (isSubscriptionProduct) return [];
     return couponsApi.data.coupons.filter((coupon) => (
       coupon.applies_to !== "PRODUCT" || !coupon.applicable_product_id || coupon.applicable_product_id === form.product_id
     ));
-  }, [couponsApi.data.coupons, form.product_id]);
+  }, [couponsApi.data.coupons, form.product_id, isSubscriptionProduct]);
 
   const selectedCoupon = useMemo(() => {
     const code = form.coupon_code.trim().toUpperCase();
@@ -240,10 +263,14 @@ export function OnboardingPage() {
 
   const grossAmount = Number(selectedProduct?.discounted_price || 0);
   const discountAmount = calculateCouponDiscount(selectedCoupon, grossAmount);
-  const fullAmount = Math.max(grossAmount - discountAmount, 0);
+  const defaultSoldAmount = Math.max(grossAmount - discountAmount, 0);
+  const explicitSoldAmount = canOverridePricing ? Math.max(Number(form.sale_price || 0) * 100, 0) : 0;
+  const fullAmount = explicitSoldAmount > 0 ? explicitSoldAmount : defaultSoldAmount;
   const tokenAmount = Number(form.token_amount || 0) * 100;
   const initialCollection = form.payment_type === "TOKEN" ? tokenAmount : fullAmount;
   const dueAmount = Math.max(fullAmount - initialCollection, 0);
+  const summaryCollectionNow = isSubscriptionProduct ? fullAmount : initialCollection;
+  const summaryRemainingDue = isSubscriptionProduct ? fullAmount : dueAmount;
   const assignedBda = useMemo(
     () => teamApi.data.salesOwners.find((entry) => entry.id === form.bda_id) ?? null,
     [form.bda_id, teamApi.data.salesOwners],
@@ -254,11 +281,11 @@ export function OnboardingPage() {
   }
 
   async function handleSubmit() {
-    if (!form.customer_name || !form.phone || !form.product_id || !form.batch_month_key) {
-      setError("Customer name, phone, product, and batch are required.");
+    if (!form.customer_name || !form.phone || !form.product_id || (requiresBatch && !form.batch_month_key)) {
+      setError(`Customer name, phone, product, and ${requiresBatch ? "batch" : "session details"} are required.`);
       return;
     }
-    if (form.payment_type === "TOKEN" && (!tokenAmount || tokenAmount >= fullAmount)) {
+    if (!isSubscriptionProduct && form.payment_type === "TOKEN" && (!tokenAmount || tokenAmount >= fullAmount)) {
       setError("Enter a token amount that is lower than the full course value.");
       return;
     }
@@ -266,7 +293,7 @@ export function OnboardingPage() {
       setError("Unable to resolve a batch date for this enrollment.");
       return;
     }
-    if ((form.payment_method === "CASH" || form.payment_method === "BANK_TRANSFER") && !form.reference_code.trim()) {
+    if (!isSubscriptionProduct && (form.payment_method === "CASH" || form.payment_method === "BANK_TRANSFER") && !form.reference_code.trim()) {
       setError("Add the cash receipt or transfer reference before saving a manual payment.");
       return;
     }
@@ -284,15 +311,15 @@ export function OnboardingPage() {
         method: "POST",
         body: JSON.stringify({
           ...form,
-          coupon_code: form.coupon_code.trim().toUpperCase(),
-          batch_month_key: form.batch_month_key,
-          amount_inr: form.payment_type === "TOKEN" ? tokenAmount : fullAmount,
+          coupon_code: isSubscriptionProduct ? "" : form.coupon_code.trim().toUpperCase(),
+          batch_month_key: requiresBatch ? form.batch_month_key : "",
+          amount_inr: isSubscriptionProduct ? fullAmount : form.payment_type === "TOKEN" ? tokenAmount : fullAmount,
           original_product_value_inr: grossAmount,
-          session_date: selectedSession.session_date,
-          product_mode: selectedProduct?.mode || "",
-          token_amount: form.payment_type === "TOKEN" ? tokenAmount : 0,
+          product_value_inr: fullAmount,
+          token_amount: isSubscriptionProduct ? 0 : form.payment_type === "TOKEN" ? tokenAmount : 0,
           campaign_source: form.source,
           session_date: effectiveSessionDate,
+          product_mode: selectedProduct?.mode || "",
           collect_customer_details_on_checkout: false,
         }),
       });
@@ -309,8 +336,10 @@ export function OnboardingPage() {
         sessionDate: effectiveSessionDate,
       });
       setNotice(
-        form.payment_method === "RAZORPAY"
-          ? "Enrollment created and payment link generated."
+        isSubscriptionProduct
+          ? "Subscription onboarding created and mandate link generated."
+          : form.payment_method === "RAZORPAY"
+            ? "Enrollment created and payment link generated."
           : "Enrollment saved and manual payment recorded.",
       );
       setForm((current) => ({
@@ -366,6 +395,7 @@ export function OnboardingPage() {
         actions={
           <>
             <button className="btn-secondary" type="button" onClick={() => navigate("/tracker")}>Open Tracker</button>
+            <button className="btn-secondary" type="button" onClick={() => navigate("/payments/subscriptions")}>Subscription Tracker</button>
             <button className="btn-primary" type="button" onClick={() => navigate("/payments")}>Payments Board</button>
           </>
         }
@@ -423,51 +453,64 @@ export function OnboardingPage() {
                 <option value="">Select program</option>
                 {productsApi.data.products.map((product) => (
                   <option key={product.id} value={product.id}>
-                    {product.name} • {formatCurrency(product.discounted_price / 100)}
+                    {product.name} • {product.billing_model === "SUBSCRIPTION" ? `${formatCurrency((product.subscription_amount_inr || product.discounted_price) / 100)}/month` : formatCurrency(product.discounted_price / 100)}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Batch</span>
-              <select
-                className="input-dark"
-                value={form.batch_month_key}
-                onChange={(event) => updateField("batch_month_key", event.target.value)}
-                disabled={!selectedProduct || !availableBatches.length}
-              >
-                <option value="">{selectedProduct ? (availableBatches.length ? "Select batch" : "No active batches") : "Select product first"}</option>
-                {availableBatches.map((batch) => (
-                  <option key={batch.key} value={batch.key}>
-                    {batch.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Payment type</span>
-              <select className="input-dark" value={form.payment_type} onChange={(event) => updateField("payment_type", event.target.value)}>
-                <option value="FULL">Full payment</option>
-                <option value="TOKEN">Token payment</option>
-              </select>
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Session date</span>
-              <input
-                className="input-dark"
-                type="date"
-                value={effectiveSessionDate}
-                readOnly
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Payment method</span>
-              <select className="input-dark" value={form.payment_method} onChange={(event) => updateField("payment_method", event.target.value)}>
-                <option value="RAZORPAY">Razorpay</option>
-                <option value="BANK_TRANSFER">Bank transfer</option>
-                <option value="CASH">Cash</option>
-              </select>
-            </label>
+            {requiresBatch ? (
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-[var(--text-secondary)]">Batch</span>
+                <select
+                  className="input-dark"
+                  value={form.batch_month_key}
+                  onChange={(event) => updateField("batch_month_key", event.target.value)}
+                  disabled={!selectedProduct || !availableBatches.length}
+                >
+                  <option value="">{selectedProduct ? (availableBatches.length ? "Select batch" : "No active batches") : "Select product first"}</option>
+                  {availableBatches.map((batch) => (
+                    <option key={batch.key} value={batch.key}>
+                      {batch.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-[var(--text-secondary)]">Billing model</span>
+                <input className="input-dark" value={`${formatCurrency(fullAmount / 100)}/${selectedProduct?.subscription_interval?.toLowerCase() || "month"} mandate`} readOnly />
+              </label>
+            )}
+            {isSubscriptionProduct ? (
+              <>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium text-[var(--text-secondary)]">Payment type</span>
+                  <input className="input-dark" value="Full only" readOnly />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium text-[var(--text-secondary)]">Payment flow</span>
+                  <input className="input-dark" value="Razorpay subscription mandate" readOnly />
+                </label>
+              </>
+            ) : (
+              <>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium text-[var(--text-secondary)]">Payment type</span>
+                  <select className="input-dark" value={form.payment_type} onChange={(event) => updateField("payment_type", event.target.value)}>
+                    <option value="FULL">Full payment</option>
+                    <option value="TOKEN">Token payment</option>
+                  </select>
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium text-[var(--text-secondary)]">Payment method</span>
+                  <select className="input-dark" value={form.payment_method} onChange={(event) => updateField("payment_method", event.target.value)}>
+                    <option value="RAZORPAY">Razorpay</option>
+                    <option value="BANK_TRANSFER">Bank transfer</option>
+                    <option value="CASH">Cash</option>
+                  </select>
+                </label>
+              </>
+            )}
             <label className="grid gap-2">
               <span className="text-sm font-medium text-[var(--text-secondary)]">Schedule preference</span>
               <select className="input-dark" value={form.learning_schedule} onChange={(event) => updateField("learning_schedule", event.target.value)}>
@@ -487,16 +530,16 @@ export function OnboardingPage() {
               </select>
             </label>
             <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Session date</span>
+                <span className="text-sm font-medium text-[var(--text-secondary)]">Session date</span>
               <input
                 className="input-dark"
                 type="date"
-                value={selectedSession?.session_date || ""}
+                value={effectiveSessionDate}
                 readOnly
                 placeholder="Set in Products"
               />
             </label>
-            {form.payment_type === "TOKEN" ? (
+            {form.payment_type === "TOKEN" && !isSubscriptionProduct ? (
               <>
                 <label className="grid gap-2">
                   <span className="text-sm font-medium text-[var(--text-secondary)]">Token amount (₹)</span>
@@ -508,28 +551,40 @@ export function OnboardingPage() {
                 </label>
               </>
             ) : null}
+            {canOverridePricing && !isSubscriptionProduct ? (
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-[var(--text-secondary)]">Custom sold value (₹)</span>
+                <input className="input-dark" type="number" min="1" value={form.sale_price} onChange={(event) => updateField("sale_price", event.target.value)} placeholder="59000" />
+              </label>
+            ) : null}
             <label className="grid gap-2">
               <span className="text-sm font-medium text-[var(--text-secondary)]">Alias suffix</span>
               <input className="input-dark" value={form.alias_suffix} onChange={(event) => updateField("alias_suffix", event.target.value)} placeholder="rahul-apr" />
             </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-[var(--text-secondary)]">Coupon code</span>
-              <input
-                className="input-dark"
-                list="onboarding-coupon-codes"
-                value={form.coupon_code}
-                onChange={(event) => updateField("coupon_code", event.target.value.toUpperCase())}
-                placeholder="Optional coupon"
-              />
-              <datalist id="onboarding-coupon-codes">
-                {visibleCoupons.map((coupon) => (
-                  <option key={coupon.id} value={coupon.code}>
-                    {coupon.title}
-                  </option>
-                ))}
-              </datalist>
-            </label>
-            {(form.payment_method === "CASH" || form.payment_method === "BANK_TRANSFER") ? (
+            {!isSubscriptionProduct ? (
+              <label className="grid gap-2">
+                <span className="text-sm font-medium text-[var(--text-secondary)]">Coupon code</span>
+                <input
+                  className="input-dark"
+                  list="onboarding-coupon-codes"
+                  value={form.coupon_code}
+                  onChange={(event) => updateField("coupon_code", event.target.value.toUpperCase())}
+                  placeholder="Optional coupon"
+                />
+                <datalist id="onboarding-coupon-codes">
+                  {visibleCoupons.map((coupon) => (
+                    <option key={coupon.id} value={coupon.code}>
+                      {coupon.title}
+                    </option>
+                  ))}
+                </datalist>
+              </label>
+            ) : (
+              <div className="rounded-2xl border border-[rgba(79,70,229,0.16)] bg-[rgba(79,70,229,0.06)] px-4 py-3 text-sm text-[var(--text-secondary)]">
+                Platinum uses a fixed 1,999 INR monthly Razorpay mandate. Coupons, token splits, and manual payment capture are disabled for this flow.
+              </div>
+            )}
+            {!isSubscriptionProduct && (form.payment_method === "CASH" || form.payment_method === "BANK_TRANSFER") ? (
               <label className="grid gap-2">
                 <span className="text-sm font-medium text-[var(--text-secondary)]">
                   {form.payment_method === "CASH" ? "Receipt number" : "UTR / transfer reference"}
@@ -541,7 +596,7 @@ export function OnboardingPage() {
 
           <div className="mt-6 flex flex-wrap gap-3">
             <button className="btn-primary" type="button" onClick={handleSubmit} disabled={loading}>
-              {loading ? "Saving..." : form.payment_method === "RAZORPAY" ? "Create Enrollment & Link" : "Create Enrollment & Record Payment"}
+              {loading ? "Saving..." : isSubscriptionProduct ? "Create Subscription Mandate Link" : form.payment_method === "RAZORPAY" ? "Create Enrollment & Link" : "Create Enrollment & Record Payment"}
             </button>
             {result?.paymentLink ? (
               <button className="btn-secondary" type="button" onClick={copyResultLink}>Copy Payment Link</button>
@@ -564,19 +619,22 @@ export function OnboardingPage() {
                   <div>Gross {formatCurrency(grossAmount / 100)}</div>
                   <div>Discount {formatCurrency(discountAmount / 100)}</div>
                   {selectedCoupon ? <div>Coupon {selectedCoupon.code}</div> : null}
+                  {canOverridePricing && explicitSoldAmount > 0 ? <div>Admin price override active</div> : null}
                 </div>
               ) : null}
             </div>
             <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Collection now</p>
-              <p className="mt-2 text-2xl font-semibold text-[var(--text-strong)]">{formatCurrency(initialCollection / 100)}</p>
+              <p className="mt-2 text-2xl font-semibold text-[var(--text-strong)]">{formatCurrency(summaryCollectionNow / 100)}</p>
             </div>
             <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Remaining due</p>
-              <p className="mt-2 text-2xl font-semibold text-[var(--text-strong)]">{formatCurrency(dueAmount / 100)}</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">{isSubscriptionProduct ? "Next recurring cycle" : "Remaining due"}</p>
+              <p className="mt-2 text-2xl font-semibold text-[var(--text-strong)]">{formatCurrency(summaryRemainingDue / 100)}</p>
             </div>
             <div className="rounded-2xl border border-dashed border-[var(--border)] p-4 text-sm text-[var(--text-secondary)]">
-              {form.payment_type === "TOKEN"
+              {isSubscriptionProduct
+                ? "This flow generates a dedicated subscription page and opens Razorpay mandate checkout instead of the standard one-time payment order."
+                : form.payment_type === "TOKEN"
                 ? "A separate remaining-amount link will be generated later from the payment board with its own transaction ID."
                 : "A full-payment order moves straight to operations once the payment is marked or completed."}
             </div>
@@ -592,8 +650,8 @@ export function OnboardingPage() {
                 {result.paymentLink ? <div className="mt-1 break-all text-[var(--text-secondary)]">Link: <span className="text-[var(--accent)]">{result.paymentLink}</span></div> : null}
                 {result.paymentLink ? (
                   <div className="mt-3 rounded-2xl border border-[rgba(201,168,76,0.16)] bg-[rgba(255,255,255,0.03)] p-3 text-xs leading-6 text-[var(--text-secondary)]">
-                    Hi {result.customerName || "Customer"} ji, I am {result.senderName || user?.name || "Livelong Wealth"}. We just got on a call, and as discussed, here is the payment link for your {result.productName || "program"}{result.batchName ? ` ${result.batchName} batch` : ""} enrollment.
-                    Proceed to pay; the window will expire by the end of this day.
+                    Hi {result.customerName || "Customer"} ji, I am {result.senderName || user?.name || "Livelong Wealth"}. We just got on a call, and as discussed, here is the {isSubscriptionProduct ? "subscription mandate link" : "payment link"} for your {result.productName || "program"}{result.batchName ? ` ${result.batchName} batch` : ""} enrollment.
+                    {isSubscriptionProduct ? "Please complete the Razorpay mandate to activate the monthly plan." : "Proceed to pay; the window will expire by the end of this day."}
                     Payment Link: {result.paymentLink}
                   </div>
                 ) : null}

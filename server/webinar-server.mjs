@@ -266,8 +266,28 @@ async function createRazorpayOrder(order, customer = {}) {
   });
 }
 
+async function createRazorpaySubscription({ planId, totalCount, quantity = 1, customerNotify = true, expireBy, notes = {} }) {
+  return razorpayRequest("/subscriptions", {
+    method: "POST",
+    body: JSON.stringify({
+      plan_id: planId,
+      total_count: totalCount,
+      quantity,
+      customer_notify: customerNotify,
+      expire_by: expireBy,
+      notes,
+    }),
+  });
+}
+
 async function fetchRazorpayOrderPayments(razorpayOrderId) {
   return razorpayRequest(`/orders/${razorpayOrderId}/payments`, {
+    method: "GET",
+  });
+}
+
+async function fetchRazorpaySubscription(subscriptionId) {
+  return razorpayRequest(`/subscriptions/${subscriptionId}`, {
     method: "GET",
   });
 }
@@ -339,11 +359,14 @@ function updatePaymentLinkRecord(paymentId, shortUrl) {
   if (!payment) return null;
 
   const slug = extractSlugFromLink(shortUrl);
+  const localTargetPath = String(payment.payment_link || "").startsWith("http")
+    ? new URL(String(payment.payment_link)).pathname
+    : String(payment.payment_link || "");
   payment.payment_link = shortUrl;
   payment.slug = slug;
   payment.updated_at = new Date().toISOString();
 
-  const linkRecord = store.data.links.find((item) => item.original_url === `/payment/${paymentId}`);
+  const linkRecord = store.data.links.find((item) => item.original_url === localTargetPath || item.original_url === `/payment/${paymentId}` || item.original_url === `/subscription/${paymentId}`);
   if (linkRecord) {
     linkRecord.slug = slug;
     linkRecord.short_path = shortUrl.startsWith("http") ? new URL(shortUrl).pathname : `/${slug}`;
@@ -362,12 +385,13 @@ function queueDeferredPaymentSetup(req, created, payload = {}) {
     if (!payment || payment.method !== "RAZORPAY") {
       return;
     }
+    const isSubscriptionLink = String(payment.payment_link || "").includes("/subscription/");
 
     const shouldCollectCustomerDetails = Boolean(created.order?.collect_customer_details_on_checkout);
     let changed = false;
 
     try {
-      if (!shouldCollectCustomerDetails && !payment.razorpay_order_id) {
+      if (!isSubscriptionLink && !shouldCollectCustomerDetails && !payment.razorpay_order_id) {
         const student = created.order.student || created.order?.student || {};
         const razorpayOrder = await createRazorpayOrder(
           {
@@ -390,7 +414,8 @@ function queueDeferredPaymentSetup(req, created, payload = {}) {
       }
 
       if (pyMdApiKey) {
-        const target = resolveShortenerTarget(req, `/payment/__placeholder__`, true);
+        const localPath = isSubscriptionLink ? `/subscription/${payment.id}` : `/payment/${payment.id}`;
+        const target = resolveShortenerTarget(req, `${isSubscriptionLink ? "/subscription" : "/payment"}/__placeholder__`, true);
         const external = await createPyMdShortLink({
           target: target.replace("/__placeholder__", `/${payment.id}`),
           label: `Payment ${created.order.offer_title || created.order.product?.name || created.order.student?.name || created.order.order_number || payment.id}`,
@@ -399,6 +424,10 @@ function queueDeferredPaymentSetup(req, created, payload = {}) {
             created.order.offer_title || created.order.product?.name || created.order.student?.name || created.order.order_number || "payment",
           ),
         });
+        const linkRecord = store.data.links.find((item) => item.original_url === localPath);
+        if (linkRecord) {
+          linkRecord.original_url = localPath;
+        }
         updatePaymentLinkRecord(payment.id, external.short_url);
         changed = true;
       }
@@ -448,6 +477,11 @@ function finalizePaymentCreation(req, created, payload = {}) {
 
 function verifyRazorpaySignature({ orderId, paymentId, signature }) {
   const digest = createHmac("sha256", razorpayKeySecret).update(`${orderId}|${paymentId}`).digest("hex");
+  return digest === signature;
+}
+
+function verifyRazorpaySubscriptionSignature({ subscriptionId, paymentId, signature }) {
+  const digest = createHmac("sha256", razorpayKeySecret).update(`${paymentId}|${subscriptionId}`).digest("hex");
   return digest === signature;
 }
 
@@ -2220,6 +2254,10 @@ app.post("/api/orders/checkout-session", async (req, res) => {
       return res.status(400).json({ ok: false, message: "This payment was recorded as a manual payment." });
     }
 
+    if (String(store.attachOrder(order)?.billing_model || "").toUpperCase() === "SUBSCRIPTION") {
+      return res.status(400).json({ ok: false, message: "Use the subscription checkout flow for this product." });
+    }
+
     if (!payment.razorpay_order_id) {
       const student = store.data.students.find((item) => item.id === order.student_id) ?? {};
       const razorpayOrder = await createRazorpayOrder(
@@ -2252,6 +2290,162 @@ app.post("/api/orders/checkout-session", async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to prepare Razorpay checkout" });
+  }
+});
+
+app.post("/api/subscriptions/checkout-session", async (req, res) => {
+  try {
+    const payment = req.body?.payment_id
+      ? store.getPaymentRecord(req.body.payment_id)
+      : req.body?.order_id
+        ? store.getLatestPaymentForOrder(req.body.order_id, { preferOpen: true })
+        : null;
+    const order = payment
+      ? store.data.orders.find((item) => item.id === payment.order_id)
+      : store.data.orders.find((item) => item.id === req.body?.order_id || item.order_number === req.body?.order_number);
+    if (!order) return res.status(404).json({ ok: false, message: "Order not found" });
+    if (!payment) return res.status(404).json({ ok: false, message: "Payment record not found" });
+    if (isPaymentExpired(payment)) {
+      return res.status(410).json({ ok: false, message: "This payment link has expired. Please request a fresh link before continuing." });
+    }
+    if (payment.method !== "RAZORPAY") {
+      return res.status(400).json({ ok: false, message: "This subscription was recorded as a manual payment." });
+    }
+
+    const attachedOrder = store.attachOrder(order);
+    if (String(attachedOrder?.billing_model || "").toUpperCase() !== "SUBSCRIPTION") {
+      return res.status(400).json({ ok: false, message: "This product does not use subscription checkout." });
+    }
+
+    const product = attachedOrder?.product || null;
+    const planId = String(attachedOrder?.subscription_plan_id || product?.razorpay_plan_id || "").trim();
+    if (!planId) {
+      return res.status(400).json({ ok: false, message: "Razorpay plan id is missing for this subscription product." });
+    }
+
+    const totalCount = Math.max(Number(product?.subscription_total_count || 1200) || 1200, 1);
+    let subscription = null;
+
+    if (payment.razorpay_subscription_id) {
+      try {
+        subscription = await fetchRazorpaySubscription(payment.razorpay_subscription_id);
+        store.syncSubscriptionOnPayment(payment.id, subscription);
+      } catch (error) {
+        console.error("Unable to refresh existing Razorpay subscription:", error instanceof Error ? error.message : error);
+      }
+    }
+
+    const existingStatus = String(subscription?.status || payment.subscription_status || "").toLowerCase();
+    if (!subscription || ["cancelled", "completed", "expired", "halted"].includes(existingStatus)) {
+      subscription = await createRazorpaySubscription({
+        planId,
+        totalCount,
+        quantity: 1,
+        customerNotify: true,
+        notes: {
+          local_order_id: order.id,
+          local_payment_id: payment.id,
+          order_number: order.order_number || "",
+          student_name: attachedOrder?.student?.name || "",
+          phone: attachedOrder?.student?.phone || "",
+        },
+      });
+      store.syncSubscriptionOnPayment(payment.id, subscription);
+    }
+
+    await flushStore();
+    return res.json({
+      ok: true,
+      order: store.attachOrder(order),
+      payment: store.getPaymentRecord(payment.id),
+      subscription,
+      razorpayKeyId,
+      already_authorized: ["authenticated", "active"].includes(String(subscription?.status || "").toLowerCase()),
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to prepare Razorpay subscription checkout." });
+  }
+});
+
+app.post("/api/subscriptions/verify", async (req, res) => {
+  try {
+    const payment = req.body?.payment_id
+      ? store.getPaymentRecord(req.body.payment_id)
+      : req.body?.order_id
+        ? store.getLatestPaymentForOrder(req.body.order_id, { preferOpen: true })
+        : null;
+    const order = payment
+      ? store.data.orders.find((item) => item.id === payment.order_id)
+      : store.data.orders.find((item) => item.id === req.body?.order_id || item.order_number === req.body?.order_number);
+    if (!order || !payment) {
+      return res.status(404).json({ ok: false, message: "Subscription record not found" });
+    }
+
+    const subscriptionId = String(payment.razorpay_subscription_id || "").trim();
+    const razorpayPaymentId = String(req.body?.razorpay_payment_id || "").trim();
+    const signature = String(req.body?.razorpay_signature || "").trim();
+    if (!subscriptionId || !razorpayPaymentId || !signature) {
+      return res.status(400).json({ ok: false, message: "Razorpay subscription verification details are required." });
+    }
+
+    const isValid = verifyRazorpaySubscriptionSignature({
+      subscriptionId,
+      paymentId: razorpayPaymentId,
+      signature,
+    });
+    if (!isValid) {
+      return res.status(400).json({ ok: false, message: "Invalid Razorpay subscription signature" });
+    }
+
+    payment.razorpay_payment_id = razorpayPaymentId;
+    payment.razorpay_signature = signature;
+    payment.transaction_id = razorpayPaymentId;
+    payment.updated_at = new Date().toISOString();
+
+    const subscription = await fetchRazorpaySubscription(subscriptionId);
+    const result = store.syncSubscriptionOnPayment(payment.id, subscription);
+    await flushStore();
+    return res.json({
+      ok: true,
+      authorized: ["authenticated", "active"].includes(String(subscription?.status || "").toLowerCase()),
+      order: result.order || store.attachOrder(order),
+      payment: store.getPaymentRecord(payment.id),
+      subscription,
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Unable to verify Razorpay subscription." });
+  }
+});
+
+app.post("/api/subscriptions/reconcile", async (req, res) => {
+  try {
+    const payment = req.body?.payment_id
+      ? store.getPaymentRecord(req.body.payment_id)
+      : req.body?.order_id
+        ? store.getLatestPaymentForOrder(req.body.order_id, { preferOpen: true })
+        : null;
+    const order = payment
+      ? store.data.orders.find((item) => item.id === payment.order_id)
+      : store.data.orders.find((item) => item.id === req.body?.order_id || item.order_number === req.body?.order_number);
+    if (!order || !payment) {
+      return res.status(404).json({ ok: false, message: "Subscription record not found" });
+    }
+    if (!payment.razorpay_subscription_id) {
+      return res.json({ ok: true, authorized: false, order: store.attachOrder(order), payment, subscription: null });
+    }
+
+    const subscription = await fetchRazorpaySubscription(payment.razorpay_subscription_id);
+    const result = store.syncSubscriptionOnPayment(payment.id, subscription);
+    await flushStore();
+    return res.json({
+      ok: true,
+      authorized: ["authenticated", "active"].includes(String(subscription?.status || "").toLowerCase()),
+      order: result.order || store.attachOrder(order),
+      payment: store.getPaymentRecord(payment.id),
+      subscription,
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, authorized: false, message: error instanceof Error ? error.message : "Unable to refresh subscription status." });
   }
 });
 

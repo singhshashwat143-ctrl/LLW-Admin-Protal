@@ -63,6 +63,7 @@ const collectionIdentitySpecs = {
   webinarAttendance: [["id"], ["session_id", "role", "email", "phone", "name", "join_time"]],
   marketing_spend: [["id"]],
   attendanceTimeline: [["minute"]],
+  subscription_tracking: [["id"], ["order_id"], ["payment_id"]],
   settings: [["id"]],
 };
 
@@ -217,6 +218,84 @@ function buildProductSessionCollection(products) {
   ));
 }
 
+function buildSubscriptionTrackingCollection(snapshot) {
+  const orders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
+  const paymentRecords = Array.isArray(snapshot.payment_records) ? snapshot.payment_records : [];
+  const students = Array.isArray(snapshot.students) ? snapshot.students : [];
+  const products = Array.isArray(snapshot.products) ? snapshot.products : [];
+  const team = Array.isArray(snapshot.team) ? snapshot.team : [];
+  const paymentsByOrderId = new Map();
+  const studentById = new Map(students.map((student) => [student.id, student]));
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const teamById = new Map(team.map((member) => [member.id, member]));
+
+  paymentRecords.forEach((payment) => {
+    const list = paymentsByOrderId.get(payment.order_id) || [];
+    list.push(payment);
+    paymentsByOrderId.set(payment.order_id, list);
+  });
+
+  return orders
+    .filter((order) => String(order?.billing_model || "").toUpperCase() === "SUBSCRIPTION")
+    .map((order) => {
+      const subscriptionPayments = (paymentsByOrderId.get(order.id) || [])
+        .filter((payment) => (
+          String(payment.subscription_plan_id || "").trim()
+          || String(payment.razorpay_subscription_id || "").trim()
+          || String(payment.payment_link || "").includes("/subscription/")
+        ))
+        .sort((left, right) => new Date(right.updated_at || right.created_at || 0).getTime() - new Date(left.updated_at || left.created_at || 0).getTime());
+      const payment = subscriptionPayments[0] || null;
+      const student = studentById.get(order.student_id) || null;
+      const product = productById.get(order.product_id) || null;
+      const bda = teamById.get(order.bda_id) || null;
+      const mandateStatus = String(order.subscription_status || payment?.subscription_status || "created").toLowerCase();
+      const activeMandate = mandateStatus === "authenticated" || mandateStatus === "active";
+      const stoppedMandate = ["cancelled", "completed"].includes(mandateStatus);
+      const failedMandate = ["halted", "expired", "failed"].includes(mandateStatus);
+      const monthlyAmountInr = Number(order.subscription_amount_inr || order.product_value_inr || product?.subscription_amount_inr || product?.discounted_price || 0);
+
+      return {
+        id: order.id,
+        order_id: order.id,
+        payment_id: payment?.id || "",
+        order_number: order.order_number || "",
+        customer_name: student?.name || "",
+        customer_phone: student?.phone || "",
+        customer_email: student?.email || "",
+        product_id: product?.id || order.product_id || "",
+        product_name: product?.name || "",
+        billing_model: "SUBSCRIPTION",
+        mandate_status: mandateStatus,
+        mandate_state: activeMandate ? "ACTIVE" : stoppedMandate ? "STOPPED" : failedMandate ? "FAILED" : "PENDING",
+        subscription_id: order.razorpay_subscription_id || payment?.razorpay_subscription_id || "",
+        subscription_plan_id: order.subscription_plan_id || payment?.subscription_plan_id || "",
+        subscription_interval: order.subscription_interval || product?.subscription_interval || "MONTHLY",
+        subscription_amount_inr: monthlyAmountInr,
+        amount_paid_inr: Number(order.amount_paid_inr || 0),
+        net_cash_in_hand_inr: Number(order.net_cash_in_hand_inr || 0),
+        payment_state: order.payment_state || "",
+        order_status: order.status || "",
+        current_cycle_start: order.subscription_current_start || payment?.subscription_current_start || "",
+        current_cycle_end: order.subscription_current_end || payment?.subscription_current_end || "",
+        next_charge_at: order.subscription_charge_at || payment?.subscription_charge_at || "",
+        mandate_authorized_at: payment?.subscription_authorized_at || "",
+        latest_transaction_id: payment?.transaction_id || "",
+        latest_payment_status: payment?.status || "",
+        latest_payment_method: payment?.method || "",
+        payment_link: payment?.payment_link || "",
+        subscription_short_url: payment?.subscription_short_url || "",
+        bda_id: bda?.id || order.bda_id || "",
+        bda_name: bda?.name || "",
+        manager_name: order.manager_name || "",
+        source_type: order.source_type || "",
+        source_label: order.source_label || order.utm_source || "",
+        created_at: order.created_at || "",
+        updated_at: payment?.updated_at || order.updated_at || order.created_at || "",
+      };
+    });
+}
+
 function buildRuntimeCollections(snapshot) {
   const collections = {};
 
@@ -236,6 +315,7 @@ function buildRuntimeCollections(snapshot) {
   const products = Array.isArray(snapshot.products) ? snapshot.products : [];
   collections.product_batches = buildProductBatchCollection(products);
   collections.product_session_dates = buildProductSessionCollection(products);
+  collections.subscription_tracking = buildSubscriptionTrackingCollection(snapshot);
 
   return collections;
 }
@@ -317,6 +397,7 @@ export async function createGoogleSheetsPrimaryPersistence() {
   }
 
   const requestTimeoutMs = Math.max(Number(process.env.GOOGLE_SHEETS_SYNC_TIMEOUT_MS || 20000) || 20000, 1000);
+  const failOpenOnLoadError = parseBoolean(process.env.GOOGLE_SHEETS_FAIL_OPEN_ON_LOAD, true);
   const source = String(process.env.GOOGLE_SHEETS_SYNC_SOURCE || "llw-webinare").trim() || "llw-webinare";
   const appUrl = String(process.env.PUBLIC_APP_URL || "").trim();
 
@@ -361,25 +442,39 @@ export async function createGoogleSheetsPrimaryPersistence() {
   }
 
   async function load(fallbackData) {
-    const response = await postPayload({
-      action: "read_runtime_snapshot",
-      source,
-    });
+    try {
+      const response = await postPayload({
+        action: "read_runtime_snapshot",
+        source,
+      });
 
-    const remoteSnapshot = response?.snapshot ? clonePayload(response.snapshot) : null;
-    if (!remoteSnapshot) {
+      const remoteSnapshot = response?.snapshot ? clonePayload(response.snapshot) : null;
+      if (!remoteSnapshot) {
+        const clonedFallback = clonePayload(fallbackData);
+        await persistNow(clonedFallback, "bootstrap-from-fallback", { force: true });
+        return clonedFallback;
+      }
+
+      const merged = mergeSnapshots(remoteSnapshot, fallbackData);
+      lastSnapshot = clonePayload(merged);
+      lastChecksum = buildChecksum(JSON.stringify(merged));
+      revision = Number(response?.revision || 0);
+      updatedAt = response?.updatedAt || null;
+      lastError = null;
+      return merged;
+    } catch (error) {
+      lastError = error;
+      if (!failOpenOnLoadError) {
+        throw error;
+      }
+
       const clonedFallback = clonePayload(fallbackData);
-      await persistNow(clonedFallback, "bootstrap-from-fallback", { force: true });
+      lastSnapshot = clonedFallback;
+      lastChecksum = buildChecksum(JSON.stringify(clonedFallback));
+      updatedAt = nowIso();
+      console.error("[google-sheets-primary] load failed, booting from fallback snapshot:", error instanceof Error ? error.message : error);
       return clonedFallback;
     }
-
-    const merged = mergeSnapshots(remoteSnapshot, fallbackData);
-    lastSnapshot = clonePayload(merged);
-    lastChecksum = buildChecksum(JSON.stringify(merged));
-    revision = Number(response?.revision || 0);
-    updatedAt = response?.updatedAt || null;
-    lastError = null;
-    return merged;
   }
 
   async function persistNow(snapshot, reason = "persist", { force = false } = {}) {

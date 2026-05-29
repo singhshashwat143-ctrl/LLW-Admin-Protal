@@ -69,6 +69,7 @@ const supportedLearningSchedules = [
 const couponResetRevision = 1;
 const priceUpdateCouponRevision = 1;
 const productSessionDateDefaultRevision = 1;
+const productCatalogRevision = 1;
 const teamIdentityDedupRevision = 1;
 const teamRosterRevision = 1;
 const teamRosterReassignEmail = "ankit@livelongwealth.com";
@@ -90,6 +91,43 @@ const priceUpdateCouponSpecs = [
   { productName: "Forex + LiveX0 (Offline)", code: "FLXOFF60000", finalPriceInr: 60000, valueInr: 24999 },
   { productName: "CTP + LiveX0 (Offline)", code: "CLXOFF85000", finalPriceInr: 85000, valueInr: 84999 },
 ];
+const platinumPlanProductId = "30000000-0000-0000-0000-000000000013";
+const platinumPlanName = "Livelong Wealth Platinum Plan";
+
+function normalizeBillingModel(value = "ONE_TIME") {
+  return String(value || "ONE_TIME").toUpperCase() === "SUBSCRIPTION" ? "SUBSCRIPTION" : "ONE_TIME";
+}
+
+function buildRequiredProductCatalog() {
+  return [
+    normalizeProductRecord({
+      id: platinumPlanProductId,
+      mode: "ONLINE",
+      name: platinumPlanName,
+      slug: "livelong-wealth-platinum-plan",
+      category: "SUBSCRIPTION",
+      price: 199900,
+      discounted_price: 199900,
+      duration_months: 1,
+      short_description: "Monthly platinum subscription with Razorpay mandate checkout.",
+      long_description: "Livelong Wealth Platinum Plan billed at Rs 1,999 per month through a Razorpay subscription mandate.",
+      onboarding_form_url: "",
+      whatsapp_group_url: "",
+      welcome_kit_url: "",
+      razorpay_plan_id: "plan_Sv7mjDXOOSgMUc",
+      is_active: true,
+      billing_model: "SUBSCRIPTION",
+      subscription_amount_inr: 199900,
+      subscription_interval: "MONTHLY",
+      subscription_total_count: 1200,
+      requires_batch: false,
+      batches: [],
+      session_dates: normalizeProductSessionDates([], "ONLINE"),
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    }),
+  ];
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -110,6 +148,12 @@ function coerceIsoTimestamp(value, fallback = nowIso()) {
   const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00.000Z` : raw;
   const timestamp = new Date(normalized).getTime();
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+}
+
+function coerceUnixTimestampToIso(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return new Date(numeric * 1000).toISOString();
 }
 
 function slugify(value) {
@@ -704,6 +748,7 @@ function normalizeSettings(settings = {}) {
     bdm_coupon_limit_inr: Number(settings.bdm_coupon_limit_inr ?? settings.bdmCouponLimitInr ?? 1000000),
     coupon_reset_revision: Number(settings.coupon_reset_revision ?? settings.couponResetRevision ?? 0),
     price_update_coupon_revision: Number(settings.price_update_coupon_revision ?? settings.priceUpdateCouponRevision ?? 0),
+    product_catalog_revision: Number(settings.product_catalog_revision ?? settings.productCatalogRevision ?? 0),
     team_identity_dedup_revision: Number(settings.team_identity_dedup_revision ?? settings.teamIdentityDedupRevision ?? 0),
     team_roster_revision: Number(settings.team_roster_revision ?? settings.teamRosterRevision ?? 0),
     aisensy_payment_link_campaign:
@@ -939,6 +984,7 @@ function normalizeProductSessionDates(sessionDates = [], mode = "ONLINE") {
 function normalizeProductRecord(record, index = 0) {
   const createdAt = record.created_at || record.createdAt || nowIso();
   const mode = String(record.mode || "ONLINE").toUpperCase();
+  const billingModel = normalizeBillingModel(record.billing_model || record.billingModel);
   return {
     ...record,
     id: record.id || `product-${String(index + 1).padStart(3, "0")}`,
@@ -955,6 +1001,11 @@ function normalizeProductRecord(record, index = 0) {
     whatsapp_group_url: record.whatsapp_group_url || record.whatsappGroupUrl || "",
     welcome_kit_url: record.welcome_kit_url || record.welcomeKitUrl || "",
     razorpay_plan_id: record.razorpay_plan_id || record.razorpayPlanId || "",
+    billing_model: billingModel,
+    subscription_amount_inr: Number(record.subscription_amount_inr ?? record.subscriptionAmountInr ?? record.discounted_price ?? record.discountedPrice ?? record.price ?? 0),
+    subscription_interval: String(record.subscription_interval || record.subscriptionInterval || "MONTHLY").toUpperCase(),
+    subscription_total_count: Number(record.subscription_total_count ?? record.subscriptionTotalCount ?? 1200),
+    requires_batch: record.requires_batch ?? record.requiresBatch ?? billingModel !== "SUBSCRIPTION",
     is_active: record.is_active ?? record.isActive ?? true,
     batches: normalizeProductBatches(record.batches || record.batch_availability || record.batchAvailability),
     session_dates: normalizeProductSessionDates(record.session_dates || record.sessionDates, mode),
@@ -1021,6 +1072,14 @@ function isCouponExpired(coupon) {
 function getProductValue(order, data) {
   const product = data.products.find((item) => item.id === order.product_id) ?? null;
   return Number(order.product_value_inr || order.productValueInr || product?.discounted_price || order.amount_inr || 0);
+}
+
+function isSubscriptionProduct(product) {
+  return normalizeBillingModel(product?.billing_model || product?.billingModel) === "SUBSCRIPTION";
+}
+
+function getSubscriptionAmountInr(product) {
+  return Number(product?.subscription_amount_inr || product?.subscriptionAmountInr || product?.discounted_price || product?.discountedPrice || 0);
 }
 
 function normalizeOrderRecord(order, data) {
@@ -1266,11 +1325,44 @@ function buildPriceUpdateCoupons(products = [], currentCoupons = []) {
   });
 }
 
+function applyRequiredProductCatalog(data) {
+  const next = structuredClone(data);
+  const requiredProducts = buildRequiredProductCatalog();
+  const existingProducts = Array.isArray(next.products) ? [...next.products] : [];
+  const existingIndexById = new Map(existingProducts.map((product, index) => [String(product?.id || ""), index]));
+  let changed = false;
+
+  requiredProducts.forEach((requiredProduct) => {
+    const currentIndex = existingIndexById.get(requiredProduct.id);
+    if (typeof currentIndex === "number") {
+      const currentProduct = normalizeProductRecord(existingProducts[currentIndex], currentIndex);
+      const mergedProduct = normalizeProductRecord({
+        ...currentProduct,
+        ...requiredProduct,
+        created_at: currentProduct.created_at || requiredProduct.created_at,
+        updated_at: nowIso(),
+      }, currentIndex);
+      if (JSON.stringify(currentProduct) !== JSON.stringify(mergedProduct)) {
+        existingProducts[currentIndex] = mergedProduct;
+        changed = true;
+      }
+      return;
+    }
+
+    existingProducts.unshift(requiredProduct);
+    changed = true;
+  });
+
+  next.products = existingProducts;
+  return { data: next, changed };
+}
+
 function applyRuntimeDataMigrations(data) {
   const next = buildPersistentData(structuredClone(data));
   const currentRevision = Number(next.settings?.coupon_reset_revision || 0);
   const currentPriceUpdateCouponRevision = Number(next.settings?.price_update_coupon_revision || 0);
   const currentProductSessionRevision = Number(next.settings?.product_session_date_default_revision || 0);
+  const currentProductCatalogRevision = Number(next.settings?.product_catalog_revision || 0);
   const currentTeamIdentityDedupRevision = Number(next.settings?.team_identity_dedup_revision || 0);
   const currentTeamRosterRevision = Number(next.settings?.team_roster_revision || 0);
   let changed = false;
@@ -1338,6 +1430,23 @@ function applyRuntimeDataMigrations(data) {
     reason = reason
       ? `${reason}+product-session-date-default-revision-${productSessionDateDefaultRevision}`
       : `product-session-date-default-revision-${productSessionDateDefaultRevision}`;
+  }
+
+  if (currentProductCatalogRevision < productCatalogRevision) {
+    const catalogUpdated = applyRequiredProductCatalog(next);
+    if (catalogUpdated.changed) {
+      next.products = catalogUpdated.data.products;
+      changed = true;
+    }
+    next.settings = normalizeSettings({
+      ...next.settings,
+      product_catalog_revision: productCatalogRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = reason
+      ? `${reason}+product-catalog-revision-${productCatalogRevision}`
+      : `product-catalog-revision-${productCatalogRevision}`;
   }
 
   if (currentTeamIdentityDedupRevision < teamIdentityDedupRevision) {
@@ -1845,14 +1954,20 @@ function withComputedPayment(order, data) {
   const offerTitle = product?.name || webinar?.title || bootcamp?.title || sourceLabel;
   const recoveryInstallments = getRecoveryInstallmentSummary(order, data);
   const batchKey = order.batch_month_key || "";
+  const isSubscriptionOrder = normalizeBillingModel(product?.billing_model || order.billing_model) === "SUBSCRIPTION";
   const selectedBatch = product && batchKey
     ? (product.batches || []).find((batch) => batch.key === batchKey) ?? null
     : null;
   const batchLabel = order.batch_month_label || selectedBatch?.label || (batchKey ? productBatchMonthByKey.get(batchKey)?.label || batchKey : "");
+  const subscriptionPayment = paymentHistory.find((payment) => String(payment.razorpay_subscription_id || payment.subscription_plan_id || "").trim()) ?? null;
+  const mandateAuthorized = ["authenticated", "active"].includes(String(subscriptionPayment?.subscription_status || "").toLowerCase());
+  const displayAmountDue = isSubscriptionOrder ? 0 : amountDue;
+  const displayPaymentState = isSubscriptionOrder && mandateAuthorized ? "COMPLETED" : paymentState;
+  const displayStatus = isSubscriptionOrder && mandateAuthorized ? "ACTIVE" : status;
 
   return {
     ...order,
-    status,
+    status: displayStatus,
     student,
     phone: student?.phone || "",
     product,
@@ -1863,7 +1978,14 @@ function withComputedPayment(order, data) {
     source_type: sourceType,
     source_label: sourceLabel,
     offer_title: offerTitle,
-    payment_state: paymentState,
+    payment_state: displayPaymentState,
+    billing_model: product?.billing_model || order.billing_model || "ONE_TIME",
+    subscription_status: subscriptionPayment?.subscription_status || "",
+    subscription_id: subscriptionPayment?.razorpay_subscription_id || "",
+    subscription_plan_id: subscriptionPayment?.subscription_plan_id || order.subscription_plan_id || product?.razorpay_plan_id || "",
+    subscription_current_start: subscriptionPayment?.subscription_current_start || null,
+    subscription_current_end: subscriptionPayment?.subscription_current_end || null,
+    subscription_charge_at: subscriptionPayment?.subscription_charge_at || null,
     type: order.payment_mode === "TOKEN" ? "TOKEN" : "FULL",
     payment_mode: order.payment_mode,
     original_product_value_inr: Number(order.original_product_value_inr || product?.discounted_price || productValue),
@@ -1875,7 +1997,7 @@ function withComputedPayment(order, data) {
     amount_paid_inr: grossAmountPaid,
     refunded_amount_inr: refundedAmount,
     net_cash_in_hand_inr: netCashCollected,
-    amount_due_inr: amountDue,
+    amount_due_inr: displayAmountDue,
     promise_date: order.promise_date || null,
     latest_transaction_id: latestPayment?.transaction_id || "",
     latest_payment_method: latestPayment?.method || "RAZORPAY",
@@ -1900,14 +2022,14 @@ function withComputedPayment(order, data) {
     batch_month_label: batchLabel,
     batch_is_active: selectedBatch ? Boolean(selectedBatch.is_active) : null,
     token_due:
-      amountDue > 0
+      !isSubscriptionOrder && amountDue > 0
         ? {
-            amount_inr: amountDue,
+            amount_inr: displayAmountDue,
             due_date: duePromise?.due_date || null,
-            fulfilled: amountDue === 0,
+            fulfilled: displayAmountDue === 0,
           }
         : null,
-    can_send_recovery: amountDue > 0,
+    can_send_recovery: !isSubscriptionOrder && displayAmountDue > 0,
     transaction_count: paymentHistory.length,
     cohort_start_date: order.session_date || webinar?.start_time || bootcamp?.created_at || order.created_at,
     operations: {
@@ -2211,7 +2333,6 @@ function validateCouponForOrder(data, coupon, product, actor = {}) {
   if (!isCouponVisibleForActor(data, coupon, actor)) {
     throw new Error("You do not have access to use this coupon.");
   }
-
 }
 
 export async function createDashboardStore() {
@@ -3068,7 +3189,6 @@ export async function createDashboardStore() {
             ? 1
             : Math.max(Number(input.usage_limit_total ?? input.usageLimitTotal ?? 0), 1);
       const expiresAt = toEndOfDayIso(input.expires_at || input.expiresAt || input.valid_until || input.validUntil);
-
       const coupon = normalizeCoupon({
         id: crypto.randomUUID(),
         code,
@@ -3148,6 +3268,8 @@ export async function createDashboardStore() {
     },
     createPaymentRecord(order, input = {}) {
       const method = normalizePaymentMethod(input.payment_method || input.method || "RAZORPAY");
+      const product = order.product_id ? store.data.products.find((entry) => entry.id === order.product_id) ?? null : null;
+      const isSubscription = isSubscriptionProduct(product);
       const existingRecoveryCount = getOrderPayments(store.data, order.id).filter((payment) => payment.type === "RECOVERY").length;
       const paymentType = normalizePaymentType(input.type || (input.is_recovery ? "RECOVERY" : "ENROLLMENT"));
       const stage =
@@ -3173,19 +3295,27 @@ export async function createDashboardStore() {
         stage,
         transaction_id: input.transaction_id || input.reference_code || `TXN-${Date.now()}`,
         razorpay_order_id: "",
+        razorpay_subscription_id: "",
         razorpay_payment_id: "",
         razorpay_signature: "",
-        payment_link: method === "RAZORPAY" && status !== "PAID" ? `/payment/${input.payment_id || ""}` : "",
+        payment_link: method === "RAZORPAY" && status !== "PAID" ? `${isSubscription ? "/subscription" : "/payment"}/${input.payment_id || ""}` : "",
         slug: "",
         reference_code: input.reference_code || "",
         proof_url: input.proof_url || "",
+        subscription_status: isSubscription ? "created" : "",
+        subscription_plan_id: isSubscription ? String(product?.razorpay_plan_id || "") : "",
+        subscription_short_url: "",
+        subscription_current_start: null,
+        subscription_current_end: null,
+        subscription_charge_at: null,
+        subscription_authorized_at: null,
         valid_until: order.promise_date ? toEndOfDayIso(order.promise_date) : null,
         created_at: createdAt,
         updated_at: createdAt,
         paid_at: status === "PAID" ? paidAt || createdAt : null,
       };
 
-      payment.payment_link = method === "RAZORPAY" && status !== "PAID" ? `/payment/${payment.id}` : "";
+      payment.payment_link = method === "RAZORPAY" && status !== "PAID" ? `${isSubscription ? "/subscription" : "/payment"}/${payment.id}` : "";
       store.data.payment_records.unshift(payment);
       return payment;
     },
@@ -3277,8 +3407,14 @@ export async function createDashboardStore() {
       if (!product && !webinar && !bootcamp) {
         throw new Error("Product or class is required");
       }
+      const isSubscription = isSubscriptionProduct(product);
+      if (isSubscription && !String(product?.razorpay_plan_id || "").trim()) {
+        throw new Error("This subscription product does not have a Razorpay plan configured.");
+      }
       const originalProductValue = Number(
-        input.original_product_value_inr
+        isSubscription
+        ? getSubscriptionAmountInr(product)
+        : input.original_product_value_inr
         || product?.discounted_price
         || webinar?.price_inr
         || bootcamp?.discounted_price
@@ -3286,6 +3422,9 @@ export async function createDashboardStore() {
         || 0,
       );
       const coupon = store.getCouponByCode(input.coupon_code, actor);
+      if (isSubscription && input.coupon_code) {
+        throw new Error("Coupons are not supported for this subscription product.");
+      }
       if (input.coupon_code && !coupon) {
         throw new Error("Coupon code not found");
       }
@@ -3298,8 +3437,8 @@ export async function createDashboardStore() {
           throw new Error("The selected batch is not operational for this product.");
         }
       }
-      const defaultSoldValue = Math.max(originalProductValue - (coupon ? calculateCouponDiscount(coupon, originalProductValue) : 0), 0);
-      const explicitSoldValue = Number(input.product_value_inr ?? input.sale_price_inr ?? 0);
+      const defaultSoldValue = isSubscription ? originalProductValue : Math.max(originalProductValue - (coupon ? calculateCouponDiscount(coupon, originalProductValue) : 0), 0);
+      const explicitSoldValue = isSubscription ? 0 : Number(input.product_value_inr ?? input.sale_price_inr ?? 0);
       if (explicitSoldValue > 0 && !isAdminOverrideAllowed && explicitSoldValue !== defaultSoldValue) {
         throw new Error("You do not have permission to override the sold price.");
       }
@@ -3308,14 +3447,26 @@ export async function createDashboardStore() {
       if (productValue <= 0) {
         throw new Error("Coupon discount cannot reduce order value to zero");
       }
-      const paymentMode = String(input.payment_type || input.payment_mode || webinar?.payment_mode || "FULL").toUpperCase() === "TOKEN" ? "TOKEN" : "FULL";
+      const paymentMode = isSubscription
+        ? "FULL"
+        : String(input.payment_type || input.payment_mode || webinar?.payment_mode || "FULL").toUpperCase() === "TOKEN"
+          ? "TOKEN"
+          : "FULL";
       const firstCollection =
-        paymentMode === "TOKEN"
+        isSubscription
+          ? productValue
+          : paymentMode === "TOKEN"
           ? Math.min(
             Math.max(Number(input.token_amount || input.amount_inr || webinar?.token_price_inr || Math.round(productValue * 0.2)), 1),
             Math.max(productValue - 1, 1),
           )
           : Number(input.amount_inr || productValue);
+      if (isSubscription && normalizePaymentMethod(input.payment_method || input.method || "RAZORPAY") !== "RAZORPAY") {
+        throw new Error("This subscription product only supports Razorpay mandate checkout.");
+      }
+      if (isSubscription && batchMonthKey && product?.requires_batch === false) {
+        // Preserve existing data if passed, but do not require or validate subscription batches.
+      }
       const promiseDate = input.promise_date || input.token_due_date || null;
       const sourceType = normalizeSourceType(
         input.source_type
@@ -3338,7 +3489,12 @@ export async function createDashboardStore() {
         product_value_inr: productValue,
         payment_mode: paymentMode,
         status: "PENDING",
+        billing_model: product?.billing_model || "ONE_TIME",
+        subscription_plan_id: product?.razorpay_plan_id || "",
+        subscription_interval: product?.subscription_interval || "",
+        subscription_amount_inr: isSubscription ? productValue : 0,
         razorpay_order_id: "",
+        razorpay_subscription_id: "",
         razorpay_payment_id: "",
         razorpay_signature: "",
         utm_source: input.source || input.campaign_source || webinar?.title || bootcamp?.title || "manual-link",
@@ -3355,8 +3511,8 @@ export async function createDashboardStore() {
         product_mode: product?.mode || "",
         session_date: productSessionDate,
         promise_date: promiseDate,
-        batch_month_key: batchMonthKey,
-        batch_month_label: batchMonthKey ? productBatchMonthByKey.get(batchMonthKey)?.label || batchMonthKey : "",
+        batch_month_key: product?.requires_batch === false ? "" : batchMonthKey,
+        batch_month_label: product?.requires_batch === false ? "" : batchMonthKey ? productBatchMonthByKey.get(batchMonthKey)?.label || batchMonthKey : "",
         collect_customer_details_on_checkout: collectCustomerDetailsOnCheckout,
         portal_access_done: false,
         broker_setup_done: false,
@@ -3388,7 +3544,7 @@ export async function createDashboardStore() {
       if (payment.method === "RAZORPAY" && payment.status !== "PAID") {
         const link = store.createShortLink({
           label: collectCustomerDetailsOnCheckout ? `Payment ${product?.name || webinar?.title || bootcamp?.title || order.order_number}` : `Payment ${student.name}`,
-          original_url: `/payment/${payment.id}`,
+          original_url: `${isSubscription ? "/subscription" : "/payment"}/${payment.id}`,
         }, { persist: false });
         payment.payment_link = link.short_url;
         payment.slug = link.slug;
@@ -3452,6 +3608,10 @@ export async function createDashboardStore() {
       const order = store.data.orders.find((entry) => entry.id === orderId);
       if (!order) {
         throw new Error("Order not found");
+      }
+      const product = order.product_id ? store.data.products.find((entry) => entry.id === order.product_id) ?? null : null;
+      if (isSubscriptionProduct(product) || normalizeBillingModel(order.billing_model) === "SUBSCRIPTION") {
+        throw new Error("Recovery links are not supported for subscription mandate products.");
       }
 
       const remainingAmount = getAmountDue(order, store.data);
@@ -3603,6 +3763,45 @@ export async function createDashboardStore() {
       payment.razorpay_order_id = razorpayOrder.id;
       payment.updated_at = nowIso();
       return payment;
+    },
+    syncSubscriptionOnPayment(paymentId, subscription = {}) {
+      const payment = store.getPaymentRecord(paymentId);
+      if (!payment) {
+        throw new Error("Payment record not found");
+      }
+
+      const order = store.data.orders.find((entry) => entry.id === payment.order_id) ?? null;
+      const updatedAt = nowIso();
+
+      payment.razorpay_subscription_id = String(subscription.id || payment.razorpay_subscription_id || "");
+      payment.subscription_status = String(subscription.status || payment.subscription_status || "").toLowerCase();
+      payment.subscription_plan_id = String(subscription.plan_id || payment.subscription_plan_id || "");
+      payment.subscription_short_url = String(subscription.short_url || payment.subscription_short_url || "");
+      payment.subscription_customer_id = String(subscription.customer_id || payment.subscription_customer_id || "");
+      payment.subscription_current_start = coerceUnixTimestampToIso(subscription.current_start) || payment.subscription_current_start || null;
+      payment.subscription_current_end = coerceUnixTimestampToIso(subscription.current_end) || payment.subscription_current_end || null;
+      payment.subscription_charge_at = coerceUnixTimestampToIso(subscription.charge_at) || payment.subscription_charge_at || null;
+      payment.subscription_authorized_at =
+        ["authenticated", "active"].includes(String(subscription.status || "").toLowerCase())
+          ? payment.subscription_authorized_at || updatedAt
+          : payment.subscription_authorized_at || null;
+      payment.updated_at = updatedAt;
+
+      if (order) {
+        order.razorpay_subscription_id = payment.razorpay_subscription_id;
+        order.subscription_status = payment.subscription_status;
+        order.subscription_plan_id = payment.subscription_plan_id || order.subscription_plan_id || "";
+        order.subscription_current_start = payment.subscription_current_start;
+        order.subscription_current_end = payment.subscription_current_end;
+        order.subscription_charge_at = payment.subscription_charge_at;
+        order.updated_at = updatedAt;
+      }
+
+      store.persist();
+      return {
+        payment,
+        order: order ? withComputedPayment(order, store.data) : null,
+      };
     },
     markPaymentPaid(input = {}) {
       let payment = input.payment_id ? store.getPaymentRecord(input.payment_id) : null;

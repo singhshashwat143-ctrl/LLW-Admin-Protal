@@ -180,6 +180,74 @@ function buildProductSessionCollection(products) {
   ));
 }
 
+function buildSubscriptionTrackingCollection(store, enrichedOrders) {
+  const paymentRecords = Array.isArray(store.data?.payment_records) ? store.data.payment_records : [];
+  const paymentsByOrderId = new Map();
+
+  paymentRecords.forEach((payment) => {
+    const list = paymentsByOrderId.get(payment.order_id) || [];
+    list.push(payment);
+    paymentsByOrderId.set(payment.order_id, list);
+  });
+
+  return enrichedOrders
+    .filter((order) => String(order?.billing_model || "").toUpperCase() === "SUBSCRIPTION")
+    .map((order) => {
+      const subscriptionPayments = (paymentsByOrderId.get(order.id) || [])
+        .filter((payment) => (
+          String(payment.subscription_plan_id || "").trim()
+          || String(payment.razorpay_subscription_id || "").trim()
+          || String(payment.payment_link || "").includes("/subscription/")
+        ))
+        .sort((left, right) => new Date(right.updated_at || right.created_at || 0).getTime() - new Date(left.updated_at || left.created_at || 0).getTime());
+      const payment = subscriptionPayments[0] || null;
+      const mandateStatus = String(order.subscription_status || payment?.subscription_status || "created").toLowerCase();
+      const activeMandate = mandateStatus === "authenticated" || mandateStatus === "active";
+      const stoppedMandate = ["cancelled", "completed"].includes(mandateStatus);
+      const failedMandate = ["halted", "expired", "failed"].includes(mandateStatus);
+      const monthlyAmountInr = Number(order.subscription_amount_inr || order.product_value_inr || 0);
+
+      return {
+        id: order.id,
+        order_id: order.id,
+        payment_id: payment?.id || "",
+        order_number: order.order_number || "",
+        customer_name: order.student?.name || "",
+        customer_phone: order.student?.phone || "",
+        customer_email: order.student?.email || "",
+        product_id: order.product?.id || order.product_id || "",
+        product_name: order.offer_title || order.product?.name || "",
+        billing_model: "SUBSCRIPTION",
+        mandate_status: mandateStatus,
+        mandate_state: activeMandate ? "ACTIVE" : stoppedMandate ? "STOPPED" : failedMandate ? "FAILED" : "PENDING",
+        subscription_id: order.subscription_id || payment?.razorpay_subscription_id || "",
+        subscription_plan_id: order.subscription_plan_id || payment?.subscription_plan_id || "",
+        subscription_interval: order.subscription_interval || "MONTHLY",
+        subscription_amount_inr: monthlyAmountInr,
+        amount_paid_inr: Number(order.amount_paid_inr || 0),
+        net_cash_in_hand_inr: Number(order.net_cash_in_hand_inr || 0),
+        payment_state: order.payment_state || "",
+        order_status: order.status || "",
+        current_cycle_start: order.subscription_current_start || payment?.subscription_current_start || "",
+        current_cycle_end: order.subscription_current_end || payment?.subscription_current_end || "",
+        next_charge_at: order.subscription_charge_at || payment?.subscription_charge_at || "",
+        mandate_authorized_at: payment?.subscription_authorized_at || "",
+        latest_transaction_id: order.latest_transaction_id || payment?.transaction_id || "",
+        latest_payment_status: order.latest_payment_status || payment?.status || "",
+        latest_payment_method: order.latest_payment_method || payment?.method || "",
+        payment_link: order.payment_link || payment?.payment_link || "",
+        subscription_short_url: payment?.subscription_short_url || "",
+        bda_id: order.bda?.id || order.bda_id || "",
+        bda_name: order.bda?.name || "",
+        manager_name: order.manager_name || "",
+        source_type: order.source_type || "",
+        source_label: order.source_label || "",
+        created_at: order.created_at || "",
+        updated_at: payment?.updated_at || order.updated_at || order.created_at || "",
+      };
+    });
+}
+
 function collectCollections(store) {
   const enrichedOrders = typeof store.getOrders === "function"
     ? cloneValue(store.getOrders())
@@ -192,6 +260,7 @@ function collectCollections(store) {
     product_session_dates: buildProductSessionCollection(products),
     orders: enrichedOrders,
     payment_records: buildPaymentCollection(store, enrichedOrders),
+    subscription_tracking: buildSubscriptionTrackingCollection(store, enrichedOrders),
     refunds: buildRefundCollection(store, enrichedOrders),
   };
 

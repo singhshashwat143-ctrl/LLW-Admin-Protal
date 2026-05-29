@@ -16,7 +16,8 @@ import { LiveClassesPage, WebinarDetailPage, WebinarAttendPage, WebinarHostPage 
 import { MarketingPage } from "./pages/Marketing";
 import { OrdersPage } from "./pages/Orders";
 import { OperationsPage } from "./pages/Operations";
-import { PaymentCheckoutPage, PaymentsPage } from "./pages/Payments";
+import { PaymentImportsPage } from "./pages/PaymentImports";
+import { PaymentCheckoutPage, PaymentsPage, SubscriptionCheckoutPage, SubscriptionPaymentsPage } from "./pages/Payments";
 import { PrivacyPolicyPage } from "./pages/PrivacyPolicy";
 import { OnboardingPage } from "./pages/Onboarding";
 import { ProductsPage } from "./pages/Products";
@@ -107,6 +108,10 @@ export default function App() {
     return <PaymentCheckoutPage id={route.params.id} />;
   }
 
+  if (route.pattern === "/subscription/:id") {
+    return <SubscriptionCheckoutPage id={route.params.id} />;
+  }
+
   if (route.pattern === "/privacy-policy") {
     return <PrivacyPolicyPage />;
   }
@@ -150,6 +155,8 @@ export default function App() {
           {route.pattern === "/webinars" && <WebinarsPage />}
           {route.pattern === "/webinars/new" && <WebinarFormPage />}
           {route.pattern === "/payments" && <PaymentsPage />}
+          {route.pattern === "/payments/subscriptions" && <SubscriptionPaymentsPage />}
+          {route.pattern === "/payments/import" && <PaymentImportsPage />}
           {route.pattern === "/marketing" && <MarketingPage />}
           {route.pattern === "/exports" && <ExportsPage />}
           {route.pattern === "/operations" && <OperationsPage />}
