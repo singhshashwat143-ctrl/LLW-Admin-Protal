@@ -1793,7 +1793,7 @@ app.post("/api/payment-links", async (req, res) => {
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
-      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
+      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}` && item.original_url !== `/subscription/${created.payment.id}`);
     }
     if (!wasExistingOrder && created?.order?.id) {
       store.data.orders = store.data.orders.filter((item) => item.id !== created.order.id);
@@ -1857,7 +1857,7 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
-      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
+      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}` && item.original_url !== `/subscription/${created.payment.id}`);
     }
     if (created?.order?.id) {
       store.data.orders = store.data.orders.filter((item) => item.id !== created.order.id);
@@ -1892,7 +1892,7 @@ app.post("/api/enrollments", async (req, res) => {
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
-      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
+      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}` && item.original_url !== `/subscription/${created.payment.id}`);
     }
     if (created?.order?.id) {
       store.data.orders = store.data.orders.filter((item) => item.id !== created.order.id);
@@ -1932,7 +1932,7 @@ app.post("/api/orders/:id/recovery-link", async (req, res) => {
   } catch (error) {
     if (created?.payment?.id) {
       store.data.payment_records = store.data.payment_records.filter((item) => item.id !== created.payment.id);
-      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}`);
+      store.data.links = store.data.links.filter((item) => item.original_url !== `/payment/${created.payment.id}` && item.original_url !== `/subscription/${created.payment.id}`);
       store.save();
     }
     await flushStore();
