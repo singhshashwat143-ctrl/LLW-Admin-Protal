@@ -2325,7 +2325,10 @@ app.post("/api/orders/checkout-session", async (req, res) => {
     if (order.collect_customer_details_on_checkout) {
       try {
         store.captureCheckoutCustomer(order.id, req.body ?? {});
-        await flushStore();
+        await flushStoreWithResponseBudget({
+          timeoutMs: 250,
+          context: "Deferred checkout customer flush failed:",
+        });
       } catch (error) {
         return res.status(400).json({ ok: false, message: error instanceof Error ? error.message : "Customer details are required" });
       }
@@ -2418,7 +2421,10 @@ app.post("/api/subscriptions/checkout-session", async (req, res) => {
 
     const subscription = await ensureSubscriptionCheckoutRecord(order, payment, attachedOrder, { refreshExisting: false });
 
-    await flushStore();
+    await flushStoreWithResponseBudget({
+      timeoutMs: 250,
+      context: "Deferred subscription checkout flush failed:",
+    });
     return res.json({
       ok: true,
       order: store.attachOrder(order),
