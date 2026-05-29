@@ -3341,11 +3341,12 @@ export async function createDashboardStore() {
         });
 
         if (payment.method === "RAZORPAY") {
+          const canonicalPath = `/payment/${payment.id}`;
           const link = store.createShortLink({
             label: `Recovery ${existingOrder.order_number}`,
-            original_url: `/payment/${payment.id}`,
+            original_url: canonicalPath,
           });
-          payment.payment_link = link.short_url;
+          payment.payment_link = canonicalPath;
           payment.slug = link.slug;
         }
 
@@ -3542,11 +3543,12 @@ export async function createDashboardStore() {
       });
 
       if (payment.method === "RAZORPAY" && payment.status !== "PAID") {
+        const canonicalPath = `${isSubscription ? "/subscription" : "/payment"}/${payment.id}`;
         const link = store.createShortLink({
           label: collectCustomerDetailsOnCheckout ? `Payment ${product?.name || webinar?.title || bootcamp?.title || order.order_number}` : `Payment ${student.name}`,
-          original_url: `${isSubscription ? "/subscription" : "/payment"}/${payment.id}`,
+          original_url: canonicalPath,
         });
-        payment.payment_link = link.short_url;
+        payment.payment_link = canonicalPath;
         payment.slug = link.slug;
       } else {
         payment.razorpay_payment_id = input.reference_code || payment.transaction_id;
