@@ -1552,6 +1552,28 @@ async function readDataFile() {
   }
 }
 
+async function hydrateRuntimeDataSnapshot(snapshot) {
+  const hydrated = buildPersistentData(snapshot);
+  const gitReset = applyGitTrackedTeamReset(hydrated);
+  const gitCouponReset = applyGitTrackedCouponReset(gitReset.data);
+  const migrated = applyRuntimeDataMigrations(gitCouponReset.data);
+  const changed = gitReset.changed || gitCouponReset.changed || migrated.changed;
+  const reason = [gitReset.reason, gitCouponReset.reason, migrated.reason].filter(Boolean).join("+");
+
+  if (gitReset.markDone) {
+    markGitTeamResetApplied();
+  }
+  if (gitCouponReset.markDone) {
+    markGitCouponResetApplied();
+  }
+
+  return {
+    data: migrated.data,
+    changed,
+    reason,
+  };
+}
+
 function minutesBetween(start, end) {
   const startTime = new Date(start).getTime();
   const endTime = new Date(end).getTime();
@@ -2356,6 +2378,7 @@ export async function createDashboardStore() {
   const store = {
     data,
     pendingPersist: Promise.resolve(),
+    pendingReload: Promise.resolve(),
     persist(reason = "persist") {
       const snapshot = buildPersistentData(structuredClone(store.data));
       writeFileSync(dataFile, JSON.stringify(snapshot, null, 2));
@@ -2371,7 +2394,26 @@ export async function createDashboardStore() {
     },
     async close() {
       await store.flush();
+      await store.pendingReload;
       await runtimePersistence.close();
+    },
+    reloadFromPersistence(reason = "runtime-reload") {
+      const runReload = async () => {
+        await store.flush();
+        const fallback = buildPersistentData(structuredClone(store.data));
+        const loaded = await runtimePersistence.load(fallback);
+        const normalized = await hydrateRuntimeDataSnapshot(loaded);
+        store.data = normalized.data;
+        writeFileSync(dataFile, JSON.stringify(store.data, null, 2));
+        if (normalized.changed) {
+          await runtimePersistence.save(store.data, normalized.reason || reason);
+        }
+        snapshotDataFile();
+        return store.data;
+      };
+
+      store.pendingReload = store.pendingReload.then(runReload, runReload);
+      return store.pendingReload;
     },
     getPersistenceStatus() {
       return runtimePersistence.getStatus();

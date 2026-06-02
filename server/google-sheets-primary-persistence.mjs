@@ -455,13 +455,12 @@ export async function createGoogleSheetsPrimaryPersistence() {
         return clonedFallback;
       }
 
-      const merged = mergeSnapshots(remoteSnapshot, fallbackData);
-      lastSnapshot = clonePayload(merged);
-      lastChecksum = buildChecksum(JSON.stringify(merged));
+      lastSnapshot = clonePayload(remoteSnapshot);
+      lastChecksum = buildChecksum(JSON.stringify(remoteSnapshot));
       revision = Number(response?.revision || 0);
       updatedAt = response?.updatedAt || null;
       lastError = null;
-      return merged;
+      return remoteSnapshot;
     } catch (error) {
       lastError = error;
       if (!failOpenOnLoadError) {

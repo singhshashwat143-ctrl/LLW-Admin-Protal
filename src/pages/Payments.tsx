@@ -287,11 +287,28 @@ function hasFlexiblePaymentLinkAccess(user?: { role?: string | null; email?: str
   return name.includes("vaishakh") || name.includes("shashwat") || email.includes("vaishakh");
 }
 
+async function reloadLiveRevenueSnapshot() {
+  return api<{
+    result?: {
+      counts?: {
+        orders?: number;
+        students?: number;
+        payments?: number;
+        due_promises?: number;
+      };
+    };
+  }>("/api/google-sheets/reload", {
+    method: "POST",
+    body: JSON.stringify({ reason: "payments-board-live-refresh" }),
+  });
+}
+
 export function PaymentsPage() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
   const canViewProgramOps = role === "ADMIN" || role === "SUPER_ADMIN" || role === "OPERATIONS";
   const canManageImport = role === "ADMIN" || role === "SUPER_ADMIN";
+  const canReloadLiveData = role === "ADMIN" || role === "SUPER_ADMIN";
   const canOverridePricing = hasFlexiblePaymentLinkAccess(user);
   const isRevenueScopedRole = role === "BDA" || role === "BDM";
   const paymentsApi = useApi<{ payments: PaymentRow[] }>("/api/payments", { payments: [] });
@@ -308,6 +325,7 @@ export function PaymentsPage() {
   const [query, setQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [notice, setNotice] = useState("");
+  const [syncingLiveData, setSyncingLiveData] = useState(false);
   const [paymentForm, setPaymentForm] = useState(initialPaymentForm);
   const [creatingRecoveryId, setCreatingRecoveryId] = useState("");
   const paymentsDescription = role === "BDA"
@@ -522,6 +540,20 @@ export function PaymentsPage() {
     }
   }
 
+  async function syncLiveData() {
+    try {
+      setSyncingLiveData(true);
+      const response = await reloadLiveRevenueSnapshot();
+      paymentsApi.refresh();
+      const paymentCount = response.result?.counts?.payments;
+      setNotice(paymentCount != null ? `Live data reloaded from Google Sheets. Payments in runtime store: ${paymentCount}.` : "Live data reloaded from Google Sheets.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to reload live data.");
+    } finally {
+      setSyncingLiveData(false);
+    }
+  }
+
   return (
     <div className="page-grid compact-canvas admin-page-grid payments-page-grid">
       <PageHeader
@@ -530,6 +562,11 @@ export function PaymentsPage() {
         description={paymentsDescription}
         actions={
           <div className="page-actions">
+            {canReloadLiveData ? (
+              <button className="btn-secondary" type="button" onClick={syncLiveData} disabled={syncingLiveData}>
+                {syncingLiveData ? "Syncing..." : "Sync Live Data"}
+              </button>
+            ) : null}
             <button className="btn-secondary" type="button" onClick={() => navigate("/onboarding")}>Onboarding Form</button>
             <button className="btn-secondary" type="button" onClick={() => navigate("/payments/subscriptions")}>Subscription Tracker</button>
             {hasPermission(user, "export_data") ? <button className="btn-secondary" type="button" onClick={() => navigate("/exports")}>Data Export</button> : null}
@@ -876,12 +913,17 @@ export function PaymentsPage() {
 }
 
 export function SubscriptionPaymentsPage() {
+  const { user } = useAuth();
+  const role = normalizeRole(user?.role);
+  const canReloadLiveData = role === "ADMIN" || role === "SUPER_ADMIN";
   const paymentsApi = useApi<{ payments: PaymentRow[] }>("/api/payments", { payments: [] });
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [notice, setNotice] = useState("");
+  const [syncingLiveData, setSyncingLiveData] = useState(false);
 
   const subscriptionRows = useMemo(
     () => paymentsApi.data.payments.filter((row) => row.billing_model === "SUBSCRIPTION"),
@@ -968,6 +1010,20 @@ export function SubscriptionPaymentsPage() {
     };
   }, [filteredRows]);
 
+  async function syncLiveData() {
+    try {
+      setSyncingLiveData(true);
+      const response = await reloadLiveRevenueSnapshot();
+      paymentsApi.refresh();
+      const paymentCount = response.result?.counts?.payments;
+      setNotice(paymentCount != null ? `Live data reloaded from Google Sheets. Payments in runtime store: ${paymentCount}.` : "Live data reloaded from Google Sheets.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to reload live data.");
+    } finally {
+      setSyncingLiveData(false);
+    }
+  }
+
   return (
     <div className="page-grid compact-canvas admin-page-grid payments-page-grid">
       <PageHeader
@@ -976,12 +1032,23 @@ export function SubscriptionPaymentsPage() {
         description="Dedicated tracking for Platinum subscription mandates only. This page excludes one-time and token payment rows, and focuses on mandate lifecycle, recurring value, and customer status."
         actions={
           <>
+            {canReloadLiveData ? (
+              <button className="btn-secondary" type="button" onClick={syncLiveData} disabled={syncingLiveData}>
+                {syncingLiveData ? "Syncing..." : "Sync Live Data"}
+              </button>
+            ) : null}
             <button className="btn-secondary" type="button" onClick={paymentsApi.refresh}>Refresh</button>
             <button className="btn-secondary" type="button" onClick={() => navigate("/onboarding")}>Onboarding Form</button>
             <button className="btn-primary" type="button" onClick={() => navigate("/payments")}>Payments Board</button>
           </>
         }
       />
+
+      {notice ? (
+        <div className="rounded-[22px] border border-[rgba(34,197,94,0.2)] bg-[rgba(34,197,94,0.08)] px-5 py-4 text-sm text-[var(--success)]">
+          {notice}
+        </div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <StatCard label="Subscribers" value={String(summary.total)} meta="All subscription orders in the current filter" />

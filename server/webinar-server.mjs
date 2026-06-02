@@ -52,6 +52,7 @@ const googleOauthClient = new OAuth2Client(googleClientId, googleClientSecret);
 const roomPresence = new Map();
 const roomChats = new Map();
 const socketRoomMeta = new Map();
+const liveRuntimeReloadMs = Math.max(Number(process.env.GOOGLE_SHEETS_RUNTIME_REFRESH_MS || 120000) || 120000, 30000);
 
 app.use(cors());
 app.use(express.json());
@@ -71,8 +72,31 @@ async function flushStore() {
   }
 }
 
+function getStoreCounts() {
+  return {
+    orders: store.data.orders.length,
+    students: store.data.students.length,
+    payments: store.data.payment_records.length,
+    due_promises: store.data.due_promises.length,
+  };
+}
+
+async function reloadStoreFromPersistence(reason = "manual-admin-reload") {
+  await store.reloadFromPersistence(reason);
+  return {
+    persistence: store.getPersistenceStatus(),
+    counts: getStoreCounts(),
+  };
+}
+
 function queueStoreFlush(context = "Deferred store flush failed") {
   void flushStore().catch((error) => {
+    console.error(context, error instanceof Error ? error.message : error);
+  });
+}
+
+function queueStoreReload(context = "Deferred store reload failed", reason = "scheduled-runtime-reload") {
+  void reloadStoreFromPersistence(reason).catch((error) => {
     console.error(context, error instanceof Error ? error.message : error);
   });
 }
@@ -2635,7 +2659,7 @@ app.get("/api/settings", (req, res) => {
 app.get("/api/google-sheets/status", (req, res) => {
   const user = requireAdminPermission(req, res, "Only admin and super-admin users can view Google Sheets sync status.");
   if (!user) return;
-  res.json({ ok: true, googleSheets: googleSheetsMirror.getStatus() });
+  res.json({ ok: true, googleSheets: googleSheetsMirror.getStatus(), persistence: store.getPersistenceStatus(), counts: getStoreCounts() });
 });
 
 app.post("/api/google-sheets/sync", async (req, res) => {
@@ -2658,6 +2682,27 @@ app.post("/api/google-sheets/sync", async (req, res) => {
       ok: false,
       message: error instanceof Error ? error.message : "Google Sheets sync failed.",
       googleSheets: googleSheetsMirror.getStatus(),
+    });
+  }
+});
+
+app.post("/api/google-sheets/reload", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin and super-admin users can reload Google Sheets data.");
+  if (!user) return;
+
+  try {
+    const result = await reloadStoreFromPersistence(String(req.body?.reason || "manual-admin-reload").trim() || "manual-admin-reload");
+    res.json({
+      ok: true,
+      result,
+      googleSheets: googleSheetsMirror.getStatus(),
+    });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      message: error instanceof Error ? error.message : "Google Sheets reload failed.",
+      googleSheets: googleSheetsMirror.getStatus(),
+      persistence: store.getPersistenceStatus(),
     });
   }
 });
@@ -3100,6 +3145,13 @@ try {
   await googleSheetsMirror.initialize(store);
 } catch (error) {
   console.error("Google Sheets startup sync failed:", error instanceof Error ? error.message : error);
+}
+
+if (store.getPersistenceStatus().mode === "google-sheets-primary") {
+  const reloadTimer = setInterval(() => {
+    queueStoreReload("Scheduled Google Sheets runtime reload failed:", "scheduled-runtime-reload");
+  }, liveRuntimeReloadMs);
+  reloadTimer.unref?.();
 }
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
