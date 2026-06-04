@@ -220,6 +220,50 @@ function getStoredAuthToken() {
   }
 }
 
+const webinarEntryLeadMs = 45 * 60 * 1000;
+
+function formatCountdownDuration(ms: number) {
+  const totalSeconds = Math.max(Math.ceil(ms / 1000), 0);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (days > 0) {
+    return `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m`;
+  }
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+  }
+  return `${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function getWebinarJoinGate(startTime?: string | null, now = Date.now()) {
+  const startTimestamp = new Date(startTime || "").getTime();
+  if (!Number.isFinite(startTimestamp)) {
+    return {
+      hasSchedule: false,
+      canJoin: true,
+      startTimestamp: null,
+      opensAtTimestamp: null,
+      msUntilOpen: 0,
+      countdown: "",
+    };
+  }
+
+  const opensAtTimestamp = startTimestamp - webinarEntryLeadMs;
+  const msUntilOpen = Math.max(opensAtTimestamp - now, 0);
+
+  return {
+    hasSchedule: true,
+    canJoin: now >= opensAtTimestamp,
+    startTimestamp,
+    opensAtTimestamp,
+    msUntilOpen,
+    countdown: formatCountdownDuration(msUntilOpen),
+  };
+}
+
 function WebinarPromoCard({
   webinar,
   attendeeCount,
@@ -1601,6 +1645,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [hostFullAmount, setHostFullAmount] = useState("9999");
   const [hostTokenAmount, setHostTokenAmount] = useState("499");
   const [screenSharePriority, setScreenSharePriority] = useState<Record<string, number>>({});
+  const [prejoinNow, setPrejoinNow] = useState(() => Date.now());
   const chatRef = useRef<HTMLDivElement | null>(null);
   const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
   const connection = useRoomConnection(role, roomName, joined ? form : null);
@@ -1668,6 +1713,16 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     [localHostStageCandidate, remoteHostStageCandidates],
   );
   const enrollEnabled = Boolean(connection.webinar?.payment_required && connection.webinar?.enroll_button_enabled);
+  const joinGate = useMemo(
+    () => getWebinarJoinGate(connection.session?.start_time || connection.webinar?.start_time, prejoinNow),
+    [connection.session?.start_time, connection.webinar?.start_time, prejoinNow],
+  );
+
+  useEffect(() => {
+    if (joined) return undefined;
+    const timer = window.setInterval(() => setPrejoinNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [joined]);
 
   useEffect(() => {
     if (!connection.attendanceId || role !== "ATTENDEE" || !connection.webinar?.id) return;
@@ -1850,6 +1905,14 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   function submitJoin() {
     if (role === "HOST" && !canHostRoom) {
       setPaymentNotice("Sign in as an admin or super-admin account to join as host.");
+      return;
+    }
+    if (!joinGate.canJoin) {
+      setPaymentNotice(
+        joinGate.opensAtTimestamp
+          ? `This class will open at ${formatDateTime(new Date(joinGate.opensAtTimestamp).toISOString())}.`
+          : "This class has not opened yet.",
+      );
       return;
     }
     if (!form.name.trim() || !form.phone.trim()) return;
@@ -2154,6 +2217,23 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <h2>{rightPanelTitle}</h2>
               <p>{rightPanelCopy}</p>
 
+              {joinGate.hasSchedule ? (
+                <div className={`rounded-3xl border px-4 py-4 text-sm ${joinGate.canJoin ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100" : "border-amber-400/25 bg-amber-400/10 text-amber-100"}`}>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.24em] opacity-80">
+                    {joinGate.canJoin ? "Room Open" : "Class Yet To Start"}
+                  </div>
+                  <div className="mt-2 text-base font-semibold">
+                    {joinGate.canJoin ? "You can enter this class now." : `Entry opens in ${joinGate.countdown}`}
+                  </div>
+                  <div className="mt-2 text-xs leading-6 opacity-90">
+                    Scheduled start: {joinGate.startTimestamp ? formatDateTime(new Date(joinGate.startTimestamp).toISOString()) : "—"}
+                  </div>
+                  <div className="text-xs leading-6 opacity-90">
+                    Room access opens 45 minutes before the scheduled class time.
+                  </div>
+                </div>
+              ) : null}
+
               <form
                 className="gm-prejoin-fields"
                 onSubmit={(event) => {
@@ -2182,8 +2262,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   onChange={(value) => setForm({ ...form, phone: value })}
                 />
 
-                <button className="gm-prejoin-btn" type="submit">
-                  {joinButtonLabel}
+                <button className="gm-prejoin-btn" type="submit" disabled={!joinGate.canJoin}>
+                  {joinGate.canJoin ? joinButtonLabel : `Opens In ${joinGate.countdown || "Soon"}`}
                   <PrejoinIcon name="arrow-right" />
                 </button>
 

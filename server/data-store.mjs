@@ -1583,6 +1583,39 @@ function minutesBetween(start, end) {
   return Math.max(Math.round((endTime - startTime) / 60000), 0);
 }
 
+function getRoomJoinGate(sessionStartTime, now = Date.now()) {
+  const startTimestamp = new Date(sessionStartTime || "").getTime();
+  if (!Number.isFinite(startTimestamp)) {
+    return {
+      startTimestamp: null,
+      opensAtTimestamp: null,
+      canJoin: true,
+      msUntilOpen: 0,
+    };
+  }
+
+  const opensAtTimestamp = startTimestamp - (45 * 60 * 1000);
+  const msUntilOpen = Math.max(opensAtTimestamp - now, 0);
+
+  return {
+    startTimestamp,
+    opensAtTimestamp,
+    canJoin: now >= opensAtTimestamp,
+    msUntilOpen,
+  };
+}
+
+function formatRoomJoinGateTimestamp(timestamp) {
+  if (!Number.isFinite(timestamp)) return "";
+  return new Date(timestamp).toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function groupTimeline(attendance) {
   if (!attendance.length) {
     return constants.webinarTimeline;
@@ -2983,6 +3016,11 @@ export async function createDashboardStore() {
       const room = store.getRoomByName(roomName);
       if (!room?.session || !room.webinar) {
         throw new Error("Room not found");
+      }
+
+      const joinGate = getRoomJoinGate(room.session.start_time || room.webinar.start_time);
+      if (!joinGate.canJoin) {
+        throw new Error(`This class opens 45 minutes before start time. Entry opens at ${formatRoomJoinGateTimestamp(joinGate.opensAtTimestamp)}.`);
       }
 
       const student = role === "ATTENDEE" ? store.upsertStudent({ name, phone, email, source: room.webinar.title }) : null;
