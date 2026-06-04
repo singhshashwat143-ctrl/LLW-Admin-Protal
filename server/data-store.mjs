@@ -2406,7 +2406,12 @@ export async function createDashboardStore() {
         store.data = normalized.data;
         writeFileSync(dataFile, JSON.stringify(store.data, null, 2));
         if (normalized.changed) {
-          await runtimePersistence.save(store.data, normalized.reason || reason);
+          runtimePersistence.save(store.data, normalized.reason || reason).catch((error) => {
+            console.error(
+              "Deferred persistence after runtime reload failed:",
+              error instanceof Error ? error.message : error,
+            );
+          });
         }
         snapshotDataFile();
         return store.data;
