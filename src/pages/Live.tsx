@@ -238,6 +238,40 @@ function formatCountdownDuration(ms: number) {
   return `${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
 }
 
+function getCountdownParts(ms: number) {
+  const totalSeconds = Math.max(Math.ceil(ms / 1000), 0);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  return [
+    { label: "Days", value: String(days).padStart(2, "0") },
+    { label: "Hours", value: String(hours).padStart(2, "0") },
+    { label: "Mins", value: String(minutes).padStart(2, "0") },
+    { label: "Secs", value: String(seconds).padStart(2, "0") },
+  ];
+}
+
+function formatJoinGateDate(timestamp: number | null) {
+  if (!Number.isFinite(timestamp)) return "Date to be announced";
+  return new Intl.DateTimeFormat("en-IN", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(timestamp));
+}
+
+function formatJoinGateTime(timestamp: number | null) {
+  if (!Number.isFinite(timestamp)) return "Time to be announced";
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(timestamp));
+}
+
 function getWebinarJoinGate(startTime?: string | null, now = Date.now()) {
   const startTimestamp = new Date(startTime || "").getTime();
   if (!Number.isFinite(startTimestamp)) {
@@ -1717,6 +1751,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     () => getWebinarJoinGate(connection.session?.start_time || connection.webinar?.start_time, prejoinNow),
     [connection.session?.start_time, connection.webinar?.start_time, prejoinNow],
   );
+  const joinGateCountdownParts = useMemo(() => getCountdownParts(joinGate.msUntilOpen), [joinGate.msUntilOpen]);
 
   useEffect(() => {
     if (joined) return undefined;
@@ -2217,19 +2252,36 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <h2>{rightPanelTitle}</h2>
               <p>{rightPanelCopy}</p>
 
-              {joinGate.hasSchedule ? (
-                <div className={`rounded-3xl border px-4 py-4 text-sm ${joinGate.canJoin ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100" : "border-amber-400/25 bg-amber-400/10 text-amber-100"}`}>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.24em] opacity-80">
-                    {joinGate.canJoin ? "Room Open" : "Class Yet To Start"}
-                  </div>
-                  <div className="mt-2 text-base font-semibold">
-                    {joinGate.canJoin ? "You can enter this class now." : `Entry opens in ${joinGate.countdown}`}
-                  </div>
-                  <div className="mt-2 text-xs leading-6 opacity-90">
-                    Scheduled start: {joinGate.startTimestamp ? formatDateTime(new Date(joinGate.startTimestamp).toISOString()) : "—"}
-                  </div>
-                  <div className="text-xs leading-6 opacity-90">
-                    Room access opens 45 minutes before the scheduled class time.
+              {joinGate.hasSchedule && !joinGate.canJoin ? (
+                <div className="relative overflow-hidden rounded-[28px] border border-white/12 bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.28),_transparent_38%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(30,41,59,0.92))] px-5 py-5 text-white shadow-[0_24px_80px_rgba(15,23,42,0.45)]">
+                  <div className="absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" aria-hidden="true" />
+                  <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-amber-300/10 blur-3xl" aria-hidden="true" />
+                  <div className="absolute -left-8 bottom-0 h-24 w-24 rounded-full bg-cyan-300/10 blur-3xl" aria-hidden="true" />
+
+                  <div className="relative">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.34em] text-amber-200/80">
+                      Your Session Will Start On
+                    </div>
+                    <div className="mt-3 text-xl font-semibold tracking-tight text-white">
+                      {formatJoinGateDate(joinGate.startTimestamp)}
+                    </div>
+                    <div className="mt-1 text-sm font-medium text-slate-200/80">
+                      {formatJoinGateTime(joinGate.startTimestamp)}
+                    </div>
+
+                    <div className="mt-5 grid grid-cols-4 gap-2">
+                      {joinGateCountdownParts.map((part) => (
+                        <div
+                          key={part.label}
+                          className="rounded-2xl border border-white/10 bg-white/6 px-2 py-3 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-sm"
+                        >
+                          <div className="text-2xl font-semibold tracking-tight text-white">{part.value}</div>
+                          <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-300/70">
+                            {part.label}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               ) : null}
