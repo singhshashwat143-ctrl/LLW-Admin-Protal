@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { Pool } from "pg";
 import { createGoogleSheetsPrimaryPersistence } from "./google-sheets-primary-persistence.mjs";
 
 const runtimeStateTable = "app_runtime_state";
@@ -183,6 +182,25 @@ function createDisabledPersistence() {
   };
 }
 
+async function importPgPool() {
+  const module = await import("pg");
+  return module.Pool;
+}
+
+async function withTimeout(task, timeoutMs, label) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function createRuntimePersistence() {
   if (useGoogleSheetsAsPrimaryDb) {
     return createGoogleSheetsPrimaryPersistence();
@@ -195,11 +213,29 @@ export async function createRuntimePersistence() {
     return createDisabledPersistence();
   }
 
+  const importTimeoutMs = Math.max(Number(process.env.RUNTIME_PERSISTENCE_IMPORT_TIMEOUT_MS || 5000) || 5000, 1000);
+  const Pool = await withTimeout(
+    () => importPgPool(),
+    importTimeoutMs,
+    "PostgreSQL driver import",
+  ).catch((error) => {
+    if (requireDatabasePersistence) {
+      throw error;
+    }
+    console.error("[runtime-persistence] PostgreSQL driver unavailable, continuing on local snapshot:", error instanceof Error ? error.message : error);
+    return null;
+  });
+
+  if (!Pool) {
+    return createDisabledPersistence();
+  }
+
   const pool = new Pool({
     connectionString: databaseUrl,
     ssl: databaseSsl,
     max: 5,
   });
+  const queryTimeoutMs = Math.max(Number(process.env.RUNTIME_PERSISTENCE_QUERY_TIMEOUT_MS || 5000) || 5000, 1000);
 
   let writeQueue = Promise.resolve();
   let lastChecksum = "";
@@ -208,18 +244,22 @@ export async function createRuntimePersistence() {
   let lastError = null;
 
   async function bootstrap() {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS ${runtimeStateTable} (
-        store_key TEXT PRIMARY KEY,
-        payload JSONB NOT NULL,
-        checksum TEXT NOT NULL,
-        revision BIGINT NOT NULL DEFAULT 1,
-        source TEXT NOT NULL DEFAULT 'server',
-        last_reason TEXT NOT NULL DEFAULT 'persist',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-      );
-    `);
+    await withTimeout(
+      () => pool.query(`
+        CREATE TABLE IF NOT EXISTS ${runtimeStateTable} (
+          store_key TEXT PRIMARY KEY,
+          payload JSONB NOT NULL,
+          checksum TEXT NOT NULL,
+          revision BIGINT NOT NULL DEFAULT 1,
+          source TEXT NOT NULL DEFAULT 'server',
+          last_reason TEXT NOT NULL DEFAULT 'persist',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `),
+      queryTimeoutMs,
+      "PostgreSQL bootstrap",
+    );
   }
 
   async function persistNow(snapshot, reason = "persist") {
@@ -230,20 +270,24 @@ export async function createRuntimePersistence() {
       return;
     }
 
-    const result = await pool.query(
-      `
-        INSERT INTO ${runtimeStateTable} (store_key, payload, checksum, revision, source, last_reason)
-        VALUES ($1, $2::jsonb, $3, 1, 'server', $4)
-        ON CONFLICT (store_key) DO UPDATE
-        SET payload = EXCLUDED.payload,
-            checksum = EXCLUDED.checksum,
-            revision = ${runtimeStateTable}.revision + 1,
-            source = EXCLUDED.source,
-            last_reason = EXCLUDED.last_reason,
-            updated_at = now()
-        RETURNING revision, updated_at;
-      `,
-      [runtimeStateKey, payloadText, checksum, reason],
+    const result = await withTimeout(
+      () => pool.query(
+        `
+          INSERT INTO ${runtimeStateTable} (store_key, payload, checksum, revision, source, last_reason)
+          VALUES ($1, $2::jsonb, $3, 1, 'server', $4)
+          ON CONFLICT (store_key) DO UPDATE
+          SET payload = EXCLUDED.payload,
+              checksum = EXCLUDED.checksum,
+              revision = ${runtimeStateTable}.revision + 1,
+              source = EXCLUDED.source,
+              last_reason = EXCLUDED.last_reason,
+              updated_at = now()
+          RETURNING revision, updated_at;
+        `,
+        [runtimeStateKey, payloadText, checksum, reason],
+      ),
+      queryTimeoutMs,
+      "PostgreSQL persist",
     );
 
     lastChecksum = checksum;
@@ -253,31 +297,44 @@ export async function createRuntimePersistence() {
   }
 
   async function load(fallbackData) {
-    await bootstrap();
+    try {
+      await bootstrap();
 
-    const result = await pool.query(
-      `SELECT payload, checksum, revision, updated_at FROM ${runtimeStateTable} WHERE store_key = $1 LIMIT 1`,
-      [runtimeStateKey],
-    );
+      const result = await withTimeout(
+        () => pool.query(
+          `SELECT payload, checksum, revision, updated_at FROM ${runtimeStateTable} WHERE store_key = $1 LIMIT 1`,
+          [runtimeStateKey],
+        ),
+        queryTimeoutMs,
+        "PostgreSQL load",
+      );
 
-    if (!result.rowCount) {
-      await persistNow(clonePayload(fallbackData), "bootstrap-from-json");
-      return fallbackData;
+      if (!result.rowCount) {
+        await persistNow(clonePayload(fallbackData), "bootstrap-from-json");
+        return fallbackData;
+      }
+
+      const row = result.rows[0];
+      lastChecksum = String(row.checksum || "");
+      revision = Number(row.revision || 0);
+      updatedAt = row.updated_at || null;
+      lastError = null;
+      const mergedPayload = mergeSnapshots(row.payload, fallbackData);
+      const mergedChecksum = buildChecksum(JSON.stringify(mergedPayload));
+
+      if (mergedChecksum !== lastChecksum) {
+        await persistNow(clonePayload(mergedPayload), "merge-json-fallback");
+      }
+
+      return mergedPayload;
+    } catch (error) {
+      lastError = error;
+      if (requireDatabasePersistence) {
+        throw error;
+      }
+      console.error("[runtime-persistence] PostgreSQL load failed, continuing on local snapshot:", error instanceof Error ? error.message : error);
+      return clonePayload(fallbackData);
     }
-
-    const row = result.rows[0];
-    lastChecksum = String(row.checksum || "");
-    revision = Number(row.revision || 0);
-    updatedAt = row.updated_at || null;
-    lastError = null;
-    const mergedPayload = mergeSnapshots(row.payload, fallbackData);
-    const mergedChecksum = buildChecksum(JSON.stringify(mergedPayload));
-
-    if (mergedChecksum !== lastChecksum) {
-      await persistNow(clonePayload(mergedPayload), "merge-json-fallback");
-    }
-
-    return mergedPayload;
   }
 
   function save(snapshot, reason = "persist") {
