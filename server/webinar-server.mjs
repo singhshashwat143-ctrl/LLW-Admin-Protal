@@ -1571,9 +1571,8 @@ app.delete("/api/products/:id", (req, res) => {
 });
 
 app.get("/api/webinars", (req, res) => {
-  const webinars = store.data.webinars.map((item) => ({
+  const webinars = store.listWebinars().map((item) => ({
     ...serializeWebinar(req, item),
-    instructor: store.data.instructors.find((instructor) => instructor.id === item.instructor_id) ?? null,
     sessions_count: store.getSessions(item.id).length,
   }));
   res.json({ ok: true, webinars });
@@ -1638,7 +1637,7 @@ app.delete("/api/webinars/:id", (req, res) => {
 });
 
 app.get("/api/webinars/:id/urls", (req, res) => {
-  const webinar = store.data.webinars.find((item) => item.id === req.params.id);
+  const webinar = store.getWebinarById(req.params.id);
   if (!webinar) return res.status(404).json({ ok: false, message: "Webinar not found" });
   res.json({
     ok: true,
@@ -1650,7 +1649,7 @@ app.get("/api/webinars/:id/urls", (req, res) => {
 });
 
 app.get("/api/webinars/:id/sessions", (req, res) => {
-  const webinar = store.data.webinars.find((item) => item.id === req.params.id);
+  const webinar = store.getWebinarById(req.params.id);
   if (!webinar) return res.status(404).json({ ok: false, message: "Webinar not found" });
   res.json({
     ok: true,

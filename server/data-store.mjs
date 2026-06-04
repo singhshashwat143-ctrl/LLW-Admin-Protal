@@ -2964,16 +2964,80 @@ export async function createDashboardStore() {
         .filter((item) => item.webinar_id === webinarId)
         .sort((left, right) => new Date(right.start_time).getTime() - new Date(left.start_time).getTime());
     },
+    buildFallbackWebinarFromSession(session) {
+      const instructor = store.data.instructors[0] ?? null;
+      const fallbackTitle = session.title?.replace(/\s+Session\s+\d+$/i, "").trim() || "Scheduled webinar";
+      return store.attachInstructor({
+        id: session.webinar_id,
+        title: fallbackTitle,
+        slug: slugify(fallbackTitle) || session.room_name || session.webinar_id,
+        type: "MASTERCLASS",
+        instructor_id: instructor?.id || "",
+        category: "Finance",
+        language: "English",
+        description: session.description || "",
+        banner_url: "",
+        thumbnail_url: "",
+        start_time: session.start_time,
+        end_time: session.end_time,
+        livekit_room_name: session.room_name,
+        host_token: `host-${session.room_name}`,
+        attendee_token: `attendee-${session.room_name}`,
+        host_url: session.host_url,
+        attendee_url: session.attendee_url,
+        short_host_url: session.short_host_url,
+        short_attendee_url: session.short_attendee_url,
+        ui_type: "WEBINAR",
+        server_no: "Livekit-New-06",
+        product_ids: [],
+        payment_required: false,
+        enroll_button_enabled: false,
+        price_inr: 0,
+        token_price_inr: 49900,
+        payment_mode: "FULL",
+        razorpay_link: "",
+        status: session.status || "SCHEDULED",
+        peak_attendance: 0,
+        total_entries: 0,
+        total_attendees: 0,
+        is_simulation: false,
+        created_by: "system-restored-session",
+        created_at: session.created_at || nowIso(),
+        updated_at: session.updated_at || nowIso(),
+        is_orphan_fallback: true,
+      });
+    },
+    getWebinarById(webinarId) {
+      const webinar = store.data.webinars.find((item) => item.id === webinarId) ?? null;
+      if (webinar) {
+        return store.attachInstructor(webinar);
+      }
+      const fallbackSession = store.getSessions(webinarId)[0] ?? null;
+      return fallbackSession ? store.buildFallbackWebinarFromSession(fallbackSession) : null;
+    },
+    listWebinars() {
+      const webinars = store.data.webinars.map((item) => store.attachInstructor(item));
+      const webinarIds = new Set(webinars.map((item) => item.id));
+      const fallbackWebinars = [];
+
+      store.data.webinarSessions.forEach((session) => {
+        if (!session.webinar_id || webinarIds.has(session.webinar_id)) return;
+        webinarIds.add(session.webinar_id);
+        fallbackWebinars.push(store.buildFallbackWebinarFromSession(session));
+      });
+
+      return [...webinars, ...fallbackWebinars]
+        .sort((left, right) => new Date(right.start_time || 0).getTime() - new Date(left.start_time || 0).getTime());
+    },
     getRoomByName(roomName) {
       const session = store.data.webinarSessions.find((item) => item.room_name === roomName);
       if (!session) {
         return null;
       }
 
-      const webinar = store.data.webinars.find((item) => item.id === session.webinar_id) ?? null;
       return {
         session,
-        webinar: webinar ? store.attachInstructor(webinar) : null,
+        webinar: store.getWebinarById(session.webinar_id),
       };
     },
     upsertStudent(input) {
@@ -3107,7 +3171,7 @@ export async function createDashboardStore() {
         .sort((left, right) => new Date(right.join_time).getTime() - new Date(left.join_time).getTime());
     },
     getWebinarAnalytics(webinarId) {
-      const webinar = store.data.webinars.find((item) => item.id === webinarId);
+      const webinar = store.getWebinarById(webinarId);
       if (!webinar) {
         return null;
       }
@@ -3119,17 +3183,20 @@ export async function createDashboardStore() {
       const quality = attendeeRows.length
         ? Math.round(attendeeRows.reduce((sum, row) => sum + Number(row.connection_quality || 0), 0) / attendeeRows.length)
         : 0;
+      const derivedTotalEntries = attendance.reduce((sum, item) => sum + Number(item.join_counts || 1), 0);
+      const derivedTotalAttendees = new Set(attendeeRows.map((item) => item.phone || item.email || item.id)).size;
+      const derivedPeakAttendance = Math.max(Number(webinar.peak_attendance || 0), derivedTotalAttendees);
 
       return {
-        webinar: store.attachInstructor(webinar),
+        webinar,
         sessions,
         stats: {
           totalDuration,
-          totalEntries: webinar.total_entries,
-          totalAttendees: webinar.total_attendees,
-          pitchAttendance: Math.round(webinar.total_attendees * 0.22),
+          totalEntries: Number(webinar.total_entries || 0) || derivedTotalEntries,
+          totalAttendees: Number(webinar.total_attendees || 0) || derivedTotalAttendees,
+          pitchAttendance: Math.round((Number(webinar.total_attendees || 0) || derivedTotalAttendees) * 0.22),
           avgPacketLoss: Number((Math.max(100 - quality, 0) / 100).toFixed(2)),
-          peakAttendance: webinar.peak_attendance,
+          peakAttendance: derivedPeakAttendance,
           enrollNowAttendance: attendeeRows.filter((item) => Number(item.enroll_clicks || 0) > 0).length,
           quality,
           deviceBreakdown: attendeeRows.reduce((acc, row) => {
