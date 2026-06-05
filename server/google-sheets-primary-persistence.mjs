@@ -89,6 +89,13 @@ function parseCsv(text = "") {
   });
 }
 
+function parseEventFeedRows(text = "") {
+  return String(text || "")
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .map((line) => parseCsvLine(line));
+}
+
 const collectionIdentitySpecs = {
   team: [["id"], ["email"]],
   students: [["id"], ["email"], ["phone"]],
@@ -477,6 +484,47 @@ export async function createGoogleSheetsPrimaryPersistence() {
     }
   }
 
+  async function fetchCollectionFromEventFeed(sheetName) {
+    if (!spreadsheetId || !sheetName) return [];
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
+    try {
+      const query = encodeURIComponent(`select * where A='${String(sheetName).replace(/'/g, "\\'")}'`);
+      const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/gviz/tq?tqx=out:csv&sheet=sync_events&tq=${query}`;
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) return [];
+      const rows = parseEventFeedRows(await response.text());
+      const recordsById = new Map();
+      rows.forEach((columns) => {
+        const eventSheet = String(columns[0] || "").trim();
+        const mode = String(columns[1] || "").trim();
+        const eventType = String(columns[2] || "").trim();
+        const recordId = String(columns[3] || "").trim();
+        const payloadJson = String(columns[8] || "").trim();
+        if (eventSheet !== sheetName || mode !== "event" || !recordId) {
+          return;
+        }
+        if (eventType === "deleted") {
+          recordsById.delete(recordId);
+          return;
+        }
+        if (!payloadJson) return;
+        try {
+          const payload = JSON.parse(payloadJson);
+          const existing = recordsById.get(recordId);
+          recordsById.set(recordId, existing ? choosePreferredRecord(existing, payload) : payload);
+        } catch {
+          // Ignore malformed historical rows.
+        }
+      });
+      return Array.from(recordsById.values());
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   async function postPayload(payload) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
@@ -522,6 +570,20 @@ export async function createGoogleSheetsPrimaryPersistence() {
         const clonedFallback = clonePayload(fallbackData);
         await persistNow(clonedFallback, "bootstrap-from-fallback", { force: true });
         return clonedFallback;
+      }
+
+      const criticalBackfills = [
+        ["students", fetchCollectionFromEventFeed],
+        ["coupons", fetchCollectionFromEventFeed],
+      ];
+      for (const [collectionName, loader] of criticalBackfills) {
+        if (Array.isArray(remoteSnapshot[collectionName]) && remoteSnapshot[collectionName].length) {
+          continue;
+        }
+        const rows = await loader(collectionName);
+        if (rows.length) {
+          remoteSnapshot[collectionName] = rows;
+        }
       }
 
       if (!Array.isArray(remoteSnapshot.coupons) || !remoteSnapshot.coupons.length) {
