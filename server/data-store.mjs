@@ -72,6 +72,7 @@ const productSessionDateDefaultRevision = 1;
 const productCatalogRevision = 2;
 const teamIdentityDedupRevision = 1;
 const teamRosterRevision = 1;
+const webinarScheduleTimezoneRevision = 1;
 const teamRosterReassignEmail = "ankit@livelongwealth.com";
 const teamRosterRemovalEmails = [
   "arpitha@livelongwealth.com",
@@ -162,6 +163,27 @@ function coerceIsoTimestamp(value, fallback = nowIso()) {
   const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00.000Z` : raw;
   const timestamp = new Date(normalized).getTime();
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+}
+
+function coerceScheduledIstTimestamp(value, fallback = nowIso()) {
+  if (!value) return fallback;
+  const raw = String(value).trim();
+  if (!raw) return fallback;
+  const normalized = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$/.test(raw) ? `${raw}+05:30` : raw;
+  const timestamp = new Date(normalized).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+}
+
+function reinterpretUtcWallClockAsIstIso(value) {
+  const raw = String(value || "").trim();
+  if (!raw.endsWith("Z")) return raw;
+  const normalized = `${raw.slice(0, -1)}+05:30`;
+  const timestamp = new Date(normalized).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : raw;
+}
+
+function looksLikeUuid(value = "") {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
 }
 
 function coerceUnixTimestampToIso(value) {
@@ -1380,6 +1402,7 @@ function applyRuntimeDataMigrations(data) {
   const currentProductCatalogRevision = Number(next.settings?.product_catalog_revision || 0);
   const currentTeamIdentityDedupRevision = Number(next.settings?.team_identity_dedup_revision || 0);
   const currentTeamRosterRevision = Number(next.settings?.team_roster_revision || 0);
+  const currentWebinarScheduleTimezoneRevision = Number(next.settings?.webinar_schedule_timezone_revision || 0);
   let changed = false;
   let reason = "";
 
@@ -1502,6 +1525,52 @@ function applyRuntimeDataMigrations(data) {
       : `team-roster-revision-${teamRosterRevision}`;
   }
 
+  if (currentWebinarScheduleTimezoneRevision < webinarScheduleTimezoneRevision) {
+    next.webinars = (next.webinars || []).map((webinar) => {
+      if (!looksLikeUuid(webinar?.id) || !String(webinar?.start_time || "").endsWith("Z")) {
+        return webinar;
+      }
+      const normalizedStartTime = reinterpretUtcWallClockAsIstIso(webinar.start_time);
+      const normalizedEndTime = reinterpretUtcWallClockAsIstIso(webinar.end_time);
+      if (normalizedStartTime === webinar.start_time && normalizedEndTime === webinar.end_time) {
+        return webinar;
+      }
+      changed = true;
+      return {
+        ...webinar,
+        start_time: normalizedStartTime,
+        end_time: normalizedEndTime,
+        updated_at: nowIso(),
+      };
+    });
+    next.webinarSessions = (next.webinarSessions || []).map((session) => {
+      if (!looksLikeUuid(session?.id) || !String(session?.start_time || "").endsWith("Z")) {
+        return session;
+      }
+      const normalizedStartTime = reinterpretUtcWallClockAsIstIso(session.start_time);
+      const normalizedEndTime = reinterpretUtcWallClockAsIstIso(session.end_time);
+      if (normalizedStartTime === session.start_time && normalizedEndTime === session.end_time) {
+        return session;
+      }
+      changed = true;
+      return {
+        ...session,
+        start_time: normalizedStartTime,
+        end_time: normalizedEndTime,
+        updated_at: nowIso(),
+      };
+    });
+    next.settings = normalizeSettings({
+      ...next.settings,
+      webinar_schedule_timezone_revision: webinarScheduleTimezoneRevision,
+      updated_at: nowIso(),
+    });
+    changed = true;
+    reason = reason
+      ? `${reason}+webinar-schedule-timezone-${webinarScheduleTimezoneRevision}`
+      : `webinar-schedule-timezone-${webinarScheduleTimezoneRevision}`;
+  }
+
   return { data: next, changed, reason };
 }
 
@@ -1613,6 +1682,7 @@ function formatRoomJoinGateTimestamp(timestamp) {
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "Asia/Kolkata",
   });
 }
 
@@ -2808,8 +2878,9 @@ export async function createDashboardStore() {
     },
     createWebinar(input) {
       const roomName = createRoomName(input.title);
-      const startTime = input.start_time ? new Date(input.start_time).toISOString() : nowIso();
-      const endTime = input.end_time ? new Date(input.end_time).toISOString() : new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      const defaultEndTime = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+      const startTime = input.start_time ? coerceScheduledIstTimestamp(input.start_time, nowIso()) : nowIso();
+      const endTime = input.end_time ? coerceScheduledIstTimestamp(input.end_time, defaultEndTime) : defaultEndTime;
       const slug = slugify(input.slug || input.title || "masterclass");
       const sessionId = crypto.randomUUID();
 
@@ -2912,8 +2983,8 @@ export async function createDashboardStore() {
         attendee_url: buildAbsolutePath(roomName, "attend"),
         short_host_url: `/${createPrettySlug(`${webinar.slug}-host`)}`,
         short_attendee_url: `/${createPrettySlug(`${webinar.slug}-join`)}`,
-        start_time: input.start_time ? new Date(input.start_time).toISOString() : webinar.start_time,
-        end_time: input.end_time ? new Date(input.end_time).toISOString() : webinar.end_time,
+        start_time: input.start_time ? coerceScheduledIstTimestamp(input.start_time, webinar.start_time) : webinar.start_time,
+        end_time: input.end_time ? coerceScheduledIstTimestamp(input.end_time, webinar.end_time) : webinar.end_time,
         status: input.status || "SCHEDULED",
         is_active: Boolean(input.is_active ?? true),
         created_at: nowIso(),

@@ -260,6 +260,7 @@ function formatJoinGateDate(timestamp: number | null) {
     day: "2-digit",
     month: "long",
     year: "numeric",
+    timeZone: "Asia/Kolkata",
   }).format(new Date(timestamp));
 }
 
@@ -269,6 +270,7 @@ function formatJoinGateTime(timestamp: number | null) {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+    timeZone: "Asia/Kolkata",
   }).format(new Date(timestamp));
 }
 
