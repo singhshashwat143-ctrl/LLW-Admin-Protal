@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 const defaultWebAppUrl = "https://script.google.com/macros/s/AKfycbzSnSEociIsfEUnuvysPzrjBsiB8pRQwKMBt2I5yHfx7afBGBWDFH3jfCE1OYD0DbQI/exec";
+const defaultSpreadsheetId = "1vfn9Au0D4VF6E_r5nc2WhX6Pt5ZM6H0z3bYkFroqMU8";
 const runtimeCollectionKeys = [
   "team",
   "students",
@@ -44,6 +45,48 @@ function buildChecksum(payloadText) {
 
 function buildSignature(payload) {
   return buildChecksum(JSON.stringify(payload));
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let current = "";
+  let inQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "\"") {
+      if (inQuotes && line[index + 1] === "\"") {
+        current += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (char === "," && !inQuotes) {
+      values.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  values.push(current);
+  return values;
+}
+
+function parseCsv(text = "") {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0);
+  if (!lines.length) return [];
+  const headers = parseCsvLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const row = {};
+    const values = parseCsvLine(line);
+    headers.forEach((header, index) => {
+      row[header] = values[index] ?? "";
+    });
+    return row;
+  });
 }
 
 const collectionIdentitySpecs = {
@@ -392,6 +435,7 @@ async function parseResponse(response) {
 
 export async function createGoogleSheetsPrimaryPersistence() {
   const webAppUrl = String(process.env.GOOGLE_SHEETS_WEB_APP_URL || defaultWebAppUrl).trim();
+  const spreadsheetId = String(process.env.GOOGLE_SHEETS_SPREADSHEET_ID || defaultSpreadsheetId).trim();
   if (!webAppUrl) {
     throw new Error("GOOGLE_SHEETS_WEB_APP_URL is required when GOOGLE_SHEETS_AS_PRIMARY_DB is enabled.");
   }
@@ -407,6 +451,31 @@ export async function createGoogleSheetsPrimaryPersistence() {
   let updatedAt = null;
   let lastError = null;
   let lastSnapshot = null;
+
+  async function fetchSheetRows(sheetName) {
+    if (!spreadsheetId || !sheetName) return [];
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
+    try {
+      const url = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) return [];
+      const csvText = await response.text();
+      return parseCsv(csvText).map((row) => {
+        const payloadJson = String(row.__payload_json || "").trim();
+        if (!payloadJson) return row;
+        try {
+          return JSON.parse(payloadJson);
+        } catch {
+          return row;
+        }
+      });
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 
   async function postPayload(payload) {
     const controller = new AbortController();
@@ -453,6 +522,13 @@ export async function createGoogleSheetsPrimaryPersistence() {
         const clonedFallback = clonePayload(fallbackData);
         await persistNow(clonedFallback, "bootstrap-from-fallback", { force: true });
         return clonedFallback;
+      }
+
+      if (!Array.isArray(remoteSnapshot.coupons) || !remoteSnapshot.coupons.length) {
+        const couponRows = await fetchSheetRows("coupons");
+        if (couponRows.length) {
+          remoteSnapshot.coupons = couponRows;
+        }
       }
 
       lastSnapshot = clonePayload(remoteSnapshot);
