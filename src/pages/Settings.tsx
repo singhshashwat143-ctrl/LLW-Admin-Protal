@@ -48,7 +48,7 @@ export function SettingsPage() {
   const productsApi = useApi<{ products: ProductRow[] }>("/api/products", { products: [] });
   const settings = data.settings || {};
   const isAdminLevel = user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
-  const [showCoupons, setShowCoupons] = useState(false);
+  const [showCoupons, setShowCoupons] = useState(true);
   const [notice, setNotice] = useState("");
   const [couponForm, setCouponForm] = useState(initialCouponForm);
   const [notificationSettings, setNotificationSettings] = useState({
@@ -63,6 +63,12 @@ export function SettingsPage() {
       aisensyWebhookUrl: settings?.aisensyWebhookUrl || "",
     });
   }, [settings?.aisensyPaymentLinkCampaign, settings?.aisensyWebhookUrl]);
+
+  useEffect(() => {
+    if (canManageCoupons) {
+      setShowCoupons(true);
+    }
+  }, [canManageCoupons]);
 
   async function createCoupon() {
     if (!canManageCoupons) {
@@ -172,7 +178,7 @@ export function SettingsPage() {
 
           <div className="flex flex-wrap gap-3">
             <button className="btn-secondary" type="button" onClick={() => setShowCoupons((value) => !value)}>
-              {showCoupons ? "Hide Coupon Admin" : "Reveal Coupon Admin"}
+              {showCoupons ? "Hide Coupon Form" : "Show Coupon Form"}
             </button>
           </div>
 
