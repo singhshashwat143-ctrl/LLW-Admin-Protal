@@ -2320,13 +2320,32 @@ function buildExportRows(data) {
   return { payments, enrollments, tokens, refunds };
 }
 
+function parseExportBoundary(value, boundary = "start") {
+  const normalized = String(value || "").trim();
+  if (!normalized) return null;
+
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    const fallback = new Date(normalized).getTime();
+    return Number.isFinite(fallback) ? fallback : null;
+  }
+
+  const [, year, month, day] = match;
+  const suffix = boundary === "end" ? "T23:59:59.999+05:30" : "T00:00:00.000+05:30";
+  const timestamp = new Date(`${year}-${month}-${day}${suffix}`).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function applyExportFilters(rows, filters) {
   return rows.filter((row) => {
     const dateValue = row.sales_date || row.created_at || row.due_date;
-    const matchesDate = matchesDays(dateValue, filters.days);
     const rowTimestamp = dateValue ? new Date(dateValue).getTime() : null;
-    const matchesDateFrom = !filters.dateFrom || (rowTimestamp !== null && rowTimestamp >= new Date(filters.dateFrom).getTime());
-    const matchesDateTo = !filters.dateTo || (rowTimestamp !== null && rowTimestamp <= new Date(`${filters.dateTo}T23:59:59.999Z`).getTime());
+    const hasExplicitDateRange = Boolean(filters.dateFrom || filters.dateTo);
+    const dateFromTimestamp = parseExportBoundary(filters.dateFrom, "start");
+    const dateToTimestamp = parseExportBoundary(filters.dateTo, "end");
+    const matchesDate = hasExplicitDateRange ? true : matchesDays(dateValue, filters.days);
+    const matchesDateFrom = dateFromTimestamp === null || (rowTimestamp !== null && rowTimestamp >= dateFromTimestamp);
+    const matchesDateTo = dateToTimestamp === null || (rowTimestamp !== null && rowTimestamp <= dateToTimestamp);
     const matchesBda = !filters.bdaId || row.bda_id === filters.bdaId;
     const matchesManager = !filters.managerName || row.manager_name === filters.managerName;
     const matchesProduct = !filters.productId || row.product_id === filters.productId;
