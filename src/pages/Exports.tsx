@@ -132,6 +132,7 @@ export function ExportsPage() {
           </select>
 
           <select className="input-dark" value={filters.days} onChange={(event) => setFilters({ ...filters, days: event.target.value })}>
+            <option value="">Custom range</option>
             <option value="7">Last 7 days</option>
             <option value="15">Last 15 days</option>
             <option value="30">Last 30 days</option>
@@ -139,8 +140,32 @@ export function ExportsPage() {
             <option value="90">Last 90 days</option>
           </select>
 
-          <input className="input-dark" type="date" value={filters.dateFrom} onChange={(event) => setFilters({ ...filters, dateFrom: event.target.value })} />
-          <input className="input-dark" type="date" value={filters.dateTo} onChange={(event) => setFilters({ ...filters, dateTo: event.target.value })} />
+          <input
+            className="input-dark"
+            type="date"
+            value={filters.dateFrom}
+            onChange={(event) => {
+              const nextDateFrom = event.target.value;
+              setFilters((current) => ({
+                ...current,
+                dateFrom: nextDateFrom,
+                days: nextDateFrom || current.dateTo ? "" : current.days,
+              }));
+            }}
+          />
+          <input
+            className="input-dark"
+            type="date"
+            value={filters.dateTo}
+            onChange={(event) => {
+              const nextDateTo = event.target.value;
+              setFilters((current) => ({
+                ...current,
+                dateTo: nextDateTo,
+                days: current.dateFrom || nextDateTo ? "" : current.days,
+              }));
+            }}
+          />
 
           <select className="input-dark" value={filters.sourceType} onChange={(event) => setFilters({ ...filters, sourceType: event.target.value })}>
             <option value="ALL">All sources</option>
@@ -207,6 +232,9 @@ export function ExportsPage() {
         <div className="mt-4 flex flex-wrap gap-3">
           <button className="btn-secondary" type="button" onClick={fetchExportRows} disabled={loading}>{loading ? "Loading..." : "Preview Export"}</button>
           <button className="btn-primary" type="button" onClick={downloadExport} disabled={loading}>{loading ? "Preparing..." : "Download CSV"}</button>
+        </div>
+        <div className="mt-3 text-xs text-[var(--text-secondary)]">
+          Exact month exports work best with a custom date range. Once a date is selected, the relative day window is automatically cleared.
         </div>
       </SectionCard>
 
