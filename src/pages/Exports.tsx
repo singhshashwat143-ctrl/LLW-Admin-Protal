@@ -48,6 +48,7 @@ export function ExportsPage() {
     const preferred = [
       "sales_date",
       "created_at",
+      "paid_at",
       "refund_date",
       "source_type",
       "source_label",
@@ -58,6 +59,8 @@ export function ExportsPage() {
       "payment_mode",
       "payment_state",
       "payment_status",
+      "collection_status",
+      "collected_amount_inr",
       "amount_inr",
       "refund_amount_inr",
       "amount_due_inr",

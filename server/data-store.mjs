@@ -1242,10 +1242,15 @@ function buildExportRows(data) {
   const orders = data.orders.map((order) => withComputedPayment(order, data));
   const payments = data.payment_records.map((payment) => {
     const order = orders.find((entry) => entry.id === payment.order_id);
+    const paymentAmount = Number(payment.amount_inr || 0);
+    const paymentCollectedAmount = isPaidStatus(payment.status) ? paymentAmount : 0;
+    const paymentOpenAmount = payment.status === "CREATED" ? paymentAmount : 0;
     return {
       payment_id: payment.id,
       order_id: payment.order_id,
-      sales_date: payment.paid_at || payment.created_at,
+      sales_date: isPaidStatus(payment.status) ? (payment.paid_at || payment.created_at || "") : "",
+      created_at: payment.created_at || "",
+      paid_at: payment.paid_at || "",
       bda_id: order?.bda?.id || "",
       bda_name: order?.bda?.name || "",
       manager_name: order?.manager_name || "",
@@ -1260,7 +1265,9 @@ function buildExportRows(data) {
       payment_bucket: payment.type === "RECOVERY" ? "RECOVERY" : order?.payment_mode || "FULL",
       payment_method: payment.method,
       transaction_id: payment.transaction_id,
-      amount_inr: Number(payment.amount_inr || 0),
+      amount_inr: paymentAmount,
+      collected_amount_inr: paymentCollectedAmount,
+      open_amount_inr: paymentOpenAmount,
       original_order_value_inr: Number(order?.original_product_value_inr || order?.product_value_inr || 0),
       discount_inr: Number(order?.discount_inr || 0),
       coupon_code: order?.coupon_code || "",
@@ -1270,6 +1277,14 @@ function buildExportRows(data) {
       amount_due_inr: Number(order?.amount_due_inr || 0),
       payment_state: order?.payment_state || "PENDING",
       payment_status: payment.status,
+      collection_status:
+        isPaidStatus(payment.status)
+          ? "COLLECTED"
+          : payment.status === "FAILED"
+            ? "FAILED"
+            : payment.status === "REFUNDED"
+              ? "REFUNDED"
+              : "OPEN",
       order_status: order?.status || "PENDING",
       source: order?.source || "",
       stage: payment.stage,
