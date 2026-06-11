@@ -29,6 +29,9 @@ type OrderRow = {
   batch_month_key?: string;
   batch_month_label?: string;
   batch_is_active?: boolean | null;
+  preferred_language?: string;
+  learning_schedule?: string;
+  learning_schedule_label?: string;
   original_product_value_inr?: number;
   discount_inr?: number;
   coupon_code?: string;
@@ -196,6 +199,9 @@ export function OrdersPage() {
                     ) : (
                       <div className="mt-1 text-xs text-[var(--text-secondary)]">No batch assigned</div>
                     )}
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                      {row.preferred_language || "English"} • {row.learning_schedule_label || (row.learning_schedule === "WEEKEND" ? "Weekend" : "Weekday")}
+                    </div>
                     {canEditBatch && product ? (
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <select

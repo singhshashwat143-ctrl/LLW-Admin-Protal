@@ -61,6 +61,7 @@ const productBatchMonths = [
   { key: "DEC", label: "Dec" },
 ];
 const productBatchMonthByKey = new Map(productBatchMonths.map((month) => [month.key, month]));
+const learningScheduleLabelByKey = new Map(supportedLearningSchedules.map((schedule) => [schedule.key, schedule.label]));
 const supportedProductLanguages = ["English", "Hindi", "Malayalam"];
 const supportedLearningSchedules = [
   { key: "WEEKDAY", label: "Weekday" },
@@ -2104,6 +2105,8 @@ function withComputedPayment(order, data) {
   const displayAmountDue = isSubscriptionOrder ? 0 : amountDue;
   const displayPaymentState = isSubscriptionOrder && mandateAuthorized ? "COMPLETED" : paymentState;
   const displayStatus = isSubscriptionOrder && mandateAuthorized ? "ACTIVE" : status;
+  const preferredLanguage = normalizePreferredLanguage(order.preferred_language || student?.preferred_language || "English");
+  const learningSchedule = normalizeLearningSchedule(order.learning_schedule || "WEEKDAY");
 
   return {
     ...order,
@@ -2161,6 +2164,9 @@ function withComputedPayment(order, data) {
     batch_month_key: batchKey,
     batch_month_label: batchLabel,
     batch_is_active: selectedBatch ? Boolean(selectedBatch.is_active) : null,
+    preferred_language: preferredLanguage,
+    learning_schedule: learningSchedule,
+    learning_schedule_label: learningScheduleLabelByKey.get(learningSchedule) || "Weekday",
     token_due:
       !isSubscriptionOrder && amountDue > 0
         ? {

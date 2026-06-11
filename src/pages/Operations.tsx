@@ -28,6 +28,9 @@ type OperationRow = {
   batch_month_key?: string;
   batch_month_label?: string;
   batch_is_active?: boolean | null;
+  preferred_language?: string;
+  learning_schedule?: string;
+  learning_schedule_label?: string;
   payment_mode: string;
   product_value_inr: number;
   amount_paid_inr: number;
@@ -249,6 +252,9 @@ export function OperationsPage() {
                     <div className="cell-stack">
                       <div>{row.product?.name || "-"}</div>
                       {row.batch_month_label ? <div className="text-xs text-[var(--text-secondary)]">Batch {row.batch_month_label}{row.batch_is_active === false ? " • Non-operational" : " • Operational"}</div> : null}
+                      <div className="text-xs text-[var(--text-secondary)]">
+                        {row.preferred_language || "English"} • {row.learning_schedule_label || (row.learning_schedule === "WEEKEND" ? "Weekend" : "Weekday")}
+                      </div>
                       <div className="text-xs text-[var(--text-secondary)]">{row.payment_mode} order</div>
                       <div className="text-xs text-[var(--text-secondary)]">Created {formatDateTime(row.created_at)}</div>
                     </div>
