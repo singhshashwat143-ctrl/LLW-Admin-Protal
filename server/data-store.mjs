@@ -61,12 +61,12 @@ const productBatchMonths = [
   { key: "DEC", label: "Dec" },
 ];
 const productBatchMonthByKey = new Map(productBatchMonths.map((month) => [month.key, month]));
-const learningScheduleLabelByKey = new Map(supportedLearningSchedules.map((schedule) => [schedule.key, schedule.label]));
 const supportedProductLanguages = ["English", "Hindi", "Malayalam"];
 const supportedLearningSchedules = [
   { key: "WEEKDAY", label: "Weekday" },
   { key: "WEEKEND", label: "Weekend" },
 ];
+const learningScheduleLabelByKey = new Map(supportedLearningSchedules.map((schedule) => [schedule.key, schedule.label]));
 const couponResetRevision = 1;
 const priceUpdateCouponRevision = 1;
 const productSessionDateDefaultRevision = 1;
