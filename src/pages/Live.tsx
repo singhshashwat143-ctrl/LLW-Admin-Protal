@@ -6,7 +6,6 @@ import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
 import brandLogo from "../assets/logo.png";
 import { api, useApi } from "../lib/api";
-import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
 import { ensureRazorpayLoaded, useRazorpayCheckout } from "../lib/razorpay";
 import { navigate } from "../lib/router";
@@ -1656,7 +1655,6 @@ function useClassMedia({
 }
 
 function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomName: string }) {
-  const { user } = useAuth();
   const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
   const [form, setForm] = useState({
     name: "",
@@ -1685,13 +1683,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const chatRef = useRef<HTMLDivElement | null>(null);
   const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
   const connection = useRoomConnection(role, roomName, joined ? form : null);
-  const canHostRoom = role === "HOST" && ["ADMIN", "SUPER_ADMIN"].includes(String(user?.role || "").toUpperCase());
   const media = useClassMedia({
     joined,
     role,
-    canPublishAudio: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canPublishAudio),
-    canPublishVideo: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canPublishVideo),
-    canShareScreen: role === "HOST" ? canHostRoom : Boolean(connection.livekit?.canShareScreen),
+    canPublishAudio: Boolean(connection.livekit?.canPublishAudio),
+    canPublishVideo: Boolean(connection.livekit?.canPublishVideo),
+    canShareScreen: Boolean(connection.livekit?.canShareScreen),
     livekit: connection.livekit,
     sendMediaState: connection.sendMediaState,
   });
@@ -1940,10 +1937,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }, [paymentNotice, razorpayLoadError]);
 
   function submitJoin() {
-    if (role === "HOST" && !canHostRoom) {
-      setPaymentNotice("Sign in as an admin or super-admin account to join as host.");
-      return;
-    }
     if (!joinGate.canJoin) {
       setPaymentNotice(
         joinGate.opensAtTimestamp
@@ -2184,7 +2177,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     ? "Enter your host details to open the live controls and run the room."
     : "Enter your details to open the attendee room.";
   const helperCopy = role === "HOST"
-    ? "Host access stays restricted to signed-in admin accounts."
+    ? "Use your host link to open the live controls for this room."
     : "Payments, chat, and live participation continue inside the room.";
 
   if (!joined) {
@@ -2372,30 +2365,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             </div>
           </div>
         </section>
-      </div>
-    );
-  }
-
-  if (connection.joining && !connection.attendanceId) {
-    return (
-      <div className="gm-prejoin-shell">
-        <div className="gm-prejoin-brand">
-          <div>
-            <div className="gm-prejoin-logo">LW</div>
-            <h1 className="gm-prejoin-title">Connecting To Webinar</h1>
-            <p className="gm-prejoin-copy">
-              We are opening the room, validating access, and connecting the live session now.
-            </p>
-          </div>
-        </div>
-
-        <div className="gm-prejoin-form-shell">
-          <div className="gm-prejoin-form">
-            <h2>{role === "HOST" ? "Host Console" : "Join Webinar"}</h2>
-            <p>Just a moment while the room connects.</p>
-            <div className="gm-payment-note">Connecting to the live room...</div>
-          </div>
-        </div>
       </div>
     );
   }
@@ -2978,19 +2947,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 <div className="text-xs uppercase tracking-[0.18em] text-orange-200">Offer Panel</div>
                 <div className="mt-2 text-lg font-semibold">{formatCurrency((connection.webinar.price_inr || 0) / 100)}</div>
                 <div className="mt-1 text-slate-300">Enroll without leaving this webinar page.</div>
-                <button
-                  className="webinar-cta-button mt-4 w-full"
-                  type="button"
-                  onClick={launchEnrollNow}
-                  disabled={paymentLoading || paymentComplete || !razorpayReady}
-                >
-                  {paymentComplete
-                    ? "Payment Completed"
-                    : paymentLoading
-                      ? "Preparing Secure Checkout..."
-                      : razorpayReady
-                        ? "Enroll Now"
-                        : "Loading Checkout..."}
+                <button className="webinar-cta-button mt-4 w-full" type="button" onClick={launchEnrollNow} disabled={paymentLoading || paymentComplete || !razorpayReady}>
+                  {paymentComplete ? "Payment Completed" : paymentLoading ? "Preparing Secure Checkout..." : !razorpayReady ? "Loading Checkout..." : "Enroll Now"}
                 </button>
               </div>
             ) : null}

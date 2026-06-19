@@ -690,6 +690,22 @@ function canJoinAsHost(user) {
   return isAdminUser(user);
 }
 
+function normalizeRequestPath(value) {
+  return String(value || "").replace(/\/+$/, "") || "/";
+}
+
+function isHostLinkJoinRequest(req, roomName) {
+  const referer = String(req.get("referer") || req.get("referrer") || "").trim();
+  if (!referer) return false;
+  try {
+    const url = new URL(referer, `${req.protocol}://${req.get("host")}`);
+    const expectedPath = normalizeRequestPath(`/webinar/host/${roomName}`);
+    return normalizeRequestPath(url.pathname) === expectedPath;
+  } catch {
+    return false;
+  }
+}
+
 function getStoredTeamMember(user) {
   if (!user) return null;
   const email = String(user.email || "").toLowerCase();
@@ -1622,11 +1638,9 @@ app.post("/api/webinars", async (req, res) => {
 });
 
 app.put("/api/webinars/:id", (req, res) => {
-  const index = store.data.webinars.findIndex((item) => item.id === req.params.id);
-  if (index < 0) return res.status(404).json({ ok: false, message: "Webinar not found" });
-  store.data.webinars[index] = { ...store.data.webinars[index], ...req.body, updated_at: new Date().toISOString() };
-  store.save();
-  res.json({ ok: true, webinar: serializeWebinar(req, store.data.webinars[index]) });
+  const webinar = store.updateWebinar(req.params.id, req.body ?? {});
+  if (!webinar) return res.status(404).json({ ok: false, message: "Webinar not found" });
+  res.json({ ok: true, webinar: serializeWebinar(req, webinar) });
 });
 
 app.delete("/api/webinars/:id", (req, res) => {
@@ -1716,20 +1730,26 @@ app.get("/api/rooms/:roomName", (req, res) => {
 app.post("/api/rooms/:roomName/join", async (req, res) => {
   try {
     const requestedRole = String(req.body?.role || "ATTENDEE").toUpperCase();
-    const role = requestedRole === "HOST" ? "HOST" : "ATTENDEE";
-    const currentUser = role === "HOST" ? requireAuthenticatedUser(req, res) : null;
-    if (role === "HOST") {
-      if (!currentUser) return;
-      if (!canJoinAsHost(currentUser)) {
-        return res.status(403).json({ ok: false, message: "Only admin or super-admin users can join as host." });
-      }
+    const wantsHostAccess = requestedRole === "HOST";
+    const currentUser = getCurrentUser(req);
+    const hostLinkAccess = wantsHostAccess && isHostLinkJoinRequest(req, req.params.roomName);
+    const adminHostAccess = wantsHostAccess && canJoinAsHost(currentUser);
+    if (wantsHostAccess && !hostLinkAccess && !adminHostAccess) {
+      return res.status(403).json({ ok: false, message: "Use the host link or sign in with an admin account to join as host." });
     }
+    const role = wantsHostAccess ? "HOST" : "ATTENDEE";
+    const hostName = String(req.body?.name || currentUser?.name || "Host Console");
+    const hostEmail = String(req.body?.email || currentUser?.email || "");
+    const hostPhone = String(req.body?.phone || "");
+    const attendeeName = String(req.body?.name || "");
+    const attendeePhone = String(req.body?.phone || "");
+    const attendeeEmail = String(req.body?.email || "");
     const joined = store.joinRoom({
       roomName: req.params.roomName,
       role,
-      name: role === "HOST" ? String(req.body?.name || currentUser?.name || "Host Console") : req.body?.name,
-      phone: req.body?.phone,
-      email: role === "HOST" ? String(currentUser?.email || "") : req.body?.email,
+      name: role === "HOST" ? hostName : attendeeName,
+      phone: role === "HOST" ? hostPhone : attendeePhone,
+      email: role === "HOST" ? hostEmail : attendeeEmail,
     });
     const hostCanPublish = role === "HOST";
     const canPublishAudio = hostCanPublish;

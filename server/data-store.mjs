@@ -73,7 +73,8 @@ const productSessionDateDefaultRevision = 1;
 const productCatalogRevision = 2;
 const teamIdentityDedupRevision = 1;
 const teamRosterRevision = 1;
-const webinarScheduleTimezoneRevision = 1;
+const webinarScheduleTimezoneRevision = 2;
+const istOffsetMs = 5.5 * 60 * 60 * 1000;
 const teamRosterReassignEmail = "ankit@livelongwealth.com";
 const teamRosterRemovalEmails = [
   "arpitha@livelongwealth.com",
@@ -175,12 +176,53 @@ function coerceScheduledIstTimestamp(value, fallback = nowIso()) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
 
-function reinterpretUtcWallClockAsIstIso(value) {
+function restoreScheduledUtcTimestamp(value) {
   const raw = String(value || "").trim();
   if (!raw.endsWith("Z")) return raw;
-  const normalized = `${raw.slice(0, -1)}+05:30`;
-  const timestamp = new Date(normalized).getTime();
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : raw;
+  const timestamp = new Date(raw).getTime();
+  if (!Number.isFinite(timestamp)) return raw;
+  return new Date(timestamp + istOffsetMs).toISOString();
+}
+
+function hasOwnInput(input, key) {
+  return Object.prototype.hasOwnProperty.call(input || {}, key);
+}
+
+function normalizeScheduledWebinarPatch(current, input = {}) {
+  const next = {
+    ...current,
+    ...input,
+  };
+  if (hasOwnInput(input, "start_time")) {
+    next.start_time = coerceScheduledIstTimestamp(input.start_time, current?.start_time || nowIso());
+  }
+  if (hasOwnInput(input, "end_time")) {
+    next.end_time = coerceScheduledIstTimestamp(input.end_time, current?.end_time || next.start_time || current?.start_time || nowIso());
+  }
+  return next;
+}
+
+function syncPrimaryWebinarSessionFromWebinar(store, webinar, input = {}) {
+  const primarySession = store.data.webinarSessions.find(
+    (item) => item.webinar_id === webinar.id && item.room_name === webinar.livekit_room_name,
+  );
+  if (!primarySession) return;
+
+  if (hasOwnInput(input, "title") && !hasOwnInput(input, "session_title")) {
+    primarySession.title = `${webinar.title} Session 1`;
+  }
+  if (hasOwnInput(input, "description")) {
+    primarySession.description = webinar.description;
+  }
+  if (hasOwnInput(input, "start_time")) {
+    primarySession.start_time = webinar.start_time;
+  }
+  if (hasOwnInput(input, "end_time")) {
+    primarySession.end_time = webinar.end_time;
+  }
+  if (hasOwnInput(input, "status")) {
+    primarySession.status = webinar.status;
+  }
 }
 
 function looksLikeUuid(value = "") {
@@ -1527,16 +1569,17 @@ function applyRuntimeDataMigrations(data) {
   }
 
   if (currentWebinarScheduleTimezoneRevision < webinarScheduleTimezoneRevision) {
+    let webinarScheduleChanged = false;
     next.webinars = (next.webinars || []).map((webinar) => {
       if (!looksLikeUuid(webinar?.id) || !String(webinar?.start_time || "").endsWith("Z")) {
         return webinar;
       }
-      const normalizedStartTime = reinterpretUtcWallClockAsIstIso(webinar.start_time);
-      const normalizedEndTime = reinterpretUtcWallClockAsIstIso(webinar.end_time);
+      const normalizedStartTime = restoreScheduledUtcTimestamp(webinar.start_time);
+      const normalizedEndTime = restoreScheduledUtcTimestamp(webinar.end_time);
       if (normalizedStartTime === webinar.start_time && normalizedEndTime === webinar.end_time) {
         return webinar;
       }
-      changed = true;
+      webinarScheduleChanged = true;
       return {
         ...webinar,
         start_time: normalizedStartTime,
@@ -1548,12 +1591,12 @@ function applyRuntimeDataMigrations(data) {
       if (!looksLikeUuid(session?.id) || !String(session?.start_time || "").endsWith("Z")) {
         return session;
       }
-      const normalizedStartTime = reinterpretUtcWallClockAsIstIso(session.start_time);
-      const normalizedEndTime = reinterpretUtcWallClockAsIstIso(session.end_time);
+      const normalizedStartTime = restoreScheduledUtcTimestamp(session.start_time);
+      const normalizedEndTime = restoreScheduledUtcTimestamp(session.end_time);
       if (normalizedStartTime === session.start_time && normalizedEndTime === session.end_time) {
         return session;
       }
-      changed = true;
+      webinarScheduleChanged = true;
       return {
         ...session,
         start_time: normalizedStartTime,
@@ -1570,6 +1613,9 @@ function applyRuntimeDataMigrations(data) {
     reason = reason
       ? `${reason}+webinar-schedule-timezone-${webinarScheduleTimezoneRevision}`
       : `webinar-schedule-timezone-${webinarScheduleTimezoneRevision}`;
+    if (webinarScheduleChanged) {
+      changed = true;
+    }
   }
 
   return { data: next, changed, reason };
@@ -3006,6 +3052,24 @@ export async function createDashboardStore() {
       store.persist();
       return store.attachInstructor(webinar);
     },
+    updateWebinar(webinarId, input = {}) {
+      const index = store.data.webinars.findIndex((item) => item.id === webinarId);
+      if (index < 0) {
+        return null;
+      }
+
+      const current = store.data.webinars[index];
+      const normalized = normalizeScheduledWebinarPatch(current, input);
+      const webinar = {
+        ...normalized,
+        updated_at: nowIso(),
+      };
+
+      store.data.webinars[index] = webinar;
+      syncPrimaryWebinarSessionFromWebinar(store, webinar, input);
+      store.persist();
+      return store.attachInstructor(webinar);
+    },
     createSession(webinarId, input = {}) {
       const webinar = store.data.webinars.find((item) => item.id === webinarId);
       if (!webinar) {
@@ -3078,7 +3142,7 @@ export async function createDashboardStore() {
     buildFallbackWebinarFromSession(session) {
       const instructor = store.data.instructors[0] ?? null;
       const fallbackTitle = session.title?.replace(/\s+Session\s+\d+$/i, "").trim() || "Scheduled webinar";
-      return store.attachInstructor({
+      const fallbackWebinar = {
         id: session.webinar_id,
         title: fallbackTitle,
         slug: slugify(fallbackTitle) || session.room_name || session.webinar_id,
@@ -3116,13 +3180,15 @@ export async function createDashboardStore() {
         created_at: session.created_at || nowIso(),
         updated_at: session.updated_at || nowIso(),
         is_orphan_fallback: true,
-      });
+      };
+      return store.attachInstructor(fallbackWebinar);
     },
     getWebinarById(webinarId) {
       const webinar = store.data.webinars.find((item) => item.id === webinarId) ?? null;
       if (webinar) {
         return store.attachInstructor(webinar);
       }
+
       const fallbackSession = store.getSessions(webinarId)[0] ?? null;
       return fallbackSession ? store.buildFallbackWebinarFromSession(fallbackSession) : null;
     },
@@ -3132,7 +3198,9 @@ export async function createDashboardStore() {
       const fallbackWebinars = [];
 
       store.data.webinarSessions.forEach((session) => {
-        if (!session.webinar_id || webinarIds.has(session.webinar_id)) return;
+        if (!session.webinar_id || webinarIds.has(session.webinar_id)) {
+          return;
+        }
         webinarIds.add(session.webinar_id);
         fallbackWebinars.push(store.buildFallbackWebinarFromSession(session));
       });
