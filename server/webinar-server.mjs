@@ -54,13 +54,25 @@ const roomChats = new Map();
 const socketRoomMeta = new Map();
 const liveRuntimeReloadMs = Math.max(Number(process.env.GOOGLE_SHEETS_RUNTIME_REFRESH_MS || 120000) || 120000, 30000);
 
+app.set("trust proxy", true);
 app.use(cors());
 app.use(express.json());
+
+function resolveRequestOrigin(req) {
+  if (publicAppUrl) {
+    return publicAppUrl;
+  }
+
+  const forwardedProto = String(req.get("x-forwarded-proto") || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  const host = String(req.get("x-forwarded-host") || req.get("host") || "").split(",")[0].trim();
+  return host ? `${protocol}://${host}` : `${protocol}://localhost:${port}`;
+}
 
 function withAbsolute(req, path) {
   if (!path) return path;
   if (path.startsWith("http")) return path;
-  return `${req.protocol}://${req.get("host")}${path}`;
+  return `${resolveRequestOrigin(req)}${path}`;
 }
 
 async function flushStore() {
