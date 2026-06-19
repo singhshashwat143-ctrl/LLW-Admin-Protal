@@ -6,6 +6,7 @@ import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
 import brandLogo from "../assets/logo.png";
 import { api, useApi } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { formatCurrency, formatDateTime } from "../lib/format";
 import { ensureRazorpayLoaded, useRazorpayCheckout } from "../lib/razorpay";
 import { navigate } from "../lib/router";
@@ -1655,6 +1656,7 @@ function useClassMedia({
 }
 
 function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomName: string }) {
+  const { user } = useAuth();
   const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
   const [form, setForm] = useState({
     name: "",
