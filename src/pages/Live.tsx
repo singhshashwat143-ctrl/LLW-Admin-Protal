@@ -900,7 +900,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     setJoinError("");
     setMeetingEndedMessage("");
 
-    api<{ webinar: Webinar; session: Session; attendance: Attendance; livekit?: LiveKitJoinInfo | null }>(`/api/rooms/${roomName}/join`, {
+    api<{ webinar: Webinar; session: Session; attendance: Attendance; socketAuthToken?: string; livekit?: LiveKitJoinInfo | null }>(`/api/rooms/${roomName}/join`, {
       method: "POST",
       body: JSON.stringify({ ...joinPayload, role }),
     }).then((response) => {
@@ -921,6 +921,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
           name: joinPayload.name,
           phone: joinPayload.phone,
           email: joinPayload.email,
+          socketAuthToken: response.socketAuthToken || "",
           token: getStoredAuthToken(),
         },
       });

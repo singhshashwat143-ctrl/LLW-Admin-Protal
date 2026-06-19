@@ -639,24 +639,34 @@ function createSessionToken(user) {
   return `${payload}.${signature}`;
 }
 
-function getUserFromSessionToken(token) {
-  if (!token) return null;
+function createSignedToken(input) {
+  const payload = Buffer.from(JSON.stringify(input)).toString("base64url");
+  const signature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
 
-  const [payload, signature] = token.split(".");
+function verifySignedToken(token) {
+  const [payload, signature] = String(token || "").split(".");
   if (!payload || !signature) return null;
   const expectedSignature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
   if (signature !== expectedSignature) return null;
 
   try {
-    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    const user = store.data.team.find(
-      (item) => item.id === session.sub && String(item.email || "").toLowerCase() === String(session.email || "").toLowerCase(),
-    );
-    if (!user || user.is_active === false) return null;
-    return user;
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch {
     return null;
   }
+}
+
+function getUserFromSessionToken(token) {
+  if (!token) return null;
+  const session = verifySignedToken(token);
+  if (!session) return null;
+  const user = store.data.team.find(
+    (item) => item.id === session.sub && String(item.email || "").toLowerCase() === String(session.email || "").toLowerCase(),
+  );
+  if (!user || user.is_active === false) return null;
+  return user;
 }
 
 function getCurrentUser(req) {
@@ -716,6 +726,28 @@ function isHostLinkJoinRequest(req, roomName) {
   } catch {
     return false;
   }
+}
+
+function createRoomSocketToken({ roomName, attendance }) {
+  return createSignedToken({
+    kind: "room-socket",
+    roomName: String(roomName || ""),
+    attendanceId: String(attendance?.id || ""),
+    role: String(attendance?.role || "ATTENDEE").toUpperCase(),
+    sessionId: String(attendance?.session_id || ""),
+    iat: Date.now(),
+  });
+}
+
+function verifyRoomSocketToken(token, { roomName, attendance }) {
+  const payload = verifySignedToken(token);
+  if (!payload || payload.kind !== "room-socket") return false;
+  return (
+    String(payload.roomName || "") === String(roomName || "")
+    && String(payload.attendanceId || "") === String(attendance?.id || "")
+    && String(payload.role || "").toUpperCase() === String(attendance?.role || "ATTENDEE").toUpperCase()
+    && String(payload.sessionId || "") === String(attendance?.session_id || "")
+  );
 }
 
 function getStoredTeamMember(user) {
@@ -1782,6 +1814,10 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
       webinar: serializeWebinar(req, joined.webinar),
       session: serializeSession(req, joined.session),
       attendance: joined.attendance,
+      socketAuthToken: createRoomSocketToken({
+        roomName: req.params.roomName,
+        attendance: joined.attendance,
+      }),
       student: joined.student,
       livekit: {
         url: livekitUrl,
@@ -2897,6 +2933,7 @@ io.on("connection", (socket) => {
   const auth = socket.handshake.auth || {};
   const roomName = String(auth.roomName || "");
   const attendanceId = String(auth.attendanceId || "");
+  const socketAuthToken = String(auth.socketAuthToken || "");
   const sessionUser = getUserFromSessionToken(String(auth.token || ""));
 
   if (!roomName || !attendanceId) {
@@ -2916,11 +2953,14 @@ io.on("connection", (socket) => {
   }
 
   const role = String(attendance.role || "ATTENDEE").toUpperCase();
-  if (role === "HOST") {
-    if (!sessionUser || !canJoinAsHost(sessionUser) || String(sessionUser.email || "").toLowerCase() !== String(attendance.email || "").toLowerCase()) {
-      socket.disconnect(true);
-      return;
-    }
+  const hasValidSocketToken = verifyRoomSocketToken(socketAuthToken, { roomName, attendance });
+  const hasValidAdminSession = role === "HOST"
+    && sessionUser
+    && canJoinAsHost(sessionUser)
+    && String(sessionUser.email || "").toLowerCase() === String(attendance.email || "").toLowerCase();
+  if (!hasValidSocketToken && !hasValidAdminSession) {
+    socket.disconnect(true);
+    return;
   }
 
   const name = String(attendance.name || auth.name || "Guest");
