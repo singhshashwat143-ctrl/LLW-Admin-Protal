@@ -3261,10 +3261,6 @@ export async function createDashboardStore() {
         throw new Error("Room not found");
       }
 
-      const joinGate = getRoomJoinGate(room.session.start_time || room.webinar.start_time);
-      if (!joinGate.canJoin) {
-        throw new Error(`This class opens 45 minutes before start time. Entry opens at ${formatRoomJoinGateTimestamp(joinGate.opensAtTimestamp)}.`);
-      }
 
       const student = role === "ATTENDEE" ? store.upsertStudent({ name, phone, email, source: room.webinar.title }) : null;
       const existing = store.data.webinarAttendance.find(
