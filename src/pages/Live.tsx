@@ -292,7 +292,7 @@ function getWebinarJoinGate(startTime?: string | null, now = Date.now()) {
 
   return {
     hasSchedule: true,
-    canJoin: now >= opensAtTimestamp,
+    canJoin: true,
     startTimestamp,
     opensAtTimestamp,
     msUntilOpen,
