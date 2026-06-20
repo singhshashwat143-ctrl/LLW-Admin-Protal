@@ -1,0 +1,27 @@
+{
+  "csvPath": "/Users/shashwatsingh/Downloads/payments-export-2026-05-08.csv",
+  "webAppUrl": "https://script.google.com/macros/s/AKfycbzSnSEociIsfEUnuvysPzrjBsiB8pRQwKMBt2I5yHfx7afBGBWDFH3jfCE1OYD0DbQI/exec",
+  "syncRunId": "f14875f0-cebe-4d19-b851-46eee1b8a1b2",
+  "syncedAt": "2026-05-08T07:53:59.026Z",
+  "counts": {
+    "products": 12,
+    "product_batches": 144,
+    "product_session_dates": 0,
+    "team": 30,
+    "students": 7,
+    "coupons": 1,
+    "orders_local": 7,
+    "payment_records_local": 10,
+    "payments_latest_csv": 14,
+    "instructors": 8,
+    "bootcamps": 1,
+    "webinars": 0,
+    "links": 4,
+    "refunds": 0
+  },
+  "payloadPath": "/Users/shashwatsingh/Desktop/llw_webinare/outputs/google-sheets-sync/payload-2026-05-08T07-53-59.json",
+  "postResult": {
+    "raw": "<!DOCTYPE html><html><head><link rel=\"shortcut icon\" href=\"//ssl.gstatic.com/docs/script/images/favicon.ico\"><title>Error</title><style type=\"text/css\" nonce=\"u8WtEJBkXjTq080bX4633A\">body {background-color: #fff; margin: 0; padding: 0;}.errorMessage {font-family: Arial,sans-serif; font-size: 12pt; font-weight: bold; line-height: 150%; padding-top: 25px;}</style></head><body style=\"margin:20px\"><div><img alt=\"Google Apps Script\" src=\"//ssl.gstatic.com/docs/script/images/logo.png\"></div><div style=\"text-align:center;font-family:monospace;margin:50px auto 0;max-width:600px\">Script function not found: doPost</div></body></html>"
+  },
+  "postError": null
+}

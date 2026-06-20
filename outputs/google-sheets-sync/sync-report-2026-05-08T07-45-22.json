@@ -1,0 +1,25 @@
+{
+  "csvPath": "/Users/shashwatsingh/Downloads/payments-export-2026-05-08.csv",
+  "webAppUrl": "https://script.google.com/macros/s/AKfycbzSnSEociIsfEUnuvysPzrjBsiB8pRQwKMBt2I5yHfx7afBGBWDFH3jfCE1OYD0DbQI/exec",
+  "syncRunId": "d76c4233-8bda-469e-8a73-618b40be210c",
+  "syncedAt": "2026-05-08T07:45:22.562Z",
+  "counts": {
+    "products": 12,
+    "product_batches": 144,
+    "product_session_dates": 0,
+    "team": 30,
+    "students": 7,
+    "coupons": 1,
+    "orders_local": 7,
+    "payment_records_local": 10,
+    "payments_latest_csv": 14,
+    "instructors": 8,
+    "bootcamps": 1,
+    "webinars": 0,
+    "links": 4,
+    "refunds": 0
+  },
+  "payloadPath": "/Users/shashwatsingh/Desktop/llw_webinare/outputs/google-sheets-sync/payload-2026-05-08T07-45-22.json",
+  "postResult": null,
+  "postError": "fetch failed"
+}
