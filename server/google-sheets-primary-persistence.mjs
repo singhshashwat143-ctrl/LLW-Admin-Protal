@@ -231,6 +231,58 @@ function mergeSnapshots(existingPayload, incomingPayload) {
   return merged;
 }
 
+function countCollection(snapshot, key) {
+  return Array.isArray(snapshot?.[key]) ? snapshot[key].length : 0;
+}
+
+function countDistinctPaymentOrderIds(snapshot) {
+  const paymentRecords = Array.isArray(snapshot?.payment_records) ? snapshot.payment_records : [];
+  return new Set(
+    paymentRecords
+      .map((payment) => String(payment?.order_id || "").trim())
+      .filter(Boolean),
+  ).size;
+}
+
+function isValidOrderRecord(record) {
+  return Boolean(String(record?.id || "").trim() && String(record?.order_number || "").trim());
+}
+
+function countInvalidOrders(snapshot) {
+  const orders = Array.isArray(snapshot?.orders) ? snapshot.orders : [];
+  return orders.filter((order) => !isValidOrderRecord(order)).length;
+}
+
+function shouldRecoverOrdersFromEvents(snapshot) {
+  const orderCount = countCollection(snapshot, "orders");
+  const paymentOrderCount = countDistinctPaymentOrderIds(snapshot);
+  return (
+    paymentOrderCount >= 25
+    && (
+      orderCount < Math.max(10, Math.floor(paymentOrderCount * 0.5))
+      || countInvalidOrders(snapshot) > 0
+    )
+  );
+}
+
+function assertSafeSnapshotPersist(snapshot, previousSnapshot, reason = "persist") {
+  const orderCount = countCollection(snapshot, "orders");
+  const previousOrderCount = countCollection(previousSnapshot, "orders");
+  const paymentOrderCount = countDistinctPaymentOrderIds(snapshot);
+  const invalidOrderCount = countInvalidOrders(snapshot);
+  const collapsedAgainstPayments = shouldRecoverOrdersFromEvents(snapshot);
+  const collapsedAgainstPrevious =
+    previousOrderCount >= 25
+    && orderCount < Math.floor(previousOrderCount * 0.5)
+    && paymentOrderCount >= Math.floor(previousOrderCount * 0.5);
+
+  if (!collapsedAgainstPayments && !collapsedAgainstPrevious && invalidOrderCount === 0) return;
+
+  throw new Error(
+    `Refusing to persist unsafe runtime snapshot for ${reason}: orders=${orderCount}, invalidOrders=${invalidOrderCount}, previousOrders=${previousOrderCount}, paymentOrderIds=${paymentOrderCount}`,
+  );
+}
+
 function buildProductBatchCollection(products) {
   return products.flatMap((product) => (
     Array.isArray(product.batches)
@@ -484,7 +536,7 @@ export async function createGoogleSheetsPrimaryPersistence() {
     }
   }
 
-  async function fetchCollectionFromEventFeed(sheetName) {
+  async function fetchCollectionFromEventFeed(sheetName, options = {}) {
     if (!spreadsheetId || !sheetName) return [];
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), requestTimeoutMs);
@@ -494,25 +546,53 @@ export async function createGoogleSheetsPrimaryPersistence() {
       const response = await fetch(url, { signal: controller.signal });
       if (!response.ok) return [];
       const rows = parseEventFeedRows(await response.text());
+      const deleteCountsByRun = new Map();
+      const writeCountsByRun = new Map();
+
+      if (options.skipAnomalousBulkDeletes) {
+        rows.forEach((columns) => {
+          const eventSheet = String(columns[0] || "").trim();
+          const mode = String(columns[1] || "").trim();
+          const eventType = String(columns[2] || "").trim();
+          const syncRunId = String(columns[5] || "").trim();
+          if (eventSheet !== sheetName || mode !== "event" || !syncRunId) return;
+          if (eventType === "deleted") {
+            deleteCountsByRun.set(syncRunId, (deleteCountsByRun.get(syncRunId) || 0) + 1);
+          } else if (eventType === "created" || eventType === "updated") {
+            writeCountsByRun.set(syncRunId, (writeCountsByRun.get(syncRunId) || 0) + 1);
+          }
+        });
+      }
+
+      const anomalousDeleteRuns = new Set();
+      for (const [syncRunId, deleteCount] of deleteCountsByRun.entries()) {
+        const writeCount = writeCountsByRun.get(syncRunId) || 0;
+        if (deleteCount >= 25 && deleteCount > writeCount * 5) {
+          anomalousDeleteRuns.add(syncRunId);
+        }
+      }
+
       const recordsById = new Map();
       rows.forEach((columns) => {
         const eventSheet = String(columns[0] || "").trim();
         const mode = String(columns[1] || "").trim();
         const eventType = String(columns[2] || "").trim();
         const recordId = String(columns[3] || "").trim();
+        const syncRunId = String(columns[5] || "").trim();
         const payloadJson = String(columns[8] || "").trim();
         if (eventSheet !== sheetName || mode !== "event" || !recordId) {
           return;
         }
         if (eventType === "deleted") {
+          if (anomalousDeleteRuns.has(syncRunId)) return;
           recordsById.delete(recordId);
           return;
         }
         if (!payloadJson) return;
         try {
           const payload = JSON.parse(payloadJson);
-          const existing = recordsById.get(recordId);
-          recordsById.set(recordId, existing ? choosePreferredRecord(existing, payload) : payload);
+          if (sheetName === "orders" && !isValidOrderRecord(payload)) return;
+          recordsById.set(recordId, payload);
         } catch {
           // Ignore malformed historical rows.
         }
@@ -593,6 +673,13 @@ export async function createGoogleSheetsPrimaryPersistence() {
         }
       }
 
+      if (shouldRecoverOrdersFromEvents(remoteSnapshot)) {
+        const orderRows = await fetchCollectionFromEventFeed("orders", { skipAnomalousBulkDeletes: true });
+        if (orderRows.length > countCollection(remoteSnapshot, "orders")) {
+          remoteSnapshot.orders = orderRows;
+        }
+      }
+
       lastSnapshot = clonePayload(remoteSnapshot);
       lastChecksum = buildChecksum(JSON.stringify(remoteSnapshot));
       revision = Number(response?.revision || 0);
@@ -616,6 +703,7 @@ export async function createGoogleSheetsPrimaryPersistence() {
 
   async function persistNow(snapshot, reason = "persist", { force = false } = {}) {
     const cloned = clonePayload(snapshot);
+    assertSafeSnapshotPersist(cloned, lastSnapshot, reason);
     const checksum = buildChecksum(JSON.stringify(cloned));
 
     if (!force && checksum === lastChecksum) {
