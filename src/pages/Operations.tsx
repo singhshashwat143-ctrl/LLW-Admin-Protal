@@ -76,6 +76,18 @@ function compactText(value: string, max = 32) {
   return value.length > max ? `${value.slice(0, max)}...` : value;
 }
 
+function normalizeLanguage(value?: string) {
+  return value?.trim() || "English";
+}
+
+function normalizeScheduleKey(value?: string) {
+  return String(value || "WEEKDAY").toUpperCase() === "WEEKEND" ? "WEEKEND" : "WEEKDAY";
+}
+
+function scheduleLabel(value?: string) {
+  return normalizeScheduleKey(value) === "WEEKEND" ? "Weekend" : "Weekday";
+}
+
 export function OperationsPage() {
   const operationsApi = useApi<OperationsResponse>("/api/operations", {
     operations: [],
@@ -90,6 +102,8 @@ export function OperationsPage() {
   const [checklistFilter, setChecklistFilter] = useState("ALL");
   const [productFilter, setProductFilter] = useState("");
   const [batchFilter, setBatchFilter] = useState("");
+  const [languageFilter, setLanguageFilter] = useState("");
+  const [scheduleFilter, setScheduleFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [notice, setNotice] = useState("");
@@ -105,13 +119,36 @@ export function OperationsPage() {
     return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((left, right) => left.name.localeCompare(right.name));
   }, [operationsApi.data.operations]);
 
+  const languageOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    operationsApi.data.operations.forEach((row) => {
+      const label = normalizeLanguage(row.preferred_language);
+      const key = label.toLowerCase();
+      if (!seen.has(key)) {
+        seen.set(key, label);
+      }
+    });
+    return [...seen.entries()]
+      .map(([key, label]) => ({ key, label }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [operationsApi.data.operations]);
+
   const filteredRows = useMemo(() => {
     return operationsApi.data.operations.filter((row) => {
       const matchesChecklist =
         checklistFilter === "ALL"
         || (checklistFilter === "PENDING" && !row.operations_completed)
         || (checklistFilter === "COMPLETED" && row.operations_completed);
-      const haystack = [row.student?.name, row.student?.phone, row.student?.email, row.product?.name, row.order_number, row.latest_transaction_id]
+      const haystack = [
+        row.student?.name,
+        row.student?.phone,
+        row.student?.email,
+        row.product?.name,
+        row.order_number,
+        row.latest_transaction_id,
+        normalizeLanguage(row.preferred_language),
+        row.learning_schedule_label || scheduleLabel(row.learning_schedule),
+      ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
@@ -119,11 +156,13 @@ export function OperationsPage() {
       const rowTime = row.created_at ? new Date(row.created_at).getTime() : null;
       const matchesProduct = !productFilter || row.product?.id === productFilter;
       const matchesBatch = !batchFilter || row.batch_month_key === batchFilter;
+      const matchesLanguage = !languageFilter || normalizeLanguage(row.preferred_language).toLowerCase() === languageFilter;
+      const matchesSchedule = !scheduleFilter || normalizeScheduleKey(row.learning_schedule) === scheduleFilter;
       const matchesDateFrom = !dateFrom || (rowTime !== null && rowTime >= new Date(dateFrom).getTime());
       const matchesDateTo = !dateTo || (rowTime !== null && rowTime <= new Date(`${dateTo}T23:59:59.999`).getTime());
-      return matchesChecklist && matchesProduct && matchesBatch && matchesDateFrom && matchesDateTo && matchesQuery;
+      return matchesChecklist && matchesProduct && matchesBatch && matchesLanguage && matchesSchedule && matchesDateFrom && matchesDateTo && matchesQuery;
     });
-  }, [batchFilter, checklistFilter, dateFrom, dateTo, operationsApi.data.operations, productFilter, query]);
+  }, [batchFilter, checklistFilter, dateFrom, dateTo, languageFilter, operationsApi.data.operations, productFilter, query, scheduleFilter]);
 
   const filteredSummary = useMemo(() => ({
     total: filteredRows.length,
@@ -191,7 +230,7 @@ export function OperationsPage() {
         <StatCard label="Net Cash Covered" value={formatCurrency((filteredSummary.netCashInHand || 0) / 100)} meta="Retained cash across the filtered queue" />
       </div>
 
-      <SectionCard title="Operations Queue" subtitle="All successful token and full payments are shown here. Use product, batch, and date filters to focus the queue.">
+      <SectionCard title="Operations Queue" subtitle="All successful token and full payments are shown here. Use product, batch, language, schedule, and date filters to focus the queue.">
         <div className="payments-toolbar mb-4">
           <div className="payments-filters">
             <select className="input-dark min-w-[180px]" value={checklistFilter} onChange={(event) => setChecklistFilter(event.target.value)}>
@@ -210,6 +249,17 @@ export function OperationsPage() {
               {PRODUCT_BATCH_OPTIONS.map((batch) => (
                 <option key={batch.key} value={batch.key}>{batch.label}</option>
               ))}
+            </select>
+            <select className="input-dark min-w-[150px]" value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}>
+              <option value="">All languages</option>
+              {languageOptions.map((language) => (
+                <option key={language.key} value={language.key}>{language.label}</option>
+              ))}
+            </select>
+            <select className="input-dark min-w-[150px]" value={scheduleFilter} onChange={(event) => setScheduleFilter(event.target.value)}>
+              <option value="">Weekday + Weekend</option>
+              <option value="WEEKDAY">Weekday</option>
+              <option value="WEEKEND">Weekend</option>
             </select>
             <input className="input-dark min-w-[150px]" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
             <input className="input-dark min-w-[150px]" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
@@ -253,7 +303,7 @@ export function OperationsPage() {
                       <div>{row.product?.name || "-"}</div>
                       {row.batch_month_label ? <div className="text-xs text-[var(--text-secondary)]">Batch {row.batch_month_label}{row.batch_is_active === false ? " • Non-operational" : " • Operational"}</div> : null}
                       <div className="text-xs text-[var(--text-secondary)]">
-                        {row.preferred_language || "English"} • {row.learning_schedule_label || (row.learning_schedule === "WEEKEND" ? "Weekend" : "Weekday")}
+                        {normalizeLanguage(row.preferred_language)} • {row.learning_schedule_label || scheduleLabel(row.learning_schedule)}
                       </div>
                       <div className="text-xs text-[var(--text-secondary)]">{row.payment_mode} order</div>
                       <div className="text-xs text-[var(--text-secondary)]">Created {formatDateTime(row.created_at)}</div>
