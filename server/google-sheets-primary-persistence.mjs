@@ -244,13 +244,26 @@ function countDistinctPaymentOrderIds(snapshot) {
   ).size;
 }
 
+function countPaymentRecords(snapshot) {
+  return countCollection(snapshot, "payment_records");
+}
+
 function isValidOrderRecord(record) {
   return Boolean(String(record?.id || "").trim() && String(record?.order_number || "").trim());
+}
+
+function isValidPaymentRecord(record) {
+  return Boolean(String(record?.id || "").trim() && String(record?.order_id || "").trim());
 }
 
 function countInvalidOrders(snapshot) {
   const orders = Array.isArray(snapshot?.orders) ? snapshot.orders : [];
   return orders.filter((order) => !isValidOrderRecord(order)).length;
+}
+
+function countInvalidPaymentRecords(snapshot) {
+  const paymentRecords = Array.isArray(snapshot?.payment_records) ? snapshot.payment_records : [];
+  return paymentRecords.filter((payment) => !isValidPaymentRecord(payment)).length;
 }
 
 function shouldRecoverOrdersFromEvents(snapshot) {
@@ -265,21 +278,54 @@ function shouldRecoverOrdersFromEvents(snapshot) {
   );
 }
 
-function assertSafeSnapshotPersist(snapshot, previousSnapshot, reason = "persist") {
+function shouldRecoverPaymentRecordsFromEvents(snapshot) {
   const orderCount = countCollection(snapshot, "orders");
+  const paymentCount = countPaymentRecords(snapshot);
+  return (
+    orderCount >= 25
+    && (
+      paymentCount < Math.max(10, Math.floor(orderCount * 0.5))
+      || countInvalidPaymentRecords(snapshot) > 0
+    )
+  );
+}
+
+function assertSafeSnapshotPersist(snapshot, previousSnapshot, reason = "persist", options = {}) {
+  const allowEmptyFinancePersist = Boolean(options.allowEmptyFinancePersist);
+  const orderCount = countCollection(snapshot, "orders");
+  const paymentCount = countPaymentRecords(snapshot);
   const previousOrderCount = countCollection(previousSnapshot, "orders");
+  const previousPaymentCount = countPaymentRecords(previousSnapshot);
   const paymentOrderCount = countDistinctPaymentOrderIds(snapshot);
   const invalidOrderCount = countInvalidOrders(snapshot);
+  const invalidPaymentCount = countInvalidPaymentRecords(snapshot);
   const collapsedAgainstPayments = shouldRecoverOrdersFromEvents(snapshot);
   const collapsedAgainstPrevious =
     previousOrderCount >= 25
     && orderCount < Math.floor(previousOrderCount * 0.5)
     && paymentOrderCount >= Math.floor(previousOrderCount * 0.5);
+  const paymentsCollapsedAgainstPrevious =
+    previousPaymentCount >= 25
+    && paymentCount < Math.floor(previousPaymentCount * 0.5);
 
-  if (!collapsedAgainstPayments && !collapsedAgainstPrevious && invalidOrderCount === 0) return;
+  if (
+    !allowEmptyFinancePersist
+    && orderCount === 0
+    && paymentCount === 0
+  ) {
+    throw new Error(`Refusing to persist empty finance runtime snapshot for ${reason}`);
+  }
+
+  if (
+    !collapsedAgainstPayments
+    && !collapsedAgainstPrevious
+    && !paymentsCollapsedAgainstPrevious
+    && invalidOrderCount === 0
+    && invalidPaymentCount === 0
+  ) return;
 
   throw new Error(
-    `Refusing to persist unsafe runtime snapshot for ${reason}: orders=${orderCount}, invalidOrders=${invalidOrderCount}, previousOrders=${previousOrderCount}, paymentOrderIds=${paymentOrderCount}`,
+    `Refusing to persist unsafe runtime snapshot for ${reason}: orders=${orderCount}, payments=${paymentCount}, invalidOrders=${invalidOrderCount}, invalidPayments=${invalidPaymentCount}, previousOrders=${previousOrderCount}, previousPayments=${previousPaymentCount}, paymentOrderIds=${paymentOrderCount}`,
   );
 }
 
@@ -501,6 +547,8 @@ export async function createGoogleSheetsPrimaryPersistence() {
 
   const requestTimeoutMs = Math.max(Number(process.env.GOOGLE_SHEETS_SYNC_TIMEOUT_MS || 20000) || 20000, 1000);
   const failOpenOnLoadError = parseBoolean(process.env.GOOGLE_SHEETS_FAIL_OPEN_ON_LOAD, true);
+  const allowFallbackBootstrap = parseBoolean(process.env.GOOGLE_SHEETS_ALLOW_FALLBACK_BOOTSTRAP, false);
+  const allowEmptyFinancePersist = parseBoolean(process.env.GOOGLE_SHEETS_ALLOW_EMPTY_FINANCE_PERSIST, false);
   const source = String(process.env.GOOGLE_SHEETS_SYNC_SOURCE || "llw-webinare").trim() || "llw-webinare";
   const appUrl = String(process.env.PUBLIC_APP_URL || "").trim();
 
@@ -583,19 +631,24 @@ export async function createGoogleSheetsPrimaryPersistence() {
         if (eventSheet !== sheetName || mode !== "event" || !recordId) {
           return;
         }
-        if (eventType === "deleted") {
-          if (anomalousDeleteRuns.has(syncRunId)) return;
-          recordsById.delete(recordId);
-          return;
-        }
         if (!payloadJson) return;
+        let payload;
         try {
-          const payload = JSON.parse(payloadJson);
-          if (sheetName === "orders" && !isValidOrderRecord(payload)) return;
-          recordsById.set(recordId, payload);
+          payload = JSON.parse(payloadJson);
         } catch {
           // Ignore malformed historical rows.
+          return;
         }
+        if (sheetName === "orders" && !isValidOrderRecord(payload)) return;
+        if (sheetName === "payment_records" && !isValidPaymentRecord(payload)) return;
+        const identity = String(payload.id || recordId).trim();
+        if (!identity) return;
+        if (eventType === "deleted") {
+          if (anomalousDeleteRuns.has(syncRunId)) return;
+          recordsById.delete(identity);
+          return;
+        }
+        recordsById.set(identity, payload);
       });
       return Array.from(recordsById.values());
     } catch {
@@ -648,6 +701,9 @@ export async function createGoogleSheetsPrimaryPersistence() {
       const remoteSnapshot = response?.snapshot ? clonePayload(response.snapshot) : null;
       if (!remoteSnapshot) {
         const clonedFallback = clonePayload(fallbackData);
+        if (!allowFallbackBootstrap) {
+          throw new Error("Google Sheets primary snapshot is missing; refusing fallback bootstrap without GOOGLE_SHEETS_ALLOW_FALLBACK_BOOTSTRAP=true.");
+        }
         await persistNow(clonedFallback, "bootstrap-from-fallback", { force: true });
         return clonedFallback;
       }
@@ -680,6 +736,13 @@ export async function createGoogleSheetsPrimaryPersistence() {
         }
       }
 
+      if (shouldRecoverPaymentRecordsFromEvents(remoteSnapshot)) {
+        const paymentRows = await fetchCollectionFromEventFeed("payment_records", { skipAnomalousBulkDeletes: true });
+        if (paymentRows.length > countPaymentRecords(remoteSnapshot)) {
+          remoteSnapshot.payment_records = paymentRows;
+        }
+      }
+
       lastSnapshot = clonePayload(remoteSnapshot);
       lastChecksum = buildChecksum(JSON.stringify(remoteSnapshot));
       revision = Number(response?.revision || 0);
@@ -703,7 +766,7 @@ export async function createGoogleSheetsPrimaryPersistence() {
 
   async function persistNow(snapshot, reason = "persist", { force = false } = {}) {
     const cloned = clonePayload(snapshot);
-    assertSafeSnapshotPersist(cloned, lastSnapshot, reason);
+    assertSafeSnapshotPersist(cloned, lastSnapshot, reason, { allowEmptyFinancePersist });
     const checksum = buildChecksum(JSON.stringify(cloned));
 
     if (!force && checksum === lastChecksum) {
