@@ -1048,6 +1048,57 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   };
 }
 
+const CHAT_LINK_PATTERN = /(https?:\/\/[^\s<]+|www\.[^\s<]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+?[0-9][0-9()\s-]{8,13}[0-9])/g;
+
+function splitTrailingPunctuation(value: string) {
+  const match = value.match(/[),.;:!?]+$/);
+  if (!match) return { core: value, trailing: "" };
+  return { core: value.slice(0, value.length - match[0].length), trailing: match[0] };
+}
+
+function resolveChatLinkHref(core: string) {
+  if (/^https?:\/\//i.test(core)) return core;
+  if (/^www\./i.test(core)) return `https://${core}`;
+  if (core.includes("@")) return `mailto:${core}`;
+  const digits = core.replace(/[^\d+]/g, "");
+  const digitCount = digits.replace(/\D/g, "").length;
+  if (digitCount >= 10 && digitCount <= 13) return `tel:${digits}`;
+  return "";
+}
+
+function linkifyMessageText(text: string): ReactNode {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  for (const match of text.matchAll(CHAT_LINK_PATTERN)) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
+    const { core, trailing } = splitTrailingPunctuation(raw);
+    const href = resolveChatLinkHref(core);
+    if (href) {
+      parts.push(
+        <a
+          key={`chat-link-${key++}`}
+          className="gm-msg-link"
+          href={href}
+          target={href.startsWith("http") ? "_blank" : undefined}
+          rel="noreferrer noopener"
+        >
+          {core}
+        </a>,
+      );
+      if (trailing) parts.push(trailing);
+    } else {
+      parts.push(raw);
+    }
+    lastIndex = start + raw.length;
+  }
+  if (!parts.length) return text;
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
 function VideoStream({ stream, muted, label, isCameraOn }: { stream: MediaStream | null; muted?: boolean; label: string; isCameraOn?: boolean }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -1108,6 +1159,30 @@ function StageVideo({ stream, muted = false }: { stream: MediaStream | null; mut
   }, [stream]);
 
   return <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-video-fill" />;
+}
+
+function CameraTile({ stream, label, isMicOn }: { stream: MediaStream | null; label: string; isMicOn?: boolean }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    videoRef.current.srcObject = stream;
+    videoRef.current.play().catch(() => undefined);
+  }, [stream]);
+
+  return (
+    <div className="gm-tile">
+      {stream ? (
+        <video ref={videoRef} autoPlay playsInline muted className="gm-tile-video" />
+      ) : (
+        <div className="gm-tile-avatar">{label.slice(0, 1).toUpperCase()}</div>
+      )}
+      <span className="gm-tile-label">
+        {isMicOn === false ? <span className="gm-tile-mic-off"><ControlIcon name="mic-off" /></span> : null}
+        {label}
+      </span>
+    </div>
+  );
 }
 
 function StageToast({ text }: { text: string }) {
@@ -1179,7 +1254,7 @@ function ControlIcon({ name }: { name: string }) {
     case "screen":
       return <svg {...common}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8" /><path d="M12 16v4" /></svg>;
     case "hand":
-      return <svg {...common}><path d="M7 11V5a1 1 0 1 1 2 0v6" /><path d="M9 8a1 1 0 1 1 2 0v4" /><path d="M11 8.5a1 1 0 1 1 2 0v3.5" /><path d="M13 9.5a1 1 0 1 1 2 0V13" /><path d="M7 11c-1.5 0-2.5 1.2-2.5 2.8 0 4 2.7 7.2 6.2 7.2h3.1c2.5 0 4.2-1.8 4.2-4.2V12a1 1 0 1 0-2 0" /></svg>;
+      return <svg {...common}><path d="M18 11V6a2 2 0 0 0-4 0" /><path d="M14 10V4a2 2 0 0 0-4 0v2" /><path d="M10 10.5V6a2 2 0 0 0-4 0v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></svg>;
     case "people":
       return <svg {...common}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>;
     case "chat":
@@ -1437,7 +1512,10 @@ function useClassMedia({
 
     let active = true;
     const room = new LiveKitRoom({
-      adaptiveStream: true,
+      // pixelDensity "screen" makes adaptive streaming request layers sized for
+      // physical pixels, not CSS pixels — without it every retina/mobile display
+      // receives a blurry upscale of a lower layer.
+      adaptiveStream: { pixelDensity: "screen" },
       dynacast: true,
     });
     roomRef.current = room;
@@ -1610,13 +1688,14 @@ function useClassMedia({
           ? {
               audio: false,
               video: true,
-              resolution: ScreenSharePresets.h1080fps30.resolution,
-              contentHint: "detail",
+              // No resolution constraint: capture at the screen's native size.
+              // Forcing 1080p downscales retina/4K captures and blurs text.
+              contentHint: "text",
             }
           : undefined,
         next
           ? {
-              screenShareEncoding: ScreenSharePresets.h1080fps30.encoding,
+              screenShareEncoding: { maxBitrate: 5_000_000, maxFramerate: 30, priority: "high" },
               screenShareSimulcastLayers: [ScreenSharePresets.h720fps15],
               degradationPreference: "maintain-resolution",
             }
@@ -1682,6 +1761,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [hostFullAmount, setHostFullAmount] = useState("9999");
   const [hostTokenAmount, setHostTokenAmount] = useState("499");
   const [screenSharePriority, setScreenSharePriority] = useState<Record<string, number>>({});
+  const [chatPreview, setChatPreview] = useState<{ id: string; name: string; text: string } | null>(null);
+  const lastPreviewMessageIdRef = useRef<string | null>(null);
   const [prejoinNow, setPrejoinNow] = useState(() => Date.now());
   const chatRef = useRef<HTMLDivElement | null>(null);
   const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
@@ -1927,6 +2008,27 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       chatRef.current.scrollTop = chatRef.current.scrollHeight;
     }
   }, [connection.room.messages, sidePanel]);
+
+  useEffect(() => {
+    const messages = connection.room.messages;
+    if (!messages.length) return;
+    const last = messages[messages.length - 1];
+    // First snapshot carries chat history — record it without popping a preview.
+    if (lastPreviewMessageIdRef.current === null) {
+      lastPreviewMessageIdRef.current = last.id;
+      return;
+    }
+    if (last.id === lastPreviewMessageIdRef.current) return;
+    lastPreviewMessageIdRef.current = last.id;
+    if (sidePanel === "chat" || last.name === form.name || last.messageType === "TOAST") return;
+    setChatPreview({ id: last.id, name: last.name, text: last.text });
+  }, [connection.room.messages, form.name, sidePanel]);
+
+  useEffect(() => {
+    if (!chatPreview) return;
+    const timer = window.setTimeout(() => setChatPreview(null), 5200);
+    return () => window.clearTimeout(timer);
+  }, [chatPreview]);
 
   useEffect(() => {
     if (!linkCopyNotice) return;
@@ -2379,14 +2481,18 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     const showHostCameraPreview = Boolean(leadHost?.isScreenSharing && leadHost?.isCameraOn && leadHost?.cameraStream);
     const hostLabel = leadHost?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
     const showHostCameraRail = !sidePanel && showHostCameraPreview;
+    const leadScreenStream = leadHost ? media.remoteScreenStreams.get(leadHost.id) || null : null;
+    const presenting = Boolean(leadHost?.isScreenSharing && leadScreenStream);
 
     return (
-      <div className="gm-root">
+      <div className="gm-root gm-attendee-room">
         <div className="gm-main">
           <div className="gm-stage">
-            {leadRemoteStageStream && !showRemoteVideo ? <AudioStream stream={leadRemoteStageStream} /> : null}
-            {showRemoteVideo ? (
-              <StageVideo stream={leadRemoteStageStream} />
+            {leadRemoteStageStream ? <AudioStream stream={leadRemoteStageStream} /> : null}
+            {presenting ? (
+              <StageVideo stream={leadScreenStream} muted />
+            ) : showRemoteVideo ? (
+              <StageVideo stream={leadRemoteStageStream} muted />
             ) : (
               <div className="gm-avatar-stage">
                 <div className="gm-avatar-circle">{hostLabel.slice(0, 1).toUpperCase()}</div>
@@ -2413,6 +2519,13 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
 
+            {chatPreview && sidePanel !== "chat" ? (
+              <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
+                <span className="gm-chat-preview-name">{chatPreview.name}</span>
+                <span className="gm-chat-preview-text">{chatPreview.text}</span>
+              </div>
+            ) : null}
+
             {enrollEnabled && !paymentComplete ? (
               <div className="gm-offer-banner">
                 <div className="gm-offer-icon">₹</div>
@@ -2437,6 +2550,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             {paymentNotice ? <div className="gm-payment-note">{paymentNotice}</div> : null}
           </div>
 
+          {presenting && !sidePanel && showHostCameraPreview ? (
+            <div className="gm-tile-belt">
+              <CameraTile stream={leadHost?.cameraStream || null} label={hostLabel} isMicOn={leadHost?.isMicOn} />
+            </div>
+          ) : null}
+
           <div className="gm-bar gm-bar-attendee">
             <div className="gm-bar-attendee-top">
               <div className="gm-bar-left">
@@ -2445,16 +2564,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 <span className="gm-meeting-code">{roomName}</span>
                 <span className="gm-bar-divider">·</span>
                 <span className="gm-duration">{duration}</span>
-              </div>
-
-              <div className="gm-bar-right">
-                <button onClick={() => togglePanel("people")} className={`gm-icon-btn ${sidePanel === "people" ? "gm-icon-btn-active" : ""}`} type="button">
-                  <ControlIcon name="people" />
-                  <span className="gm-people-count">{connection.room.participants.length}</span>
-                </button>
-                <button onClick={() => togglePanel("chat")} className={`gm-icon-btn ${sidePanel === "chat" ? "gm-icon-btn-active" : ""}`} type="button">
-                  <ControlIcon name="chat" />
-                </button>
               </div>
             </div>
 
@@ -2475,6 +2584,13 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   </button>
                 ) : null}
                 <button className={`gm-btn ${handRaised ? "gm-btn-active" : ""}`} type="button" onClick={toggleHandRaised} title="Raise hand"><ControlIcon name="hand" /></button>
+                <button onClick={() => togglePanel("people")} className={`gm-icon-btn ${sidePanel === "people" ? "gm-icon-btn-active" : ""}`} type="button" title="People">
+                  <ControlIcon name="people" />
+                  <span className="gm-people-count">{connection.room.participants.length}</span>
+                </button>
+                <button onClick={() => togglePanel("chat")} className={`gm-icon-btn ${sidePanel === "chat" ? "gm-icon-btn-active" : ""}`} type="button" title="Chat">
+                  <ControlIcon name="chat" />
+                </button>
               </div>
               <button onClick={() => leaveCurrentRoom("You left the webinar.")} className="gm-btn-hangup" type="button" title="Leave">
                 <ControlIcon name="end" />
@@ -2518,7 +2634,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                           {message.target === "HOST" ? <span className="gm-msg-you"> · Only host</span> : null}
                           {message.messageType === "TOAST" ? <span className="gm-msg-you"> · Highlighted</span> : null}
                         </p>
-                        <p className="gm-msg-text">{message.text}</p>
+                        <p className="gm-msg-text">{linkifyMessageText(message.text)}</p>
                       </div>
                     </div>
                   ))}
@@ -2539,15 +2655,17 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             ) : (
               <div className="gm-panel-body">
                 <p className="gm-people-label">In this call ({connection.room.participants.length})</p>
-                {connection.room.participants.map((participant) => (
-                  <div key={participant.socketId} className="gm-person">
-                    <div className={`gm-person-avatar ${participant.role === "HOST" ? "gm-person-host-av" : ""}`}>{participant.name.slice(0, 1).toUpperCase()}</div>
-                    <div className="gm-person-info">
-                      <p className="gm-person-name">{participant.name}{participant.attendanceId === connection.attendanceId ? " (You)" : ""}{participant.role === "HOST" ? <span className="gm-person-role"> · Host</span> : null}</p>
+                <div className="gm-people-list">
+                  {connection.room.participants.map((participant) => (
+                    <div key={participant.socketId} className="gm-person">
+                      <div className={`gm-person-avatar ${participant.role === "HOST" ? "gm-person-host-av" : ""}`}>{participant.name.slice(0, 1).toUpperCase()}</div>
+                      <div className="gm-person-info">
+                        <p className="gm-person-name">{participant.name}{participant.attendanceId === connection.attendanceId ? " (You)" : ""}{participant.role === "HOST" ? <span className="gm-person-role"> · Host</span> : null}</p>
+                      </div>
+                      {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
                     </div>
-                    {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -2627,6 +2745,13 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
+
+            {chatPreview && sidePanel !== "chat" ? (
+              <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
+                <span className="gm-chat-preview-name">{chatPreview.name}</span>
+                <span className="gm-chat-preview-text">{chatPreview.text}</span>
+              </div>
+            ) : null}
 
             {hostSidePreview && !showHostCameraRail ? (
               <div className="gm-host-pip">
@@ -2736,7 +2861,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                           {message.target === "HOST" ? <span className="gm-msg-you"> · Only host</span> : null}
                           {message.messageType === "TOAST" ? <span className="gm-msg-you"> · Toast</span> : null}
                         </p>
-                        <p className="gm-msg-text">{message.text}</p>
+                        <p className="gm-msg-text">{linkifyMessageText(message.text)}</p>
                       </div>
                     </div>
                   ))}
@@ -2761,24 +2886,26 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             ) : (
               <div className="gm-panel-body">
                 <p className="gm-people-label">In this call ({connection.room.participants.length})</p>
-                {connection.room.participants.map((participant) => (
-                  <div key={participant.socketId} className="gm-person">
-                    <div className={`gm-person-avatar ${participant.role === "HOST" ? "gm-person-host-av" : ""}`}>{participant.name.slice(0, 1).toUpperCase()}</div>
-                    <div className="gm-person-info">
-                      <p className="gm-person-name">{participant.name}{participant.attendanceId === connection.attendanceId ? " (You)" : ""}{participant.role === "HOST" ? <span className="gm-person-role"> · Host</span> : null}</p>
-                      <p className="text-xs text-white/60">{participant.phone || participant.email || ""}</p>
-                    </div>
-                    {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
-                    {participant.socketId !== connection.ownSocketId ? (
-                      <div className="gm-person-actions">
-                        {participant.role === "ATTENDEE" && !participant.isMicOn ? (
-                          <button className="gm-mini-btn gm-mini-btn-accent" type="button" onClick={() => connection.requestUnmute(participant.socketId, participant.name)}>Ask to unmute</button>
-                        ) : null}
-                        <button className="rounded-full border border-rose-400/30 px-3 py-1 text-xs text-rose-200" type="button" onClick={() => connection.removeParticipant(participant.socketId)}>Remove</button>
+                <div className="gm-people-list">
+                  {connection.room.participants.map((participant) => (
+                    <div key={participant.socketId} className="gm-person">
+                      <div className={`gm-person-avatar ${participant.role === "HOST" ? "gm-person-host-av" : ""}`}>{participant.name.slice(0, 1).toUpperCase()}</div>
+                      <div className="gm-person-info">
+                        <p className="gm-person-name">{participant.name}{participant.attendanceId === connection.attendanceId ? " (You)" : ""}{participant.role === "HOST" ? <span className="gm-person-role"> · Host</span> : null}</p>
+                        <p className="text-xs text-white/60">{participant.phone || participant.email || ""}</p>
                       </div>
-                    ) : null}
-                  </div>
-                ))}
+                      {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
+                      {participant.socketId !== connection.ownSocketId ? (
+                        <div className="gm-person-actions">
+                          {participant.role === "ATTENDEE" && !participant.isMicOn ? (
+                            <button className="gm-mini-btn gm-mini-btn-accent" type="button" onClick={() => connection.requestUnmute(participant.socketId, participant.name)}>Ask to unmute</button>
+                          ) : null}
+                          <button className="rounded-full border border-rose-400/30 px-3 py-1 text-xs text-rose-200" type="button" onClick={() => connection.removeParticipant(participant.socketId)}>Remove</button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -2917,7 +3044,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   {connection.room.messages.length ? connection.room.messages.map((message) => (
                     <div key={message.id} className="rounded-2xl border border-[rgba(201,168,76,0.12)] bg-[rgba(255,255,255,0.04)] p-4">
                       <div className="text-sm font-medium text-white">{message.name}</div>
-                      <div className="mt-1 text-sm text-[var(--text-secondary)]">{message.text}</div>
+                      <div className="mt-1 text-sm text-[var(--text-secondary)]">{linkifyMessageText(message.text)}</div>
                     </div>
                   )) : (
                     <div className="rounded-2xl border border-dashed border-[rgba(201,168,76,0.2)] p-6 text-center text-sm text-[var(--text-secondary)]">
