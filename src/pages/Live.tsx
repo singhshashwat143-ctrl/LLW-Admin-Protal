@@ -1539,6 +1539,7 @@ function useClassMedia({
   const [mediaError, setMediaError] = useState("");
   const roomRef = useRef<LiveKitRoom | null>(null);
   const canvasTrackRef = useRef<MediaStreamTrack | null>(null);
+  const canvasFramePumpRef = useRef<number | null>(null);
   const [canvasShareActive, setCanvasShareActive] = useState(false);
   const remoteTrackStateRef = useRef<Map<string, {
     micAudio: MediaStreamTrack | null;
@@ -1759,6 +1760,10 @@ function useClassMedia({
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
       room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
       room.off(RoomEvent.ParticipantPermissionsChanged, onParticipantPermissionsChanged);
+      if (canvasFramePumpRef.current) {
+        window.clearInterval(canvasFramePumpRef.current);
+        canvasFramePumpRef.current = null;
+      }
       canvasTrackRef.current?.stop();
       canvasTrackRef.current = null;
       setCanvasShareActive(false);
@@ -1788,6 +1793,10 @@ function useClassMedia({
     const room = roomRef.current;
     const track = canvasTrackRef.current;
     canvasTrackRef.current = null;
+    if (canvasFramePumpRef.current) {
+      window.clearInterval(canvasFramePumpRef.current);
+      canvasFramePumpRef.current = null;
+    }
     if (room && track) {
       await room.localParticipant.unpublishTrack(track).catch(() => undefined);
     }
@@ -1818,16 +1827,30 @@ function useClassMedia({
         await room.localParticipant.unpublishTrack(previous).catch(() => undefined);
         previous.stop();
       }
-      const stream = canvas.captureStream(15);
-      const track = stream.getVideoTracks()[0];
+      // Manual-driven capture: a static PDF page stops producing frames under
+      // captureStream(fps) once the canvas stops changing, so a late-joining or
+      // reconnecting attendee would receive no decodable frame. A steady pump of
+      // requestFrame() guarantees the current canvas keeps flowing to the SFU.
+      const stream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(0);
+      const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
       if (!track) throw new Error("Canvas capture is not supported in this browser.");
       track.contentHint = "detail";
       canvasTrackRef.current = track;
       await room.localParticipant.publishTrack(track, {
         source: Track.Source.ScreenShare,
         name: "class-material",
+        simulcast: false,
+        degradationPreference: "maintain-resolution",
         videoEncoding: { maxBitrate: 4_000_000, maxFramerate: 15 },
       });
+      if (canvasFramePumpRef.current) window.clearInterval(canvasFramePumpRef.current);
+      canvasFramePumpRef.current = window.setInterval(() => {
+        const active = canvasTrackRef.current as (MediaStreamTrack & { requestFrame?: () => void }) | null;
+        if (active && typeof active.requestFrame === "function") {
+          active.requestFrame();
+        }
+      }, 120);
+      track.requestFrame?.();
       setCanvasShareActive(true);
       setIsScreenSharing(true);
       buildLocalPreview(room);
@@ -3257,14 +3280,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                     </select>
                   </div>
                   <div className="gm-chat-input-row">
-                    <input ref={chatFileInputRef} type="file" className="hidden" onChange={(event) => sendChatFile(event.target.files?.[0])} />
-                    <button className="gm-attach-btn" type="button" onClick={() => chatFileInputRef.current?.click()} disabled={uploadingFile} title="Share a file">
-                      {uploadingFile ? (
-                        <span className="gm-attach-busy" />
-                      ) : (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
-                      )}
-                    </button>
                     <input className="gm-chat-input" value={draftMessage} onChange={(event) => setDraftMessage(event.target.value)} placeholder="Send a message" onKeyDown={(event) => event.key === "Enter" && sendChatFromPanel()} />
                     <button className="gm-send-btn" type="button" onClick={sendChatFromPanel} disabled={!draftMessage.trim()}>Send</button>
                   </div>

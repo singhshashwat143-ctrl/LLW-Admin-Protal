@@ -1979,6 +1979,9 @@ app.post("/api/rooms/:roomName/files", express.raw({ type: () => true, limit: "2
       (item) => item.id === attendanceId && item.webinar_id === room.webinar?.id,
     );
     if (!attendance) return res.status(403).json({ ok: false, message: "Join the room before sharing files." });
+    if (String(attendance.role).toUpperCase() !== "HOST") {
+      return res.status(403).json({ ok: false, message: "Only hosts can share files in the chat." });
+    }
     const body = req.body;
     if (!Buffer.isBuffer(body) || !body.length) {
       return res.status(400).json({ ok: false, message: "The uploaded file is empty." });
