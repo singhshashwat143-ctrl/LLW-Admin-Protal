@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track } from "livekit-client";
 import { TrackSource as ProtoTrackSource } from "@livekit/protocol";
+import * as pdfjsLib from "pdfjs-dist";
+import PdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
+
+// Vite bundles the worker and hands us a real Worker instance. Assigning it as
+// workerPort avoids the module-worker bootstrap deadlock that the ?url approach
+// hits in dev, which silently hangs page.render().
+pdfjsLib.GlobalWorkerOptions.workerPort = new PdfjsWorker();
 import { io, type Socket } from "socket.io-client";
 import { Badge, PageHeader, SectionCard } from "../components/UI";
 import brandLogo from "../assets/logo.png";
@@ -110,7 +117,7 @@ type LiveKitJoinInfo = {
 
 type RoomSnapshot = {
   participants: Array<{ socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string }>;
-  messages: Array<{ id: string; role: string; name: string; text: string; createdAt: string; target?: "ALL" | "HOST"; messageType?: "CHAT" | "TOAST"; highlight?: boolean; attendanceId?: string }>;
+  messages: Array<{ id: string; role: string; name: string; text: string; createdAt: string; target?: "ALL" | "HOST"; messageType?: RoomMessageType; highlight?: boolean; attendanceId?: string; attachment?: ChatAttachment | null }>;
 };
 
 type StageCandidate = {
@@ -874,7 +881,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   const [attendanceId, setAttendanceId] = useState("");
   const [ownSocketId, setOwnSocketId] = useState("");
   const [socketInstance, setSocketInstance] = useState<Socket | null>(null);
-  const [activeToast, setActiveToast] = useState<{ id: string; text: string; name?: string } | null>(null);
+  const [activeToast, setActiveToast] = useState<{ id: string; text: string; name?: string; messageType?: RoomMessageType } | null>(null);
   const [meetingEndedMessage, setMeetingEndedMessage] = useState("");
   const [unmutePrompt, setUnmutePrompt] = useState("");
   const [forceMuteSignal, setForceMuteSignal] = useState(0);
@@ -929,7 +936,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       socket.on("room:snapshot", (snapshot: RoomSnapshot) => setRoom(snapshot));
       socket.on("connect", () => setOwnSocketId(socket.id || ""));
       socket.on("webinar:update", (nextWebinar: Webinar) => setWebinar(nextWebinar));
-      socket.on("room:toast", (toast: { id: string; text: string; name?: string }) => setActiveToast(toast));
+      socket.on("room:toast", (toast: { id: string; text: string; name?: string; messageType?: RoomMessageType }) => setActiveToast(toast));
       socket.on("participant:unmute-request", (payload: { message?: string }) => setUnmutePrompt(payload.message || "The host asked you to unmute."));
       socket.on("participant:muted", (payload: { message?: string }) => {
         setActiveToast({ id: `muted-${Date.now()}`, text: payload.message || "The host muted your microphone." });
@@ -972,7 +979,9 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
 
   useEffect(() => {
     if (!activeToast) return;
-    const timer = window.setTimeout(() => setActiveToast(null), 3600);
+    // Celebration/alarm toasts run their animations longer than plain toasts.
+    const duration = activeToast.messageType === "ENROLLMENT" || activeToast.messageType === "SLOTS" ? 7000 : 3600;
+    const timer = window.setTimeout(() => setActiveToast(null), duration);
     return () => window.clearTimeout(timer);
   }, [activeToast]);
 
@@ -985,7 +994,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [attendanceId]);
 
-  const sendMessage = useCallback((text: string, options?: { target?: "ALL" | "HOST"; messageType?: "CHAT" | "TOAST" }) => {
+  const sendMessage = useCallback((text: string, options?: { target?: "ALL" | "HOST"; messageType?: RoomMessageType }) => {
     socketRef.current?.emit("chat:send", { text, ...options });
   }, []);
 
@@ -1046,6 +1055,47 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     clearMeetingEndedMessage,
     clearUnmutePrompt,
   };
+}
+
+type RoomMessageType = "CHAT" | "TOAST" | "ENROLLMENT" | "SLOTS";
+
+type ChatAttachment = {
+  name: string;
+  url: string;
+  size?: number;
+  mime?: string;
+};
+
+function formatFileSize(bytes?: number) {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ChatAttachmentChip({ attachment }: { attachment: ChatAttachment }) {
+  const sizeLabel = formatFileSize(attachment.size);
+  return (
+    <a className="gm-file-chip" href={attachment.url} target="_blank" rel="noreferrer noopener" download={attachment.name}>
+      <span className="gm-file-chip-icon" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />
+          <path d="M14 2v6h6" />
+        </svg>
+      </span>
+      <span className="gm-file-chip-info">
+        <span className="gm-file-chip-name">{attachment.name}</span>
+        {sizeLabel ? <span className="gm-file-chip-size">{sizeLabel}</span> : null}
+      </span>
+      <span className="gm-file-chip-download" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <path d="m7 10 5 5 5-5" />
+          <path d="M12 15V3" />
+        </svg>
+      </span>
+    </a>
+  );
 }
 
 const CHAT_LINK_PATTERN = /(https?:\/\/[^\s<]+|www\.[^\s<]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+?[0-9][0-9()\s-]{8,13}[0-9])/g;
@@ -1139,6 +1189,19 @@ function AudioStream({ stream, muted = false }: { stream: MediaStream | null; mu
   return <audio ref={audioRef} autoPlay playsInline muted={muted} className="hidden" />;
 }
 
+// Plays audio from every remote participant. Stage/tile video elements stay
+// muted so this is the single audio path — without it only the lead host on
+// stage was audible and co-hosts' mics were silently dropped.
+function RemoteAudioMixer({ streams }: { streams: Map<string, MediaStream> }) {
+  return (
+    <>
+      {Array.from(streams.entries()).map(([identity, stream]) => (
+        <AudioStream key={identity} stream={stream} />
+      ))}
+    </>
+  );
+}
+
 function composeMediaStream(...tracks: Array<MediaStreamTrack | null | undefined>) {
   const stream = new MediaStream();
   tracks.forEach((track) => {
@@ -1185,12 +1248,101 @@ function CameraTile({ stream, label, isMicOn }: { stream: MediaStream | null; la
   );
 }
 
-function StageToast({ text }: { text: string }) {
+const CONFETTI_COLORS = ["#f4c542", "#3d6aff", "#22c55e", "#ef4444", "#a855f7", "#06b6d4", "#f97316", "#ec4899"];
+
+function ConfettiBurst() {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 60 }, (_, index) => ({
+        left: Math.random() * 100,
+        delay: Math.random() * 1.6,
+        duration: 2.6 + Math.random() * 2,
+        color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+        size: 6 + Math.random() * 7,
+        tilt: Math.random() * 360,
+        round: index % 3 === 0,
+      })),
+    [],
+  );
+  const sparkles = useMemo(
+    () =>
+      Array.from({ length: 12 }, () => ({
+        left: 5 + Math.random() * 90,
+        top: 5 + Math.random() * 80,
+        delay: Math.random() * 2.4,
+        size: 12 + Math.random() * 14,
+      })),
+    [],
+  );
+  return (
+    <div className="gm-confetti-layer" aria-hidden="true">
+      {pieces.map((piece, index) => (
+        <span
+          key={`confetti-${index}`}
+          className={`gm-confetti-piece ${piece.round ? "gm-confetti-round" : ""}`}
+          style={{
+            left: `${piece.left}%`,
+            backgroundColor: piece.color,
+            width: `${piece.size}px`,
+            height: `${piece.round ? piece.size : piece.size * 0.45}px`,
+            animationDelay: `${piece.delay}s`,
+            animationDuration: `${piece.duration}s`,
+            transform: `rotate(${piece.tilt}deg)`,
+          }}
+        />
+      ))}
+      {sparkles.map((sparkle, index) => (
+        <span
+          key={`sparkle-${index}`}
+          className="gm-sparkle"
+          style={{ left: `${sparkle.left}%`, top: `${sparkle.top}%`, animationDelay: `${sparkle.delay}s`, fontSize: `${sparkle.size}px` }}
+        >
+          ✨
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function StageToast({ text, messageType }: { text: string; messageType?: RoomMessageType }) {
+  if (messageType === "ENROLLMENT") {
+    return (
+      <>
+        <ConfettiBurst />
+        <div className="gm-stage-toast gm-enroll-toast" role="status" aria-live="polite">
+          <span className="gm-enroll-toast-kicker">🎉 New Enrollment</span>
+          <span className="gm-enroll-toast-name">{text}</span>
+          <span className="gm-enroll-toast-copy">Congratulations on joining the program!</span>
+        </div>
+      </>
+    );
+  }
+  if (messageType === "SLOTS") {
+    const slots = text.replace(/[^\d]/g, "") || text;
+    return (
+      <div className="gm-stage-toast gm-slots-toast" role="alert">
+        <span className="gm-slots-bell" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+            <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+          </svg>
+        </span>
+        <span className="gm-slots-count">Only {slots} slots left!</span>
+        <span className="gm-slots-copy">Enroll now before the class closes.</span>
+      </div>
+    );
+  }
   return (
     <div className="gm-stage-toast" role="status" aria-live="polite">
       {text}
     </div>
   );
+}
+
+function roomMessageDisplayText(message: { text: string; messageType?: RoomMessageType }) {
+  if (message.messageType === "ENROLLMENT") return `🎉 ${message.text} just enrolled — congratulations!`;
+  if (message.messageType === "SLOTS") return `⏰ Hurry! Only ${message.text.replace(/[^\d]/g, "") || message.text} slots left.`;
+  return message.text;
 }
 
 function SideCameraRail({
@@ -1253,6 +1405,8 @@ function ControlIcon({ name }: { name: string }) {
       return <svg {...common}><path d="m4 4 16 16" /><path d="M15 10l5-3v10l-5-3" /><path d="M10.58 6H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-3.42" /></svg>;
     case "screen":
       return <svg {...common}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8" /><path d="M12 16v4" /></svg>;
+    case "present":
+      return <svg {...common}><path d="M2 3h20" /><path d="M4 3v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3" /><path d="m12 16 0 5" /><path d="m9 21 6 0" /><path d="m8 9 3 3 4-5" /></svg>;
     case "hand":
       return <svg {...common}><path d="M18 11V6a2 2 0 0 0-4 0" /><path d="M14 10V4a2 2 0 0 0-4 0v2" /><path d="M10 10.5V6a2 2 0 0 0-4 0v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></svg>;
     case "people":
@@ -1384,6 +1538,8 @@ function useClassMedia({
   const [publishPermissions, setPublishPermissions] = useState<LocalPublishPermissions>(initialPublishPermissions);
   const [mediaError, setMediaError] = useState("");
   const roomRef = useRef<LiveKitRoom | null>(null);
+  const canvasTrackRef = useRef<MediaStreamTrack | null>(null);
+  const [canvasShareActive, setCanvasShareActive] = useState(false);
   const remoteTrackStateRef = useRef<Map<string, {
     micAudio: MediaStreamTrack | null;
     screenAudio: MediaStreamTrack | null;
@@ -1603,6 +1759,9 @@ function useClassMedia({
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
       room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
       room.off(RoomEvent.ParticipantPermissionsChanged, onParticipantPermissionsChanged);
+      canvasTrackRef.current?.stop();
+      canvasTrackRef.current = null;
+      setCanvasShareActive(false);
       room.disconnect();
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
@@ -1624,6 +1783,60 @@ function useClassMedia({
   useEffect(() => {
     sendMediaState(isMicOn, isCameraOn, isScreenSharing);
   }, [isCameraOn, isMicOn, isScreenSharing, sendMediaState]);
+
+  const stopCanvasShare = useCallback(async () => {
+    const room = roomRef.current;
+    const track = canvasTrackRef.current;
+    canvasTrackRef.current = null;
+    if (room && track) {
+      await room.localParticipant.unpublishTrack(track).catch(() => undefined);
+    }
+    track?.stop();
+    setCanvasShareActive(false);
+    setIsScreenSharing(false);
+    buildLocalPreview(roomRef.current);
+  }, [buildLocalPreview]);
+
+  // Publishes a canvas (PDF page / whiteboard) as the screen-share track so
+  // attendees see it through the normal presenting pipeline.
+  const startCanvasShare = useCallback(async (canvas: HTMLCanvasElement) => {
+    const room = roomRef.current;
+    if (!room) return false;
+    const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
+    if (!currentPermissions.canShareScreen) {
+      setMediaError(describePublishPermissionError(role, "screen share"));
+      return false;
+    }
+    try {
+      setMediaError("");
+      if (room.localParticipant.isScreenShareEnabled && !canvasTrackRef.current) {
+        await room.localParticipant.setScreenShareEnabled(false);
+      }
+      if (canvasTrackRef.current) {
+        const previous = canvasTrackRef.current;
+        canvasTrackRef.current = null;
+        await room.localParticipant.unpublishTrack(previous).catch(() => undefined);
+        previous.stop();
+      }
+      const stream = canvas.captureStream(15);
+      const track = stream.getVideoTracks()[0];
+      if (!track) throw new Error("Canvas capture is not supported in this browser.");
+      track.contentHint = "detail";
+      canvasTrackRef.current = track;
+      await room.localParticipant.publishTrack(track, {
+        source: Track.Source.ScreenShare,
+        name: "class-material",
+        videoEncoding: { maxBitrate: 4_000_000, maxFramerate: 15 },
+      });
+      setCanvasShareActive(true);
+      setIsScreenSharing(true);
+      buildLocalPreview(room);
+      return true;
+    } catch (error) {
+      setMediaError(describeMediaError("screen share", error));
+      return false;
+    }
+  }, [buildLocalPreview, initialPublishPermissions, role]);
 
   async function toggleMic() {
     const next = !isMicOn;
@@ -1672,8 +1885,14 @@ function useClassMedia({
 
   async function toggleScreenShare() {
     const room = roomRef.current;
-    const next = !isScreenSharing;
     if (!room) return false;
+    // If a PDF/whiteboard presentation is live, this button switches to a
+    // real screen capture instead of just toggling off.
+    const wasCanvasShare = Boolean(canvasTrackRef.current);
+    if (wasCanvasShare) {
+      await stopCanvasShare();
+    }
+    const next = wasCanvasShare ? true : !isScreenSharing;
     const currentPermissions = resolveLocalPublishPermissions(room, initialPublishPermissions);
     if (next && !currentPermissions.canShareScreen) {
       setMediaError(describePublishPermissionError(role, "screen share"));
@@ -1727,12 +1946,332 @@ function useClassMedia({
     isMicOn,
     isCameraOn,
     isScreenSharing,
+    canvasShareActive,
     toggleMic,
     toggleCamera,
     toggleScreenShare,
+    startCanvasShare,
+    stopCanvasShare,
     hasMediaAccess: Boolean(livekit?.token),
     mediaError,
   };
+}
+
+type ClassMaterial = { id: string; name: string; url: string; size?: number };
+
+const WHITEBOARD_COLORS = ["#111111", "#e11d48", "#2563eb", "#16a34a", "#f4c542"];
+
+function ClassPresenter({
+  roomName,
+  attendanceId,
+  media,
+  notify,
+  onClose,
+}: {
+  roomName: string;
+  attendanceId: string;
+  media: {
+    startCanvasShare: (canvas: HTMLCanvasElement) => Promise<boolean>;
+    stopCanvasShare: () => Promise<void>;
+    toggleScreenShare: () => Promise<boolean>;
+    canvasShareActive: boolean;
+  };
+  notify: (message: string) => void;
+  onClose: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pdfDocRef = useRef<any>(null);
+  const renderTaskRef = useRef<any>(null);
+  const materialInputRef = useRef<HTMLInputElement | null>(null);
+  const drawStateRef = useRef({ drawing: false, lastX: 0, lastY: 0 });
+  const [mode, setMode] = useState<"menu" | "pdf" | "whiteboard">("menu");
+  const [materials, setMaterials] = useState<ClassMaterial[]>([]);
+  const [activeMaterialName, setActiveMaterialName] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pdfPage, setPdfPage] = useState(1);
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  const [penColor, setPenColor] = useState(WHITEBOARD_COLORS[0]);
+  const [penSize, setPenSize] = useState(4);
+  const [eraser, setEraser] = useState(false);
+
+  useEffect(() => {
+    api<{ materials: ClassMaterial[] }>(`/api/rooms/${roomName}/materials`)
+      .then((response) => setMaterials(response.materials || []))
+      .catch(() => undefined);
+  }, [roomName]);
+
+  useEffect(() => () => {
+    renderTaskRef.current?.cancel?.();
+    pdfDocRef.current?.destroy?.();
+  }, []);
+
+  function prepareCanvas() {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    canvas.width = 1600;
+    canvas.height = 1000;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  async function renderPdfPage(pageNumber: number) {
+    const doc = pdfDocRef.current;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!doc || !canvas || !context) return;
+    renderTaskRef.current?.cancel?.();
+    const page = await doc.getPage(pageNumber);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(canvas.width / base.width, canvas.height / base.height);
+    const viewport = page.getViewport({ scale });
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    const offsetX = (canvas.width - viewport.width) / 2;
+    const offsetY = (canvas.height - viewport.height) / 2;
+    const task = page.render({ canvasContext: context, viewport, transform: [1, 0, 0, 1, offsetX, offsetY] });
+    renderTaskRef.current = task;
+    await task.promise.catch(() => undefined);
+  }
+
+  async function presentMaterial(material: ClassMaterial) {
+    if (!/\.pdf$/i.test(material.name)) {
+      notify("Only PDF files can be presented. Export your PPT as PDF and upload that.");
+      return;
+    }
+    try {
+      setBusy(true);
+      const canvas = prepareCanvas();
+      if (!canvas) throw new Error("Presentation canvas is not ready.");
+      pdfDocRef.current?.destroy?.();
+      const doc = await pdfjsLib.getDocument({ url: material.url }).promise;
+      pdfDocRef.current = doc;
+      setPdfPageCount(doc.numPages);
+      setPdfPage(1);
+      setActiveMaterialName(material.name);
+      setMode("pdf");
+      await renderPdfPage(1);
+      const started = await media.startCanvasShare(canvas);
+      if (!started) notify("Could not start presenting the PDF.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not open the PDF.");
+      setMode("menu");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function goToPage(next: number) {
+    const doc = pdfDocRef.current;
+    if (!doc || busy) return;
+    const clamped = Math.min(Math.max(1, next), doc.numPages);
+    if (clamped === pdfPage) return;
+    setPdfPage(clamped);
+    await renderPdfPage(clamped);
+  }
+
+  async function startWhiteboard() {
+    const canvas = prepareCanvas();
+    if (!canvas) return;
+    setMode("whiteboard");
+    const started = await media.startCanvasShare(canvas);
+    if (!started) notify("Could not start the whiteboard.");
+  }
+
+  async function uploadMaterial(file: File | null | undefined) {
+    if (!file) return;
+    if (!/\.(pdf|ppt|pptx)$/i.test(file.name)) {
+      notify("Upload a PDF (or a PPT exported as PDF to present it).");
+      return;
+    }
+    if (file.size > 60 * 1024 * 1024) {
+      notify("Material is too large. The limit is 60 MB.");
+      return;
+    }
+    try {
+      setUploading(true);
+      const query = new URLSearchParams({ attendanceId, name: file.name });
+      const response = await fetch(`/api/rooms/${roomName}/materials?${query.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Material upload failed.");
+      setMaterials((current) => [...current, payload.material]);
+      if (/\.pdf$/i.test(payload.material.name)) {
+        await presentMaterial(payload.material);
+      } else {
+        notify("PPT stored. Export it as PDF to present it inside the room.");
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Material upload failed.");
+    } finally {
+      setUploading(false);
+      if (materialInputRef.current) materialInputRef.current.value = "";
+    }
+  }
+
+  function pointerPosition(event: { clientX: number; clientY: number }) {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  function drawTo(x: number, y: number) {
+    const context = canvasRef.current?.getContext("2d");
+    if (!context) return;
+    context.strokeStyle = eraser ? "#ffffff" : penColor;
+    context.lineWidth = eraser ? penSize * 8 : penSize;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    context.moveTo(drawStateRef.current.lastX, drawStateRef.current.lastY);
+    context.lineTo(x, y);
+    context.stroke();
+    drawStateRef.current.lastX = x;
+    drawStateRef.current.lastY = y;
+  }
+
+  function clearBoard() {
+    prepareCanvasContents();
+  }
+
+  function prepareCanvasContents() {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  async function stopPresenting() {
+    renderTaskRef.current?.cancel?.();
+    pdfDocRef.current?.destroy?.();
+    pdfDocRef.current = null;
+    await media.stopCanvasShare();
+    onClose();
+  }
+
+  async function switchToScreenShare() {
+    await media.toggleScreenShare();
+    onClose();
+  }
+
+  return (
+    <div className="gm-presenter">
+      <div className="gm-presenter-head">
+        <span className="gm-presenter-title">
+          {mode === "pdf" ? activeMaterialName || "Class PDF" : mode === "whiteboard" ? "Whiteboard" : "Present to the class"}
+        </span>
+        <button className="gm-panel-close" type="button" onClick={mode === "menu" ? onClose : stopPresenting} title="Close">x</button>
+      </div>
+
+      {mode === "menu" ? (
+        <div className="gm-presenter-menu">
+          <button className="gm-presenter-option" type="button" onClick={startWhiteboard}>
+            <span className="gm-presenter-option-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+            </span>
+            <span>
+              <strong>Whiteboard</strong>
+              <small>Draw live — attendees see it as your shared screen</small>
+            </span>
+          </button>
+          <button className="gm-presenter-option" type="button" onClick={() => materialInputRef.current?.click()} disabled={uploading}>
+            <span className="gm-presenter-option-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="M12 18v-6" /><path d="m9 15 3 3 3-3" /></svg>
+            </span>
+            <span>
+              <strong>{uploading ? "Uploading..." : "Upload class PDF / PPT"}</strong>
+              <small>PDFs present in-room; export PPTs as PDF</small>
+            </span>
+          </button>
+          <input ref={materialInputRef} type="file" accept=".pdf,.ppt,.pptx" className="hidden" onChange={(event) => uploadMaterial(event.target.files?.[0])} />
+          {materials.length ? (
+            <div className="gm-presenter-materials">
+              <p className="gm-people-label">Class materials</p>
+              {materials.map((material) => (
+                <button key={material.id} className="gm-presenter-material" type="button" onClick={() => presentMaterial(material)} disabled={busy}>
+                  <span className="gm-presenter-material-name">{material.name}</span>
+                  <span className="gm-presenter-material-action">{/\.pdf$/i.test(material.name) ? "Present" : "PDF only"}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className={`gm-presenter-stage ${mode === "menu" ? "hidden" : ""}`}>
+        <canvas
+          ref={canvasRef}
+          className={`gm-presenter-canvas ${mode === "whiteboard" ? "gm-presenter-canvas-draw" : ""}`}
+          onPointerDown={(event) => {
+            if (mode !== "whiteboard") return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            const position = pointerPosition(event);
+            drawStateRef.current = { drawing: true, lastX: position.x, lastY: position.y };
+            drawTo(position.x + 0.01, position.y + 0.01);
+          }}
+          onPointerMove={(event) => {
+            if (mode !== "whiteboard" || !drawStateRef.current.drawing) return;
+            const position = pointerPosition(event);
+            drawTo(position.x, position.y);
+          }}
+          onPointerUp={() => {
+            drawStateRef.current.drawing = false;
+          }}
+          onPointerLeave={() => {
+            drawStateRef.current.drawing = false;
+          }}
+        />
+
+        {mode === "pdf" ? (
+          <div className="gm-presenter-controls">
+            <button className="gm-btn" type="button" onClick={() => goToPage(pdfPage - 1)} disabled={pdfPage <= 1 || busy} title="Previous page">‹</button>
+            <span className="gm-presenter-page">Page {pdfPage} / {pdfPageCount}</span>
+            <button className="gm-btn" type="button" onClick={() => goToPage(pdfPage + 1)} disabled={pdfPage >= pdfPageCount || busy} title="Next page">›</button>
+            <button className="gm-mini-btn gm-mini-btn-accent" type="button" onClick={switchToScreenShare}>Share screen instead</button>
+            <button className="gm-mini-btn gm-presenter-stop" type="button" onClick={stopPresenting}>Stop presenting</button>
+          </div>
+        ) : null}
+
+        {mode === "whiteboard" ? (
+          <div className="gm-presenter-controls">
+            {WHITEBOARD_COLORS.map((color) => (
+              <button
+                key={color}
+                className={`gm-wb-color ${!eraser && penColor === color ? "gm-wb-color-active" : ""}`}
+                style={{ backgroundColor: color }}
+                type="button"
+                onClick={() => {
+                  setPenColor(color);
+                  setEraser(false);
+                }}
+                title="Pen color"
+              />
+            ))}
+            <select className="gm-wb-size" value={penSize} onChange={(event) => setPenSize(Number(event.target.value))} title="Pen size">
+              <option value={2}>Thin</option>
+              <option value={4}>Medium</option>
+              <option value={8}>Thick</option>
+            </select>
+            <button className={`gm-mini-btn ${eraser ? "gm-mini-btn-accent" : ""}`} type="button" onClick={() => setEraser((current) => !current)}>Eraser</button>
+            <button className="gm-mini-btn" type="button" onClick={clearBoard}>Clear</button>
+            <button className="gm-mini-btn gm-mini-btn-accent" type="button" onClick={switchToScreenShare}>Share screen instead</button>
+            <button className="gm-mini-btn gm-presenter-stop" type="button" onClick={stopPresenting}>Stop</button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomName: string }) {
@@ -1746,7 +2285,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [joined, setJoined] = useState(false);
   const [draftMessage, setDraftMessage] = useState("");
   const [draftMessageTarget, setDraftMessageTarget] = useState<"ALL" | "HOST">("ALL");
-  const [draftMessageType, setDraftMessageType] = useState<"CHAT" | "TOAST">("CHAT");
+  const [draftMessageType, setDraftMessageType] = useState<RoomMessageType>("CHAT");
   const [paymentNotice, setPaymentNotice] = useState("");
   const [linkCopyNotice, setLinkCopyNotice] = useState("");
   const [paymentLoading, setPaymentLoading] = useState(false);
@@ -1763,6 +2302,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [screenSharePriority, setScreenSharePriority] = useState<Record<string, number>>({});
   const [chatPreview, setChatPreview] = useState<{ id: string; name: string; text: string } | null>(null);
   const lastPreviewMessageIdRef = useRef<string | null>(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const chatFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [presenterOpen, setPresenterOpen] = useState(false);
   const [prejoinNow, setPrejoinNow] = useState(() => Date.now());
   const chatRef = useRef<HTMLDivElement | null>(null);
   const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
@@ -2020,8 +2562,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     }
     if (last.id === lastPreviewMessageIdRef.current) return;
     lastPreviewMessageIdRef.current = last.id;
-    if (sidePanel === "chat" || last.name === form.name || last.messageType === "TOAST") return;
-    setChatPreview({ id: last.id, name: last.name, text: last.text });
+    if (sidePanel === "chat" || last.name === form.name) return;
+    if (last.messageType === "TOAST" || last.messageType === "ENROLLMENT" || last.messageType === "SLOTS") return;
+    setChatPreview({ id: last.id, name: last.name, text: last.text || (last.attachment ? `Shared a file: ${last.attachment.name}` : "") });
   }, [connection.room.messages, form.name, sidePanel]);
 
   useEffect(() => {
@@ -2179,15 +2722,81 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }
 
   function sendChatFromPanel() {
-    if (!draftMessage.trim()) return;
-    connection.sendMessage(draftMessage, {
-      target: draftMessageType === "TOAST" ? "ALL" : draftMessageTarget,
+    let text = draftMessage.trim();
+    if (!text) return;
+    if (draftMessageType === "SLOTS") {
+      const digits = text.replace(/[^\d]/g, "");
+      if (!digits) {
+        setPaymentNotice("Enter the number of slots left for a slots alert.");
+        return;
+      }
+      text = digits;
+    }
+    connection.sendMessage(text, {
+      target: draftMessageType === "CHAT" ? draftMessageTarget : "ALL",
       messageType: draftMessageType,
     });
     setDraftMessage("");
-    if (draftMessageType === "TOAST") {
+    if (draftMessageType !== "CHAT") {
       setDraftMessageType("CHAT");
     }
+  }
+
+  async function sendChatFile(file: File | null | undefined) {
+    if (!file) return;
+    if (!connection.attendanceId) {
+      setPaymentNotice("You need to be connected to share files.");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setPaymentNotice("File is too large. The limit is 25 MB.");
+      return;
+    }
+    try {
+      setUploadingFile(true);
+      const query = new URLSearchParams({ attendanceId: connection.attendanceId, name: file.name, mime: file.type || "application/octet-stream" });
+      const response = await fetch(`/api/rooms/${roomName}/files?${query.toString()}`, {
+        method: "POST",
+        // Always octet-stream so the server's raw-body route receives it
+        // untouched regardless of the real file type (passed via ?mime=).
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.message || "File upload failed.");
+      }
+    } catch (error) {
+      setPaymentNotice(error instanceof Error ? error.message : "File upload failed.");
+    } finally {
+      setUploadingFile(false);
+      if (chatFileInputRef.current) chatFileInputRef.current.value = "";
+    }
+  }
+
+  function downloadChatTranscript() {
+    const escapeCell = (value: unknown) => '"' + String(value ?? "").split('"').join('""') + '"';
+    const rows = [["Time", "Name", "Role", "Target", "Type", "Message", "Attachment"].map(escapeCell).join(",")];
+    connection.room.messages.forEach((message) => {
+      rows.push([
+        message.createdAt,
+        message.name,
+        message.role,
+        message.target || "ALL",
+        message.messageType || "CHAT",
+        message.text,
+        message.attachment ? `${message.attachment.name} (${window.location.origin}${message.attachment.url})` : "",
+      ].map(escapeCell).join(","));
+    });
+    const blob = new Blob(["﻿" + rows.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${roomName}-chat-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   function toggleHandRaised() {
@@ -2488,7 +3097,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       <div className="gm-root gm-attendee-room">
         <div className="gm-main">
           <div className="gm-stage">
-            {leadRemoteStageStream ? <AudioStream stream={leadRemoteStageStream} /> : null}
+            <RemoteAudioMixer streams={media.remoteStreams} />
             {presenting ? (
               <StageVideo stream={leadScreenStream} muted />
             ) : showRemoteVideo ? (
@@ -2517,7 +3126,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
-            {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
+            {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} /> : null}
 
             {chatPreview && sidePanel !== "chat" ? (
               <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
@@ -2634,7 +3243,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                           {message.target === "HOST" ? <span className="gm-msg-you"> · Only host</span> : null}
                           {message.messageType === "TOAST" ? <span className="gm-msg-you"> · Highlighted</span> : null}
                         </p>
-                        <p className="gm-msg-text">{linkifyMessageText(message.text)}</p>
+                        <p className="gm-msg-text">{linkifyMessageText(roomMessageDisplayText(message))}</p>
+                        {message.attachment ? <ChatAttachmentChip attachment={message.attachment} /> : null}
                       </div>
                     </div>
                   ))}
@@ -2647,6 +3257,14 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                     </select>
                   </div>
                   <div className="gm-chat-input-row">
+                    <input ref={chatFileInputRef} type="file" className="hidden" onChange={(event) => sendChatFile(event.target.files?.[0])} />
+                    <button className="gm-attach-btn" type="button" onClick={() => chatFileInputRef.current?.click()} disabled={uploadingFile} title="Share a file">
+                      {uploadingFile ? (
+                        <span className="gm-attach-busy" />
+                      ) : (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+                      )}
+                    </button>
                     <input className="gm-chat-input" value={draftMessage} onChange={(event) => setDraftMessage(event.target.value)} placeholder="Send a message" onKeyDown={(event) => event.key === "Enter" && sendChatFromPanel()} />
                     <button className="gm-send-btn" type="button" onClick={sendChatFromPanel} disabled={!draftMessage.trim()}>Send</button>
                   </div>
@@ -2674,6 +3292,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             stream={leadHost?.cameraStream || null}
             label={`${hostLabel} camera`}
             eyebrow="Host camera"
+            muted
             isCameraOn
           />
         ) : null}
@@ -2723,9 +3342,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       <div className="gm-root">
         <div className="gm-main">
           <div className="gm-stage">
-            {leadStageStream && !leadShowsVideo ? <AudioStream stream={leadStageStream} /> : null}
+            <RemoteAudioMixer streams={media.remoteStreams} />
             {leadShowsVideo ? (
-              <StageVideo stream={leadStageStream} muted={localLeadStage} />
+              <StageVideo stream={leadStageStream} muted />
             ) : (
               <div className="gm-avatar-stage">
                 <div className="gm-avatar-circle">{leadHostLabel.slice(0, 1).toUpperCase()}</div>
@@ -2744,7 +3363,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
-            {connection.activeToast ? <StageToast text={connection.activeToast.text} /> : null}
+            {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} /> : null}
 
             {chatPreview && sidePanel !== "chat" ? (
               <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
@@ -2753,11 +3372,21 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
             ) : null}
 
+            {presenterOpen && connection.attendanceId ? (
+              <ClassPresenter
+                roomName={roomName}
+                attendanceId={connection.attendanceId}
+                media={media}
+                notify={setPaymentNotice}
+                onClose={() => setPresenterOpen(false)}
+              />
+            ) : null}
+
             {hostSidePreview && !showHostCameraRail ? (
               <div className="gm-host-pip">
                 <VideoStream
                   stream={hostSidePreview.stream}
-                  muted={hostSidePreview.muted}
+                  muted
                   label={hostSidePreview.label}
                   isCameraOn={hostSidePreview.isCameraOn}
                 />
@@ -2796,8 +3425,11 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   <ControlIcon name="offer" />
                   <span>{enrollEnabled ? "Turn Enroll Off" : "Turn Enroll On"}</span>
                 </button>
-                <button className={`gm-btn ${media.isScreenSharing ? "gm-btn-active" : ""}`} type="button" onClick={media.toggleScreenShare} title="Screen share">
+                <button className={`gm-btn ${media.isScreenSharing && !media.canvasShareActive ? "gm-btn-active" : ""}`} type="button" onClick={media.toggleScreenShare} title="Screen share">
                   <ControlIcon name="screen" />
+                </button>
+                <button className={`gm-btn ${presenterOpen || media.canvasShareActive ? "gm-btn-active" : ""}`} type="button" onClick={() => setPresenterOpen((current) => !current)} title="Present PDF or whiteboard">
+                  <ControlIcon name="present" />
                 </button>
                 <button className={`gm-btn ${sidePanel === "chat" ? "gm-btn-active" : ""}`} type="button" onClick={() => togglePanel("chat")} title="Chat">
                   <ControlIcon name="chat" />
@@ -2861,7 +3493,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                           {message.target === "HOST" ? <span className="gm-msg-you"> · Only host</span> : null}
                           {message.messageType === "TOAST" ? <span className="gm-msg-you"> · Toast</span> : null}
                         </p>
-                        <p className="gm-msg-text">{linkifyMessageText(message.text)}</p>
+                        <p className="gm-msg-text">{linkifyMessageText(roomMessageDisplayText(message))}</p>
+                        {message.attachment ? <ChatAttachmentChip attachment={message.attachment} /> : null}
                       </div>
                     </div>
                   ))}
@@ -2872,13 +3505,42 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                       <option value="ALL">Chat to everyone</option>
                       <option value="HOST">Only hosts</option>
                     </select>
-                    <select className="gm-chat-input" value={draftMessageType} onChange={(event) => setDraftMessageType(event.target.value as "CHAT" | "TOAST")}>
+                    <select className="gm-chat-input" value={draftMessageType} onChange={(event) => setDraftMessageType(event.target.value as RoomMessageType)}>
                       <option value="CHAT">Chat</option>
                       <option value="TOAST">Toast</option>
+                      <option value="ENROLLMENT">🎉 Enrollment</option>
+                      <option value="SLOTS">⏰ Slots left</option>
                     </select>
+                    <button className="gm-chat-export-btn" type="button" onClick={downloadChatTranscript} disabled={!connection.room.messages.length} title="Download the chat as CSV">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></svg>
+                      <span>Export</span>
+                    </button>
                   </div>
                   <div className="gm-chat-input-row">
-                    <input className="gm-chat-input" value={draftMessage} onChange={(event) => setDraftMessage(event.target.value)} placeholder={draftMessageType === "TOAST" ? "Highlighted toast message" : "Broadcast a message"} onKeyDown={(event) => event.key === "Enter" && sendChatFromPanel()} />
+                    <input ref={chatFileInputRef} type="file" className="hidden" onChange={(event) => sendChatFile(event.target.files?.[0])} />
+                    <button className="gm-attach-btn" type="button" onClick={() => chatFileInputRef.current?.click()} disabled={uploadingFile} title="Share a file">
+                      {uploadingFile ? (
+                        <span className="gm-attach-busy" />
+                      ) : (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+                      )}
+                    </button>
+                    <input
+                      className="gm-chat-input"
+                      value={draftMessage}
+                      onChange={(event) => setDraftMessage(event.target.value)}
+                      inputMode={draftMessageType === "SLOTS" ? "numeric" : undefined}
+                      placeholder={
+                        draftMessageType === "TOAST"
+                          ? "Highlighted toast message"
+                          : draftMessageType === "ENROLLMENT"
+                            ? "Student name — congratulations go out automatically"
+                            : draftMessageType === "SLOTS"
+                              ? "How many slots are left?"
+                              : "Broadcast a message"
+                      }
+                      onKeyDown={(event) => event.key === "Enter" && sendChatFromPanel()}
+                    />
                     <button className="gm-send-btn" type="button" onClick={sendChatFromPanel} disabled={!draftMessage.trim()}>Send</button>
                   </div>
                 </div>
@@ -2914,7 +3576,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             stream={hostSidePreview.stream}
             label={hostSidePreview.label}
             eyebrow={hostSidePreview.eyebrow}
-            muted={hostSidePreview.muted}
+            muted
             isCameraOn={hostSidePreview.isCameraOn}
           />
         ) : null}

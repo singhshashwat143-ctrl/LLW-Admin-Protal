@@ -2568,11 +2568,34 @@ export async function createDashboardStore() {
     data,
     pendingPersist: Promise.resolve(),
     pendingReload: Promise.resolve(),
-    persist(reason = "persist") {
+    // Live-buffer mode: while a webinar is running, full-store persists are
+    // throttled to a safety interval so per-participant events (joins, mic
+    // toggles) don't trigger a full JSON + cloud snapshot write each time.
+    // The live events themselves are captured in the live event store.
+    persistHold: false,
+    persistHoldDirty: false,
+    lastPersistAt: 0,
+    persistHoldSafetyMs: Math.max(60_000, Number(process.env.LIVE_BUFFER_SAFETY_PERSIST_MS || 300_000)),
+    setPersistHold(active, reason = "live-buffer") {
+      const next = Boolean(active);
+      if (store.persistHold === next) return store.pendingPersist;
+      store.persistHold = next;
+      if (!next && store.persistHoldDirty) {
+        return store.persist(`${reason}-release`);
+      }
+      return store.pendingPersist;
+    },
+    persist(reason = "persist", options = {}) {
+      if (!options.force && store.persistHold && Date.now() - store.lastPersistAt < store.persistHoldSafetyMs) {
+        store.persistHoldDirty = true;
+        return store.pendingPersist;
+      }
       const snapshot = buildPersistentData(structuredClone(store.data));
       writeFileSync(dataFile, JSON.stringify(snapshot, null, 2));
       store.pendingPersist = runtimePersistence.save(snapshot, reason);
       snapshotDataFile();
+      store.lastPersistAt = Date.now();
+      store.persistHoldDirty = false;
       return store.pendingPersist;
     },
     save() {

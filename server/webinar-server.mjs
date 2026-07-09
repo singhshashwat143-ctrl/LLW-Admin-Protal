@@ -2,7 +2,7 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
@@ -12,6 +12,7 @@ import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
 import { createGoogleSheetsMirror } from "./google-sheets-sync.mjs";
+import { createLiveEventStore } from "./live-event-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -53,6 +54,10 @@ const roomPresence = new Map();
 const roomChats = new Map();
 const socketRoomMeta = new Map();
 const liveRuntimeReloadMs = Math.max(Number(process.env.GOOGLE_SHEETS_RUNTIME_REFRESH_MS || 120000) || 120000, 30000);
+const liveEventStore = await createLiveEventStore();
+const liveBufferRooms = new Set();
+const chatUploadsDir = process.env.CHAT_UPLOAD_DIR || join(__dirname, "..", "data", "uploads");
+const CHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
 
 app.set("trust proxy", true);
 app.use(cors());
@@ -138,6 +143,67 @@ async function flushStoreWithResponseBudget({
     });
   }
 }
+
+function sanitizeChatFileName(value) {
+  const base = String(value || "file").split(/[\\/]/).pop() || "file";
+  const cleaned = base.replace(/[^\w.\- ()+]/g, "_").trim();
+  return (cleaned || "file").slice(0, 150);
+}
+
+function sanitizeRoomDirName(value) {
+  return String(value || "room").replace(/[^\w.-]/g, "_").slice(0, 120);
+}
+
+function recordLiveEvent(roomName, { type, attendanceId = "", webinarId = "", payload = {} } = {}) {
+  if (!liveEventStore.enabled) return;
+  const resolvedWebinarId = webinarId || store.getRoomByName(roomName)?.webinar?.id || "";
+  liveEventStore.recordEvent({
+    roomName,
+    webinarId: resolvedWebinarId,
+    attendanceId,
+    type,
+    payload,
+  });
+}
+
+function engageLiveBuffer(roomName) {
+  if (!liveEventStore.enabled) return;
+  if (!liveBufferRooms.has(roomName)) {
+    liveBufferRooms.add(roomName);
+    console.log(`Live buffer engaged for room ${roomName} (main-store persists throttled).`);
+  }
+  store.setPersistHold(true);
+}
+
+async function releaseLiveBuffer(roomName, reason = "webinar-ended") {
+  if (!liveBufferRooms.has(roomName)) return;
+  liveBufferRooms.delete(roomName);
+  recordLiveEvent(roomName, { type: "buffer_release", payload: { reason } });
+  try {
+    // One full persist captures everything accumulated in memory during the
+    // class; only then are the buffered cloud events safe to mark imported.
+    await store.persist(`live-buffer-${reason}`, { force: true });
+    if (!liveBufferRooms.size) {
+      store.setPersistHold(false, reason);
+    }
+    await googleSheetsMirror.syncDiff(store, { reason: `live-buffer-${reason}` });
+    const imported = await liveEventStore.markImported(roomName);
+    console.log(`Live buffer released for room ${roomName}: store persisted, ${imported} events marked imported.`);
+  } catch (error) {
+    console.error("Live buffer release failed:", error instanceof Error ? error.message : error);
+  }
+}
+
+// Safety net: a room whose participants all vanished without meeting:end
+// (host closed the tab, network drop) must not hold persists forever.
+setInterval(() => {
+  for (const roomName of [...liveBufferRooms]) {
+    const participants = roomPresence.get(roomName) || [];
+    if (!participants.length) {
+      void releaseLiveBuffer(roomName, "room-idle");
+    }
+  }
+}, 60_000).unref?.();
 
 function serializeWebinar(req, webinar) {
   if (!webinar) return null;
@@ -1413,8 +1479,15 @@ function normalizeRoomMessageTarget(value = "ALL") {
   return String(value || "ALL").toUpperCase() === "HOST" ? "HOST" : "ALL";
 }
 
+const SPECIAL_ROOM_MESSAGE_TYPES = new Set(["TOAST", "ENROLLMENT", "SLOTS"]);
+
 function normalizeRoomMessageType(value = "CHAT") {
-  return String(value || "CHAT").toUpperCase() === "TOAST" ? "TOAST" : "CHAT";
+  const upper = String(value || "CHAT").toUpperCase();
+  return SPECIAL_ROOM_MESSAGE_TYPES.has(upper) ? upper : "CHAT";
+}
+
+function isBroadcastRoomMessageType(value) {
+  return SPECIAL_ROOM_MESSAGE_TYPES.has(String(value || "").toUpperCase());
 }
 
 function isRoomMessageVisibleToViewer(message, viewer = {}) {
@@ -1447,6 +1520,19 @@ function emitRoomSnapshot(roomName) {
   }
 }
 
+function normalizeRoomMessageAttachment(input) {
+  if (!input || typeof input !== "object") return null;
+  const name = String(input.name || "").slice(0, 200).trim();
+  const url = String(input.url || "").trim();
+  if (!name || !url.startsWith("/api/")) return null;
+  return {
+    name,
+    url,
+    size: Number.isFinite(Number(input.size)) ? Number(input.size) : 0,
+    mime: String(input.mime || "").slice(0, 120),
+  };
+}
+
 function addRoomMessage(roomName, input = {}) {
   const message = {
     id: crypto.randomUUID(),
@@ -1458,15 +1544,16 @@ function addRoomMessage(roomName, input = {}) {
     target: normalizeRoomMessageTarget(input.target),
     messageType: normalizeRoomMessageType(input.messageType),
     highlight: Boolean(input.highlight),
+    attachment: normalizeRoomMessageAttachment(input.attachment),
   };
 
-  if (!message.text) return null;
+  if (!message.text && !message.attachment) return null;
 
   const messages = roomChats.get(roomName) || [];
   roomChats.set(roomName, [...messages.slice(-59), message]);
 
-  if (message.messageType === "TOAST") {
-    const payload = { id: message.id, text: message.text, name: message.name, role: message.role };
+  if (isBroadcastRoomMessageType(message.messageType)) {
+    const payload = { id: message.id, text: message.text, name: message.name, role: message.role, messageType: message.messageType };
     if (message.target === "HOST") {
       for (const socket of getRoomSockets(roomName)) {
         const meta = socketRoomMeta.get(socket.id) || {};
@@ -1490,6 +1577,11 @@ app.get("/health", (_req, res) => {
     port,
     persistence: store.getPersistenceStatus(),
     googleSheets: googleSheetsMirror.getStatus(),
+    liveEvents: {
+      ...liveEventStore.getStatus(),
+      buffered_rooms: [...liveBufferRooms],
+      persist_hold: store.persistHold,
+    },
   });
 });
 
@@ -1795,6 +1887,19 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
       phone: role === "HOST" ? hostPhone : attendeePhone,
       email: role === "HOST" ? hostEmail : attendeeEmail,
     });
+    engageLiveBuffer(req.params.roomName);
+    recordLiveEvent(req.params.roomName, {
+      type: "join",
+      attendanceId: joined.attendance.id,
+      webinarId: joined.webinar?.id,
+      payload: {
+        role,
+        name: joined.attendance.name,
+        phone: joined.attendance.phone || "",
+        email: joined.attendance.email || "",
+        join_counts: joined.attendance.join_counts,
+      },
+    });
     const hostCanPublish = role === "HOST";
     const canPublishAudio = hostCanPublish;
     const canPublishVideo = hostCanPublish;
@@ -1837,13 +1942,231 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
 app.post("/api/attendance/:id/leave", (req, res) => {
   const attendance = store.leaveRoom(req.params.id);
   if (!attendance) return res.status(404).json({ ok: false, message: "Attendance not found" });
+  const room = store.data.webinarSessions.find((item) => item.id === attendance.session_id);
+  if (room?.room_name) {
+    recordLiveEvent(room.room_name, {
+      type: "leave",
+      attendanceId: attendance.id,
+      webinarId: attendance.webinar_id,
+      payload: { duration_mins: attendance.duration_mins, leave_time: attendance.leave_time },
+    });
+  }
   res.json({ ok: true, attendance });
 });
 
 app.post("/api/attendance/:id/enroll-click", (req, res) => {
   const attendance = store.incrementEnrollClick(req.params.id);
   if (!attendance) return res.status(404).json({ ok: false, message: "Attendance not found" });
+  const room = store.data.webinarSessions.find((item) => item.id === attendance.session_id);
+  if (room?.room_name) {
+    recordLiveEvent(room.room_name, {
+      type: "enroll_click",
+      attendanceId: attendance.id,
+      webinarId: attendance.webinar_id,
+      payload: { enroll_clicks: attendance.enroll_clicks },
+    });
+  }
   res.json({ ok: true, attendance });
+});
+
+app.post("/api/rooms/:roomName/files", express.raw({ type: () => true, limit: "26mb" }), (req, res) => {
+  try {
+    const roomName = req.params.roomName;
+    const room = store.getRoomByName(roomName);
+    if (!room?.session) return res.status(404).json({ ok: false, message: "Room not found." });
+    const attendanceId = String(req.query.attendanceId || "");
+    const attendance = store.data.webinarAttendance.find(
+      (item) => item.id === attendanceId && item.webinar_id === room.webinar?.id,
+    );
+    if (!attendance) return res.status(403).json({ ok: false, message: "Join the room before sharing files." });
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || !body.length) {
+      return res.status(400).json({ ok: false, message: "The uploaded file is empty." });
+    }
+    if (body.length > CHAT_FILE_MAX_BYTES) {
+      return res.status(413).json({ ok: false, message: "File is too large. The limit is 25 MB." });
+    }
+    const safeName = sanitizeChatFileName(req.query.name);
+    const fileId = crypto.randomUUID();
+    const roomDir = join(chatUploadsDir, sanitizeRoomDirName(roomName));
+    mkdirSync(roomDir, { recursive: true });
+    writeFileSync(join(roomDir, `${fileId}__${safeName}`), body);
+    const attachment = {
+      name: safeName,
+      url: `/api/rooms/${encodeURIComponent(roomName)}/files/${fileId}`,
+      size: body.length,
+      mime: String(req.query.mime || "application/octet-stream").slice(0, 120),
+    };
+    const message = addRoomMessage(roomName, {
+      role: attendance.role,
+      name: attendance.name,
+      attendanceId: attendance.id,
+      text: "",
+      target: "ALL",
+      messageType: "CHAT",
+      attachment,
+    });
+    recordLiveEvent(roomName, { type: "chat", attendanceId: attendance.id, payload: { message } });
+    res.status(201).json({ ok: true, message });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: error instanceof Error ? error.message : "File upload failed." });
+  }
+});
+
+app.get("/api/rooms/:roomName/files/:fileId", (req, res) => {
+  const fileId = String(req.params.fileId || "");
+  if (!/^[0-9a-f-]{36}$/i.test(fileId)) {
+    return res.status(400).json({ ok: false, message: "Invalid file id." });
+  }
+  const roomDir = join(chatUploadsDir, sanitizeRoomDirName(req.params.roomName));
+  if (!existsSync(roomDir)) return res.status(404).json({ ok: false, message: "File not found." });
+  const match = readdirSync(roomDir).find((entry) => entry.startsWith(`${fileId}__`));
+  if (!match) return res.status(404).json({ ok: false, message: "File not found." });
+  res.download(join(roomDir, match), match.slice(fileId.length + 2));
+});
+
+// Class materials (PDF/PPT) — host-only uploads, separate from chat files.
+// Presented decks are rendered client-side and published as the screen share.
+app.post("/api/rooms/:roomName/materials", express.raw({ type: () => true, limit: "60mb" }), (req, res) => {
+  try {
+    const roomName = req.params.roomName;
+    const room = store.getRoomByName(roomName);
+    if (!room?.session) return res.status(404).json({ ok: false, message: "Room not found." });
+    const attendanceId = String(req.query.attendanceId || "");
+    const attendance = store.data.webinarAttendance.find(
+      (item) => item.id === attendanceId && item.webinar_id === room.webinar?.id,
+    );
+    if (!attendance || String(attendance.role).toUpperCase() !== "HOST") {
+      return res.status(403).json({ ok: false, message: "Only hosts can upload class materials." });
+    }
+    const body = req.body;
+    if (!Buffer.isBuffer(body) || !body.length) {
+      return res.status(400).json({ ok: false, message: "The uploaded file is empty." });
+    }
+    const safeName = sanitizeChatFileName(req.query.name);
+    const fileId = crypto.randomUUID();
+    const materialsDir = join(chatUploadsDir, sanitizeRoomDirName(roomName), "materials");
+    mkdirSync(materialsDir, { recursive: true });
+    writeFileSync(join(materialsDir, `${fileId}__${safeName}`), body);
+    res.status(201).json({
+      ok: true,
+      material: {
+        id: fileId,
+        name: safeName,
+        url: `/api/rooms/${encodeURIComponent(roomName)}/materials/${fileId}`,
+        size: body.length,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: error instanceof Error ? error.message : "Material upload failed." });
+  }
+});
+
+app.get("/api/rooms/:roomName/materials", (req, res) => {
+  const materialsDir = join(chatUploadsDir, sanitizeRoomDirName(req.params.roomName), "materials");
+  if (!existsSync(materialsDir)) return res.json({ ok: true, materials: [] });
+  const materials = readdirSync(materialsDir)
+    .filter((entry) => entry.includes("__"))
+    .map((entry) => {
+      const [id, ...rest] = entry.split("__");
+      return {
+        id,
+        name: rest.join("__"),
+        url: `/api/rooms/${encodeURIComponent(req.params.roomName)}/materials/${id}`,
+      };
+    });
+  res.json({ ok: true, materials });
+});
+
+app.get("/api/rooms/:roomName/materials/:fileId", (req, res) => {
+  const fileId = String(req.params.fileId || "");
+  if (!/^[0-9a-f-]{36}$/i.test(fileId)) {
+    return res.status(400).json({ ok: false, message: "Invalid file id." });
+  }
+  const materialsDir = join(chatUploadsDir, sanitizeRoomDirName(req.params.roomName), "materials");
+  if (!existsSync(materialsDir)) return res.status(404).json({ ok: false, message: "Material not found." });
+  const match = readdirSync(materialsDir).find((entry) => entry.startsWith(`${fileId}__`));
+  if (!match) return res.status(404).json({ ok: false, message: "Material not found." });
+  res.sendFile(join(materialsDir, match));
+});
+
+// Crash recovery: replay live events buffered in the cloud DB into the main
+// store. Only needed if the server died mid-webinar before the end-of-class
+// persist ran; normal classes import automatically on meeting end.
+app.post("/api/rooms/:roomName/live-events/import", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can import live webinar events.");
+  if (!user) return;
+  if (!liveEventStore.enabled) {
+    return res.status(400).json({ ok: false, message: "Live event store is not configured (LIVE_EVENT_DB_URL)." });
+  }
+  try {
+    const roomName = req.params.roomName;
+    const room = store.getRoomByName(roomName);
+    if (!room?.session || !room.webinar) {
+      return res.status(404).json({ ok: false, message: "Room not found." });
+    }
+    const events = await liveEventStore.importRoomEvents(roomName);
+    let created = 0;
+    let updated = 0;
+    for (const event of events) {
+      const payload = event.payload || {};
+      const attendanceId = event.attendance_id || "";
+      let attendance = attendanceId
+        ? store.data.webinarAttendance.find((item) => item.id === attendanceId)
+        : null;
+      if (event.event_type === "join" && !attendance && attendanceId) {
+        attendance = {
+          id: attendanceId,
+          webinar_id: room.webinar.id,
+          session_id: room.session.id,
+          role: String(payload.role || "ATTENDEE"),
+          name: String(payload.name || "Guest"),
+          phone: String(payload.phone || ""),
+          email: String(payload.email || ""),
+          join_time: event.created_at,
+          leave_time: null,
+          duration_mins: 0,
+          join_counts: Number(payload.join_counts || 1),
+          mic_toggle_count: 0,
+          camera_toggle_count: 0,
+          enroll_clicks: 0,
+          camera_duration: 0,
+          mic_duration: 0,
+          connection_quality: 100,
+          payment_status: "PENDING",
+          created_at: event.created_at,
+          updated_at: event.created_at,
+        };
+        store.data.webinarAttendance.unshift(attendance);
+        created += 1;
+        continue;
+      }
+      if (!attendance) continue;
+      if (event.event_type === "join") {
+        attendance.join_counts = Math.max(Number(attendance.join_counts || 0), Number(payload.join_counts || 1));
+        updated += 1;
+      } else if (event.event_type === "media_toggle") {
+        attendance.mic_toggle_count = Math.max(Number(attendance.mic_toggle_count || 0), Number(payload.mic_toggle_count || 0));
+        attendance.camera_toggle_count = Math.max(Number(attendance.camera_toggle_count || 0), Number(payload.camera_toggle_count || 0));
+        updated += 1;
+      } else if (event.event_type === "enroll_click") {
+        attendance.enroll_clicks = Math.max(Number(attendance.enroll_clicks || 0), Number(payload.enroll_clicks || 0));
+        updated += 1;
+      } else if (event.event_type === "leave") {
+        attendance.leave_time = payload.leave_time || attendance.leave_time || event.created_at;
+        attendance.duration_mins = Math.max(Number(attendance.duration_mins || 0), Number(payload.duration_mins || 0));
+        updated += 1;
+      }
+      attendance.updated_at = new Date().toISOString();
+    }
+    store.recalculateWebinar(room.webinar.id);
+    await store.persist("live-events-import", { force: true });
+    await googleSheetsMirror.syncDiff(store, { reason: "live-events-import" });
+    const imported = await liveEventStore.markImported(roomName);
+    res.json({ ok: true, events: events.length, created, updated, imported });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: error instanceof Error ? error.message : "Live event import failed." });
+  }
 });
 
 app.get("/api/bootcamps", (_req, res) => {
@@ -2301,9 +2624,9 @@ app.post("/api/orders/verify-payment", async (req, res) => {
         addRoomMessage(webinar.livekit_room_name, {
           role: "SYSTEM",
           name: "Enrollment",
-          text: `Congratulations! ${result.order.student?.name || result.order.student_name || "A learner"} has enrolled.`,
+          text: result.order.student?.name || result.order.student_name || "A learner",
           target: "ALL",
-          messageType: "TOAST",
+          messageType: "ENROLLMENT",
           highlight: true,
         });
       }
@@ -2386,9 +2709,9 @@ app.post("/api/orders/reconcile-payment", async (req, res) => {
         addRoomMessage(webinar.livekit_room_name, {
           role: "SYSTEM",
           name: "Enrollment",
-          text: `Congratulations! ${result.order.student?.name || result.order.student_name || "A learner"} has enrolled.`,
+          text: result.order.student?.name || result.order.student_name || "A learner",
           target: "ALL",
-          messageType: "TOAST",
+          messageType: "ENROLLMENT",
           highlight: true,
         });
       }
@@ -2988,16 +3311,20 @@ io.on("connection", (socket) => {
 
   socket.on("chat:send", (payload) => {
     const messageType = normalizeRoomMessageType(payload?.messageType);
-    if (messageType === "TOAST" && role !== "HOST") return;
-    addRoomMessage(roomName, {
+    const isBroadcastType = isBroadcastRoomMessageType(messageType);
+    if (isBroadcastType && role !== "HOST") return;
+    const message = addRoomMessage(roomName, {
       role,
       name,
       attendanceId,
       text: payload?.text,
-      target: messageType === "TOAST" ? "ALL" : payload?.target,
+      target: isBroadcastType ? "ALL" : payload?.target,
       messageType,
-      highlight: messageType === "TOAST",
+      highlight: isBroadcastType,
     });
+    if (message) {
+      recordLiveEvent(roomName, { type: "chat", attendanceId, payload: { message } });
+    }
   });
 
   socket.on("participant:media", (payload) => {
@@ -3018,7 +3345,20 @@ io.on("connection", (socket) => {
       if (payload?.isMicOn) attendance.mic_toggle_count = Number(attendance.mic_toggle_count || 0) + 1;
       if (payload?.isCameraOn) attendance.camera_toggle_count = Number(attendance.camera_toggle_count || 0) + 1;
       attendance.updated_at = new Date().toISOString();
+      // While the live buffer is engaged this save is throttled to the safety
+      // interval; the toggle itself is captured in the live event store.
       store.save();
+      recordLiveEvent(roomName, {
+        type: "media_toggle",
+        attendanceId,
+        payload: {
+          isMicOn: Boolean(payload?.isMicOn),
+          isCameraOn: Boolean(payload?.isCameraOn),
+          isScreenSharing: Boolean(payload?.isScreenSharing),
+          mic_toggle_count: attendance.mic_toggle_count,
+          camera_toggle_count: attendance.camera_toggle_count,
+        },
+      });
     }
 
     emitRoomSnapshot(roomName);
@@ -3167,6 +3507,7 @@ io.on("connection", (socket) => {
       highlight: true,
     });
     io.to(roomName).emit("meeting:ended", { message: `${name} ended the meeting.` });
+    recordLiveEvent(roomName, { type: "meeting_end", attendanceId, payload: { ended_by: name } });
     setTimeout(() => {
       for (const roomSocket of getRoomSockets(roomName)) {
         const meta = socketRoomMeta.get(roomSocket.id) || {};
@@ -3178,6 +3519,8 @@ io.on("connection", (socket) => {
       }
       roomPresence.set(roomName, []);
       emitRoomSnapshot(roomName);
+      // Webinar is over: persist the whole class once and sync the sheet.
+      void releaseLiveBuffer(roomName, "meeting-end");
     }, 150);
   });
 
@@ -3196,7 +3539,15 @@ io.on("connection", (socket) => {
     roomPresence.set(roomName, remaining);
     socketRoomMeta.delete(socket.id);
     if (attendanceId) {
-      store.leaveRoom(attendanceId);
+      const attendance = store.leaveRoom(attendanceId);
+      if (attendance) {
+        recordLiveEvent(roomName, {
+          type: "leave",
+          attendanceId,
+          webinarId: attendance.webinar_id,
+          payload: { duration_mins: attendance.duration_mins, leave_time: attendance.leave_time },
+        });
+      }
     }
     emitRoomSnapshot(roomName);
   });
@@ -3228,7 +3579,10 @@ if (store.getPersistenceStatus().mode === "google-sheets-primary") {
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, async () => {
     try {
+      store.setPersistHold(false, "shutdown");
+      await store.persist("shutdown", { force: true });
       await flushStore();
+      await liveEventStore.close();
       await store.close();
     } finally {
       process.exit(0);
