@@ -81,7 +81,9 @@ function withAbsolute(req, path) {
 }
 
 async function flushStore() {
-  await store.flush();
+  // Force a persist so money-path writes (payments, enrollments, refunds) land
+  // immediately even while a live class is throttling routine persists.
+  await store.persist("store-flush", { force: true });
   try {
     await googleSheetsMirror.syncDiff(store, { reason: "store-flush" });
   } catch (error) {
@@ -167,10 +169,13 @@ function recordLiveEvent(roomName, { type, attendanceId = "", webinarId = "", pa
 }
 
 function engageLiveBuffer(roomName) {
-  if (!liveEventStore.enabled) return;
+  // Throttle full-store persists during any live class, whether or not the
+  // cloud event buffer is configured. Otherwise every join/leave/mic-camera
+  // toggle re-serializes the entire store to disk — at 200 attendees with a
+  // large store that is the CPU/memory/data-disruption problem during class.
   if (!liveBufferRooms.has(roomName)) {
     liveBufferRooms.add(roomName);
-    console.log(`Live buffer engaged for room ${roomName} (main-store persists throttled).`);
+    console.log(`Live buffer engaged for room ${roomName} (main-store persists throttled${liveEventStore.enabled ? ", cloud events on" : ""}).`);
   }
   store.setPersistHold(true);
 }
@@ -178,7 +183,7 @@ function engageLiveBuffer(roomName) {
 async function releaseLiveBuffer(roomName, reason = "webinar-ended") {
   if (!liveBufferRooms.has(roomName)) return;
   liveBufferRooms.delete(roomName);
-  recordLiveEvent(roomName, { type: "buffer_release", payload: { reason } });
+  if (liveEventStore.enabled) recordLiveEvent(roomName, { type: "buffer_release", payload: { reason } });
   try {
     // One full persist captures everything accumulated in memory during the
     // class; only then are the buffered cloud events safe to mark imported.
@@ -187,8 +192,8 @@ async function releaseLiveBuffer(roomName, reason = "webinar-ended") {
       store.setPersistHold(false, reason);
     }
     await googleSheetsMirror.syncDiff(store, { reason: `live-buffer-${reason}` });
-    const imported = await liveEventStore.markImported(roomName);
-    console.log(`Live buffer released for room ${roomName}: store persisted, ${imported} events marked imported.`);
+    const imported = liveEventStore.enabled ? await liveEventStore.markImported(roomName) : 0;
+    console.log(`Live buffer released for room ${roomName}: store persisted${liveEventStore.enabled ? `, ${imported} events marked imported` : ""}.`);
   } catch (error) {
     console.error("Live buffer release failed:", error instanceof Error ? error.message : error);
   }
@@ -3309,7 +3314,13 @@ io.on("connection", (socket) => {
     isHandRaised: false,
   };
   const participants = roomPresence.get(roomName) || [];
-  roomPresence.set(roomName, [...participants.filter((item) => item.socketId !== socket.id), participant]);
+  // Drop any prior entry for this socket AND any stale entry for the same
+  // attendance id (a socket.io reconnect arrives with a new socketId, which
+  // would otherwise leave a ghost and inflate the live count).
+  roomPresence.set(roomName, [
+    ...participants.filter((item) => item.socketId !== socket.id && !(attendanceId && item.attendanceId === attendanceId)),
+    participant,
+  ]);
   emitRoomSnapshot(roomName);
 
   socket.on("chat:send", (payload) => {

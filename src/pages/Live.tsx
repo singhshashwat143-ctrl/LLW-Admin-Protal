@@ -1304,6 +1304,35 @@ function ConfettiBurst() {
   );
 }
 
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="gm-confirm-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
+      <div className="gm-confirm-card" onClick={(event) => event.stopPropagation()}>
+        <h3 className="gm-confirm-title">{title}</h3>
+        <p className="gm-confirm-body">{body}</p>
+        <div className="gm-confirm-actions">
+          <button className="gm-confirm-cancel" type="button" onClick={onCancel}>Stay</button>
+          <button className={`gm-confirm-ok ${danger ? "gm-confirm-danger" : ""}`} type="button" onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StageToast({ text, messageType }: { text: string; messageType?: RoomMessageType }) {
   if (messageType === "ENROLLMENT") {
     return (
@@ -1529,6 +1558,7 @@ function useClassMedia({
   const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteAudioStreams, setRemoteAudioStreams] = useState<Map<string, MediaStream>>(new Map());
   const [remoteCameraStreams, setRemoteCameraStreams] = useState<Map<string, MediaStream>>(new Map());
   const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
   const [activeSpeakerIds, setActiveSpeakerIds] = useState<string[]>([]);
@@ -1541,6 +1571,7 @@ function useClassMedia({
   const canvasTrackRef = useRef<MediaStreamTrack | null>(null);
   const canvasFramePumpRef = useRef<number | null>(null);
   const [canvasShareActive, setCanvasShareActive] = useState(false);
+  const [connectionState, setConnectionState] = useState<"connected" | "reconnecting" | "disconnected">("connected");
   const remoteTrackStateRef = useRef<Map<string, {
     micAudio: MediaStreamTrack | null;
     screenAudio: MediaStreamTrack | null;
@@ -1633,6 +1664,27 @@ function useClassMedia({
       }
       return next;
     });
+    // Audio-only stream, kept referentially stable while its audio tracks are
+    // unchanged, so toggling the host camera/screen (video-only change) doesn't
+    // re-attach the <audio> element and cause an audible drop mid-sentence.
+    setRemoteAudioStreams((current) => {
+      const audioTracks = [state?.micAudio, state?.screenAudio].filter(Boolean) as MediaStreamTrack[];
+      if (!audioTracks.length) {
+        if (!current.has(identity)) return current;
+        const next = new Map(current);
+        next.delete(identity);
+        return next;
+      }
+      const existing = current.get(identity);
+      const existingIds = existing ? existing.getAudioTracks().map((t) => t.id).sort().join(",") : "";
+      const nextIds = audioTracks.map((t) => t.id).sort().join(",");
+      if (existing && existingIds === nextIds) return current;
+      const stream = new MediaStream();
+      audioTracks.forEach((t) => stream.addTrack(t));
+      const next = new Map(current);
+      next.set(identity, stream);
+      return next;
+    });
   }, []);
 
   const updateRemoteTrack = useCallback((identity: string, source: string | undefined, mediaStreamTrack: MediaStreamTrack | null) => {
@@ -1656,6 +1708,7 @@ function useClassMedia({
       setLocalCameraStream(null);
       setLocalScreenStream(null);
       setRemoteStreams(new Map());
+      setRemoteAudioStreams(new Map());
       setRemoteCameraStreams(new Map());
       setRemoteScreenStreams(new Map());
       setActiveSpeakerIds([]);
@@ -1726,6 +1779,19 @@ function useClassMedia({
       buildLocalPreview(room);
     };
 
+    const onReconnecting = () => setConnectionState("reconnecting");
+    const onReconnected = () => {
+      setConnectionState("connected");
+      // Re-sync all publications after an ICE restart so the stage recovers.
+      room.remoteParticipants.forEach((participant) => syncExistingParticipant(participant));
+      buildLocalPreview(room);
+    };
+    const onDisconnected = () => {
+      if (!active) return;
+      setConnectionState("disconnected");
+      setMediaError("You were disconnected from the live media. Rejoin to reconnect.");
+    };
+
     room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
     room.on(RoomEvent.TrackUnsubscribed, onTrackUnsubscribed);
     room.on(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
@@ -1733,11 +1799,15 @@ function useClassMedia({
     room.on(RoomEvent.ParticipantPermissionsChanged, onParticipantPermissionsChanged);
     room.on(RoomEvent.LocalTrackPublished, () => buildLocalPreview(room));
     room.on(RoomEvent.LocalTrackUnpublished, () => buildLocalPreview(room));
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onReconnected);
+    room.on(RoomEvent.Disconnected, onDisconnected);
 
     room.connect(livekit.url, livekit.token, { autoSubscribe: true })
       .then(() => {
         if (!active) return;
         setMediaError("");
+        setConnectionState("connected");
         room.remoteParticipants.forEach((participant) => syncExistingParticipant(participant));
         buildLocalPreview(room);
       })
@@ -1748,6 +1818,8 @@ function useClassMedia({
         setLocalCameraStream(null);
         setLocalScreenStream(null);
         setRemoteStreams(new Map());
+        setRemoteAudioStreams(new Map());
+      setRemoteAudioStreams(new Map());
         setRemoteCameraStreams(new Map());
         setRemoteScreenStreams(new Map());
         setActiveSpeakerIds([]);
@@ -1771,6 +1843,7 @@ function useClassMedia({
       roomRef.current = null;
       remoteTrackStateRef.current.clear();
       setRemoteStreams(new Map());
+      setRemoteAudioStreams(new Map());
       setRemoteCameraStreams(new Map());
       setRemoteScreenStreams(new Map());
       setActiveSpeakerIds([]);
@@ -1960,6 +2033,7 @@ function useClassMedia({
     localCameraStream,
     localScreenStream,
     remoteStreams,
+    remoteAudioStreams,
     remoteCameraStreams,
     remoteScreenStreams,
     activeSpeakerIds,
@@ -1970,6 +2044,7 @@ function useClassMedia({
     isCameraOn,
     isScreenSharing,
     canvasShareActive,
+    connectionState,
     toggleMic,
     toggleCamera,
     toggleScreenShare,
@@ -2328,6 +2403,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const [uploadingFile, setUploadingFile] = useState(false);
   const chatFileInputRef = useRef<HTMLInputElement | null>(null);
   const [presenterOpen, setPresenterOpen] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<null | { title: string; body: string; confirmLabel: string; danger?: boolean; onConfirm: () => void }>(null);
   const [prejoinNow, setPrejoinNow] = useState(() => Date.now());
   const chatRef = useRef<HTMLDivElement | null>(null);
   const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
@@ -2479,9 +2555,15 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     }));
   }, [role, user?.email, user?.name]);
 
+  // Apply a host-forced mute exactly once per signal. Tracking the last handled
+  // signal prevents the stale timestamp from re-muting the attendee every render
+  // (which otherwise made a host-muted student permanently unable to unmute).
+  const handledForceMuteRef = useRef(0);
   useEffect(() => {
-    if (!connection.forceMuteSignal || !media.isMicOn) return;
-    void media.toggleMic();
+    if (!connection.forceMuteSignal) return;
+    if (handledForceMuteRef.current === connection.forceMuteSignal) return;
+    handledForceMuteRef.current = connection.forceMuteSignal;
+    if (media.isMicOn) void media.toggleMic();
   }, [connection.forceMuteSignal, media]);
 
   const reconcileLivePaymentStatus = useCallback(async () => {
@@ -2545,6 +2627,15 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     connection.clearMeetingEndedMessage();
   }, [connection.attendanceId, connection.clearMeetingEndedMessage, connection.meetingEndedMessage]);
 
+  // Keep the session start time in a ref so the 1s clock interval below never
+  // has to depend on connection.room.participants (a new array on every
+  // snapshot — at 200 attendees that rebuilt the interval many times a second).
+  const startedAtRef = useRef<string | null>(null);
+  useEffect(() => {
+    const ownParticipant = connection.room.participants.find((item) => item.attendanceId === connection.attendanceId);
+    startedAtRef.current = ownParticipant?.joinedAt || connection.session?.start_time || null;
+  }, [connection.attendanceId, connection.room.participants, connection.session?.start_time]);
+
   useEffect(() => {
     if (!joined) return;
     const timer = window.setInterval(() => {
@@ -2554,8 +2645,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       const ampm = hours >= 12 ? "PM" : "AM";
       setCurrentTime(`${hours % 12 || 12}:${mins} ${ampm}`);
 
-      const ownParticipant = connection.room.participants.find((item) => item.attendanceId === connection.attendanceId);
-      const startedAt = ownParticipant?.joinedAt || connection.session?.start_time;
+      const startedAt = startedAtRef.current;
       if (startedAt) {
         const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
         const hh = Math.floor(elapsed / 3600);
@@ -2566,7 +2656,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [connection.attendanceId, connection.room.participants, connection.session?.start_time, joined]);
+  }, [joined]);
 
   useEffect(() => {
     if (chatRef.current) {
@@ -2865,6 +2955,64 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     }
   }
 
+  function confirmLeaveRoom(message: string) {
+    setConfirmDialog({
+      title: "Leave the class?",
+      body: "You will exit the live class. You can rejoin with the same link while it is running.",
+      confirmLabel: "Leave class",
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        void leaveCurrentRoom(message);
+      },
+    });
+  }
+
+  function confirmEndMeeting() {
+    setConfirmDialog({
+      title: "End the class for everyone?",
+      body: "This ends the live class for all attendees and cannot be undone.",
+      confirmLabel: "End class",
+      danger: true,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        connection.endMeeting();
+      },
+    });
+  }
+
+  // Guard against accidentally dropping out of a live class via tab close,
+  // refresh, or the browser Back button.
+  useEffect(() => {
+    if (!joined) return undefined;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onPopState = () => {
+      window.history.pushState(null, "", window.location.href);
+      setConfirmDialog({
+        title: "Leave the class?",
+        body: "You will exit the live class. You can rejoin with the same link while it is running.",
+        confirmLabel: "Leave class",
+        danger: true,
+        onConfirm: () => {
+          setConfirmDialog(null);
+          window.removeEventListener("beforeunload", onBeforeUnload);
+          window.removeEventListener("popstate", onPopState);
+          void leaveCurrentRoom("You left the webinar.");
+        },
+      });
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.history.pushState(null, "", window.location.href);
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("popstate", onPopState);
+    };
+  }, [joined]);
+
   async function handleAttendeeMicToggle() {
     if (!media.canPublishAudio && !media.isMicOn) {
       setPaymentNotice(connection.unmutePrompt ? "Host approval is still syncing. Try again in a moment." : "Wait for the host to ask you to unmute.");
@@ -3109,18 +3257,26 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   if (role === "ATTENDEE" && joined) {
     const leadHost = chooseStageCandidate(remoteHostStageCandidates, media.activeSpeakerIds, screenSharePriority);
     const leadRemoteStageStream = leadHost?.stageStream || null;
-    const showRemoteVideo = Boolean(leadRemoteStageStream && (leadHost?.isCameraOn || leadHost?.isScreenSharing));
-    const showHostCameraPreview = Boolean(leadHost?.isScreenSharing && leadHost?.isCameraOn && leadHost?.cameraStream);
+    const leadScreenStream = leadHost ? media.remoteScreenStreams.get(leadHost.id) || null : null;
+    const leadCameraStream = leadHost?.cameraStream || null;
+    // Trust the actual LiveKit tracks over the socket-presence flags: the flags
+    // arrive on a separate channel and lag behind, so a late joiner would see
+    // the avatar (or miss the host camera) for seconds while presenting. If a
+    // track is subscribed and flowing, that source is genuinely live.
+    const presenting = Boolean(leadScreenStream);
+    const showHostCameraPreview = Boolean(presenting && leadCameraStream);
+    const showRemoteVideo = Boolean(leadRemoteStageStream && (leadCameraStream || leadScreenStream || leadHost?.isCameraOn || leadHost?.isScreenSharing));
     const hostLabel = leadHost?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
     const showHostCameraRail = !sidePanel && showHostCameraPreview;
-    const leadScreenStream = leadHost ? media.remoteScreenStreams.get(leadHost.id) || null : null;
-    const presenting = Boolean(leadHost?.isScreenSharing && leadScreenStream);
 
     return (
       <div className="gm-root gm-attendee-room">
         <div className="gm-main">
           <div className="gm-stage">
-            <RemoteAudioMixer streams={media.remoteStreams} />
+            <RemoteAudioMixer streams={media.remoteAudioStreams} />
+            {media.connectionState === "reconnecting" ? (
+              <div className="gm-reconnect-banner"><span className="gm-reconnect-dot" />Reconnecting…</div>
+            ) : null}
             {presenting ? (
               <StageVideo stream={leadScreenStream} muted />
             ) : showRemoteVideo ? (
@@ -3224,7 +3380,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   <ControlIcon name="chat" />
                 </button>
               </div>
-              <button onClick={() => leaveCurrentRoom("You left the webinar.")} className="gm-btn-hangup" type="button" title="Leave">
+              <button onClick={() => confirmLeaveRoom("You left the webinar.")} className="gm-btn-hangup" type="button" title="Leave">
                 <ControlIcon name="end" />
               </button>
             </div>
@@ -3311,6 +3467,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             isCameraOn
           />
         ) : null}
+        {confirmDialog ? <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog(null)} /> : null}
       </div>
     );
   }
@@ -3357,7 +3514,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       <div className="gm-root">
         <div className="gm-main">
           <div className="gm-stage">
-            <RemoteAudioMixer streams={media.remoteStreams} />
+            <RemoteAudioMixer streams={media.remoteAudioStreams} />
             {leadShowsVideo ? (
               <StageVideo stream={leadStageStream} muted />
             ) : (
@@ -3450,7 +3607,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   <ControlIcon name="chat" />
                 </button>
               </div>
-              <button onClick={() => connection.endMeeting()} className="gm-btn-hangup" type="button" title="End webinar">
+              <button onClick={confirmEndMeeting} className="gm-btn-hangup" type="button" title="End webinar">
                 <ControlIcon name="end" />
               </button>
             </div>
@@ -3464,7 +3621,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 <input className="gm-price-box" value={hostOfferMode === "FULL" ? hostFullAmount : hostTokenAmount} onChange={(event) => hostOfferMode === "FULL" ? setHostFullAmount(event.target.value.replace(/[^\d]/g, "")) : setHostTokenAmount(event.target.value.replace(/[^\d]/g, ""))} />
                 <button className="rounded-full bg-white/10 px-3 py-2 text-xs font-semibold text-white" type="button" onClick={saveHostOfferConfig}>Save Offer</button>
               </div>
-              <button className="rounded-full border border-white/15 px-3 py-2 text-xs font-semibold text-white/80" type="button" onClick={() => leaveCurrentRoom("You left the host room.")}>Leave</button>
+              <button className="rounded-full border border-white/15 px-3 py-2 text-xs font-semibold text-white/80" type="button" onClick={() => confirmLeaveRoom("You left the host room.")}>Leave</button>
               <button onClick={() => togglePanel("people")} className={`gm-icon-btn ${sidePanel === "people" ? "gm-icon-btn-active" : ""}`} type="button" title="People">
                 <ControlIcon name="people" />
                 <span className="gm-people-count">{connection.room.participants.length}</span>
@@ -3595,6 +3752,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             isCameraOn={hostSidePreview.isCameraOn}
           />
         ) : null}
+        {confirmDialog ? <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog(null)} /> : null}
       </div>
     );
   }
