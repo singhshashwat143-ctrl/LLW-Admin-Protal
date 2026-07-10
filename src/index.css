@@ -2961,23 +2961,9 @@ select.gm-chat-input {
   }
 
   .gm-host-pip {
-    width: 140px;
-    min-width: 140px;
-    height: 110px;
-  }
-
-  .gm-tile-belt {
-    display: flex;
-    gap: 8px;
-    flex: none;
-    height: clamp(140px, 22dvh, 220px);
-  }
-
-  /* On mobile the attendee gets the tile belt instead of the stage PiP or
-     side camera rail; opening chat/people intentionally hides the camera. */
-  .gm-attendee-room .gm-host-pip,
-  .gm-attendee-room .gm-camera-panel {
-    display: none;
+    width: 120px;
+    min-width: 120px;
+    height: 92px;
   }
 
   .gm-offer-config {

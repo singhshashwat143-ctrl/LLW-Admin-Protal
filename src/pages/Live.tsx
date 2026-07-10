@@ -1224,30 +1224,6 @@ function StageVideo({ stream, muted = false }: { stream: MediaStream | null; mut
   return <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-video-fill" />;
 }
 
-function CameraTile({ stream, label, isMicOn }: { stream: MediaStream | null; label: string; isMicOn?: boolean }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    if (!videoRef.current) return;
-    videoRef.current.srcObject = stream;
-    videoRef.current.play().catch(() => undefined);
-  }, [stream]);
-
-  return (
-    <div className="gm-tile">
-      {stream ? (
-        <video ref={videoRef} autoPlay playsInline muted className="gm-tile-video" />
-      ) : (
-        <div className="gm-tile-avatar">{label.slice(0, 1).toUpperCase()}</div>
-      )}
-      <span className="gm-tile-label">
-        {isMicOn === false ? <span className="gm-tile-mic-off"><ControlIcon name="mic-off" /></span> : null}
-        {label}
-      </span>
-    </div>
-  );
-}
-
 const CONFETTI_COLORS = ["#f4c542", "#3d6aff", "#22c55e", "#ef4444", "#a855f7", "#06b6d4", "#f97316", "#ec4899"];
 
 function ConfettiBurst() {
@@ -1374,53 +1350,6 @@ function roomMessageDisplayText(message: { text: string; messageType?: RoomMessa
   if (message.messageType === "ENROLLMENT") return `🎉 ${message.text} just enrolled — congratulations!`;
   if (message.messageType === "SLOTS") return `⏰ Hurry! Only ${message.text.replace(/[^\d]/g, "") || message.text} slots left.`;
   return message.text;
-}
-
-function SideCameraRail({
-  stream,
-  label,
-  eyebrow,
-  muted,
-  isCameraOn,
-}: {
-  stream: MediaStream | null;
-  label: string;
-  eyebrow: string;
-  muted?: boolean;
-  isCameraOn?: boolean;
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  useEffect(() => {
-    if (!videoRef.current) return;
-    videoRef.current.srcObject = stream;
-    videoRef.current.play().catch(() => undefined);
-  }, [stream]);
-
-  return (
-    <aside className="gm-camera-panel">
-      <div className="gm-camera-panel-header">
-        <div>
-          <p className="gm-camera-panel-kicker">{eyebrow}</p>
-          <h3 className="gm-camera-panel-title">{label}</h3>
-        </div>
-        <span className="gm-camera-panel-status">{isCameraOn ? "Live" : "Audio only"}</span>
-      </div>
-
-      <div className="gm-camera-frame">
-        {stream && !muted && !isCameraOn ? <AudioStream stream={stream} /> : null}
-        {stream && isCameraOn ? (
-          <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-camera-video" />
-        ) : (
-          <div className="gm-camera-fallback">
-            <div className="gm-camera-fallback-avatar">{label.slice(0, 1).toUpperCase()}</div>
-            <p className="gm-camera-fallback-name">{label}</p>
-          </div>
-        )}
-        <div className="gm-camera-frame-label">{label}</div>
-      </div>
-    </aside>
-  );
 }
 
 function ControlIcon({ name }: { name: string }) {
@@ -1579,6 +1508,7 @@ function useClassMedia({
   const roomRef = useRef<LiveKitRoom | null>(null);
   const canvasTrackRef = useRef<MediaStreamTrack | null>(null);
   const canvasFramePumpRef = useRef<number | null>(null);
+  const canvasRafRef = useRef<number | null>(null);
   const [canvasShareActive, setCanvasShareActive] = useState(false);
   const [connectionState, setConnectionState] = useState<"connected" | "reconnecting" | "disconnected">("connected");
   const remoteTrackStateRef = useRef<Map<string, {
@@ -1828,7 +1758,6 @@ function useClassMedia({
         setLocalScreenStream(null);
         setRemoteStreams(new Map());
         setRemoteAudioStreams(new Map());
-      setRemoteAudioStreams(new Map());
         setRemoteCameraStreams(new Map());
         setRemoteScreenStreams(new Map());
         setActiveSpeakerIds([]);
@@ -1844,6 +1773,10 @@ function useClassMedia({
       if (canvasFramePumpRef.current) {
         window.clearInterval(canvasFramePumpRef.current);
         canvasFramePumpRef.current = null;
+      }
+      if (canvasRafRef.current != null) {
+        cancelAnimationFrame(canvasRafRef.current);
+        canvasRafRef.current = null;
       }
       canvasTrackRef.current?.stop();
       canvasTrackRef.current = null;
@@ -1879,6 +1812,10 @@ function useClassMedia({
       window.clearInterval(canvasFramePumpRef.current);
       canvasFramePumpRef.current = null;
     }
+    if (canvasRafRef.current != null) {
+      cancelAnimationFrame(canvasRafRef.current);
+      canvasRafRef.current = null;
+    }
     if (room && track) {
       await room.localParticipant.unpublishTrack(track).catch(() => undefined);
     }
@@ -1909,13 +1846,30 @@ function useClassMedia({
         await room.localParticipant.unpublishTrack(previous).catch(() => undefined);
         previous.stop();
       }
-      // Continuous capture at a fixed rate: the browser emits frames (with
-      // periodic keyframes) even when the PDF page is static. This is what keeps
-      // the share decodable — captureStream(0)+requestFrame only sent one initial
-      // keyframe, which raced the camera track's negotiation and left attendees
-      // on a black screen until a camera toggle forced a new keyframe.
-      const stream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(15);
-      const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
+      // captureStream(fps) stays SILENT on a static canvas — Chrome only emits a
+      // new frame when the canvas is modified. A static PDF page therefore sent
+      // one frame (which raced the camera track's negotiation and was dropped),
+      // then went black until a page change / camera toggle forced a keyframe.
+      // Fix: continuously blit the source canvas into a mirror canvas via rAF so
+      // the captured stream always has fresh frames (and regular keyframes).
+      const mirror = document.createElement("canvas");
+      mirror.width = canvas.width || 1600;
+      mirror.height = canvas.height || 1000;
+      const mctx = mirror.getContext("2d");
+      const paint = () => {
+        if (mctx) {
+          try {
+            mctx.drawImage(canvas, 0, 0, mirror.width, mirror.height);
+          } catch {
+            // canvas not ready this frame — keep looping
+          }
+        }
+        canvasRafRef.current = requestAnimationFrame(paint);
+      };
+      if (canvasRafRef.current != null) cancelAnimationFrame(canvasRafRef.current);
+      paint();
+      const stream = mirror.captureStream(15);
+      const track = stream.getVideoTracks()[0];
       if (!track) throw new Error("Canvas capture is not supported in this browser.");
       track.contentHint = "detail";
       canvasTrackRef.current = track;
@@ -1926,15 +1880,6 @@ function useClassMedia({
         degradationPreference: "maintain-resolution",
         videoEncoding: { maxBitrate: 4_000_000, maxFramerate: 15 },
       });
-      // Belt-and-suspenders for browsers that skip frames on a static canvas:
-      // nudge a fresh capture a few times a second so frames keep flowing.
-      if (canvasFramePumpRef.current) window.clearInterval(canvasFramePumpRef.current);
-      canvasFramePumpRef.current = window.setInterval(() => {
-        const active = canvasTrackRef.current as (MediaStreamTrack & { requestFrame?: () => void }) | null;
-        if (active && typeof active.requestFrame === "function") {
-          active.requestFrame();
-        }
-      }, 250);
       setCanvasShareActive(true);
       setIsScreenSharing(true);
       buildLocalPreview(room);
@@ -3302,7 +3247,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     const showHostCameraPreview = Boolean(presenting && leadCameraStream);
     const showRemoteVideo = Boolean(leadRemoteStageStream && (leadCameraStream || leadScreenStream || leadHost?.isCameraOn || leadHost?.isScreenSharing));
     const hostLabel = leadHost?.name || connection.webinar?.instructor?.name || connection.webinar?.title || "Host";
-    const showHostCameraRail = !sidePanel && showHostCameraPreview;
 
     return (
       <div className="gm-root gm-attendee-room">
@@ -3323,7 +3267,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
             )}
 
-            {!showHostCameraRail && showHostCameraPreview ? (
+            {showHostCameraPreview ? (
               <div className="gm-host-pip">
                 <VideoStream stream={leadHost?.cameraStream || null} label={`${hostLabel} camera`} isCameraOn />
               </div>
@@ -3372,12 +3316,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {paymentNotice ? <div className="gm-payment-note">{paymentNotice}</div> : null}
           </div>
-
-          {presenting && !sidePanel && showHostCameraPreview ? (
-            <div className="gm-tile-belt">
-              <CameraTile stream={leadHost?.cameraStream || null} label={hostLabel} isMicOn={leadHost?.isMicOn} />
-            </div>
-          ) : null}
 
           <div className="gm-bar gm-bar-attendee">
             <div className="gm-bar-attendee-top">
@@ -3493,14 +3431,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
             )}
           </div>
-        ) : showHostCameraRail ? (
-          <SideCameraRail
-            stream={leadHost?.cameraStream || null}
-            label={`${hostLabel} camera`}
-            eyebrow="Host camera"
-            muted
-            isCameraOn
-          />
         ) : null}
         {confirmDialog ? <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog(null)} /> : null}
       </div>
@@ -3543,7 +3473,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             isCameraOn: backupHost.isCameraOn || backupHost.isScreenSharing,
           }
         : null;
-    const showHostCameraRail = Boolean(!sidePanel && hostSidePreview);
 
     return (
       <div className="gm-root">
@@ -3589,7 +3518,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               />
             ) : null}
 
-            {hostSidePreview && !showHostCameraRail ? (
+            {hostSidePreview ? (
               <div className="gm-host-pip">
                 <VideoStream
                   stream={hostSidePreview.stream}
@@ -3778,14 +3707,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               </div>
             )}
           </div>
-        ) : showHostCameraRail && hostSidePreview ? (
-          <SideCameraRail
-            stream={hostSidePreview.stream}
-            label={hostSidePreview.label}
-            eyebrow={hostSidePreview.eyebrow}
-            muted
-            isCameraOn={hostSidePreview.isCameraOn}
-          />
         ) : null}
         {confirmDialog ? <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog(null)} /> : null}
       </div>
