@@ -1557,9 +1557,14 @@ function addRoomMessage(roomName, input = {}) {
   const messages = roomChats.get(roomName) || [];
   roomChats.set(roomName, [...messages.slice(-59), message]);
 
-  if (isBroadcastRoomMessageType(message.messageType)) {
-    const payload = { id: message.id, text: message.text, name: message.name, role: message.role, messageType: message.messageType };
-    if (message.target === "HOST") {
+  // Pop a toast for broadcast-type messages (everyone) and for any host-only
+  // targeted message (hosts only) — so a note sent to the hosts, or an
+  // attendee's "only host" question, surfaces on the host screens instead of
+  // just sitting silently in the chat panel.
+  const isHostOnly = message.target === "HOST";
+  if (isBroadcastRoomMessageType(message.messageType) || isHostOnly) {
+    const payload = { id: message.id, text: message.text, name: message.name, role: message.role, messageType: message.messageType, target: message.target };
+    if (isHostOnly) {
       for (const socket of getRoomSockets(roomName)) {
         const meta = socketRoomMeta.get(socket.id) || {};
         if (String(meta.role || "").toUpperCase() === "HOST") {
@@ -2345,14 +2350,25 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
     return res.status(400).json({ ok: false, message: "Attendance and webinar details are required." });
   }
 
-  const attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId) ?? null;
-  if (!attendance || attendance.role !== "ATTENDEE" || attendance.webinar_id !== webinarId) {
-    return res.status(403).json({ ok: false, message: "This attendee session is not allowed to create a payment." });
-  }
-
   const webinar = store.data.webinars.find((item) => item.id === webinarId) ?? null;
   if (!webinar) {
     return res.status(404).json({ ok: false, message: "Webinar not found." });
+  }
+
+  const attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId) ?? null;
+  // If a matching attendance record exists, it must belong to this webinar as an
+  // attendee. But the record can legitimately be gone (mobile backgrounded the
+  // page for the Razorpay sheet and the socket dropped, or a redeploy cleared an
+  // unpersisted record). The enrollment only needs the webinar + customer
+  // details, so fall back to the form data instead of blocking the payment.
+  if (attendance && (attendance.role !== "ATTENDEE" || attendance.webinar_id !== webinarId)) {
+    return res.status(403).json({ ok: false, message: "This attendee session is not allowed to create a payment." });
+  }
+  const studentName = String(req.body?.student_name || req.body?.customer_name || attendance?.name || "Attendee").trim();
+  const studentPhone = String(req.body?.phone || attendance?.phone || "").trim();
+  const studentEmail = String(req.body?.email || attendance?.email || "").trim();
+  if (!attendance && (!studentName || !studentPhone)) {
+    return res.status(400).json({ ok: false, message: "Your name and phone are required to enroll." });
   }
 
   let created;
@@ -2360,17 +2376,17 @@ app.post("/api/public/webinar-enrollments", async (req, res) => {
     created = store.createPaymentLink({
       ...req.body,
       webinar_id: webinarId,
-      student_name: String(req.body?.student_name || req.body?.customer_name || attendance.name || "Attendee").trim(),
-      phone: String(req.body?.phone || attendance.phone || "").trim(),
-      email: String(req.body?.email || attendance.email || "").trim(),
+      student_name: studentName,
+      phone: studentPhone,
+      email: studentEmail,
       source: String(req.body?.source || webinar.title || "Webinar").trim(),
       source_type: "WEBINAR",
       campaign: String(req.body?.campaign || "webinar-enroll-now").trim(),
       collect_customer_details_on_checkout: false,
     }, {
       role: "ATTENDEE",
-      name: attendance.name || "Attendee",
-      email: attendance.email || "",
+      name: studentName,
+      email: studentEmail,
     });
     const finalized = finalizePaymentCreation(req, created, req.body ?? {});
     await flushStoreWithResponseBudget({ context: "Deferred webinar enrollment flush failed:" });

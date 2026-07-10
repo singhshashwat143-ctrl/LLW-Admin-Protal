@@ -1353,6 +1353,24 @@ a:hover {
   text-align: center;
   box-shadow: 0 26px 60px rgba(0, 0, 0, 0.4);
   backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.gm-stage-toast-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #f4c542;
+}
+
+.gm-stage-toast-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #bdc1c6;
 }
 
 /* Reconnecting banner */
@@ -2682,12 +2700,19 @@ select.gm-chat-input {
 }
 
 .gm-hand-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
   border-radius: 999px;
-  padding: 6px 10px;
-  background: rgba(198, 40, 40, 0.16);
-  color: #ffb3b3;
-  font-size: 11px;
-  font-weight: 700;
+  background: rgba(244, 197, 66, 0.18);
+  color: #f4c542;
+}
+
+.gm-hand-badge svg {
+  width: 15px;
+  height: 15px;
 }
 
 .gm-mini-btn {

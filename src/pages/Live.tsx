@@ -881,7 +881,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   const [attendanceId, setAttendanceId] = useState("");
   const [ownSocketId, setOwnSocketId] = useState("");
   const [socketInstance, setSocketInstance] = useState<Socket | null>(null);
-  const [activeToast, setActiveToast] = useState<{ id: string; text: string; name?: string; messageType?: RoomMessageType } | null>(null);
+  const [activeToast, setActiveToast] = useState<{ id: string; text: string; name?: string; messageType?: RoomMessageType; target?: "ALL" | "HOST" } | null>(null);
   const [meetingEndedMessage, setMeetingEndedMessage] = useState("");
   const [unmutePrompt, setUnmutePrompt] = useState("");
   const [forceMuteSignal, setForceMuteSignal] = useState(0);
@@ -936,7 +936,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       socket.on("room:snapshot", (snapshot: RoomSnapshot) => setRoom(snapshot));
       socket.on("connect", () => setOwnSocketId(socket.id || ""));
       socket.on("webinar:update", (nextWebinar: Webinar) => setWebinar(nextWebinar));
-      socket.on("room:toast", (toast: { id: string; text: string; name?: string; messageType?: RoomMessageType }) => setActiveToast(toast));
+      socket.on("room:toast", (toast: { id: string; text: string; name?: string; messageType?: RoomMessageType; target?: "ALL" | "HOST" }) => setActiveToast(toast));
       socket.on("participant:unmute-request", (payload: { message?: string }) => setUnmutePrompt(payload.message || "The host asked you to unmute."));
       socket.on("participant:muted", (payload: { message?: string }) => {
         setActiveToast({ id: `muted-${Date.now()}`, text: payload.message || "The host muted your microphone." });
@@ -1333,7 +1333,7 @@ function ConfirmDialog({
   );
 }
 
-function StageToast({ text, messageType }: { text: string; messageType?: RoomMessageType }) {
+function StageToast({ text, messageType, name, target }: { text: string; messageType?: RoomMessageType; name?: string; target?: "ALL" | "HOST" }) {
   if (messageType === "ENROLLMENT") {
     return (
       <>
@@ -1363,7 +1363,9 @@ function StageToast({ text, messageType }: { text: string; messageType?: RoomMes
   }
   return (
     <div className="gm-stage-toast" role="status" aria-live="polite">
-      {text}
+      {target === "HOST" ? <span className="gm-stage-toast-tag">Hosts only</span> : null}
+      {name ? <span className="gm-stage-toast-name">{name}</span> : null}
+      <span>{text}</span>
     </div>
   );
 }
@@ -1509,12 +1511,14 @@ function PrejoinField({
   type = "text",
   value,
   onChange,
+  maxDigits,
 }: {
   icon: "user" | "mail" | "phone";
   placeholder: string;
   type?: string;
   value: string;
   onChange: (value: string) => void;
+  maxDigits?: number;
 }) {
   return (
     <label className="gm-prejoin-field">
@@ -1526,7 +1530,12 @@ function PrejoinField({
         type={type}
         placeholder={placeholder}
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        inputMode={maxDigits ? "numeric" : undefined}
+        maxLength={maxDigits}
+        onChange={(event) => {
+          const next = maxDigits ? event.target.value.replace(/\D/g, "").slice(0, maxDigits) : event.target.value;
+          onChange(next);
+        }}
       />
     </label>
   );
@@ -1900,11 +1909,12 @@ function useClassMedia({
         await room.localParticipant.unpublishTrack(previous).catch(() => undefined);
         previous.stop();
       }
-      // Manual-driven capture: a static PDF page stops producing frames under
-      // captureStream(fps) once the canvas stops changing, so a late-joining or
-      // reconnecting attendee would receive no decodable frame. A steady pump of
-      // requestFrame() guarantees the current canvas keeps flowing to the SFU.
-      const stream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(0);
+      // Continuous capture at a fixed rate: the browser emits frames (with
+      // periodic keyframes) even when the PDF page is static. This is what keeps
+      // the share decodable — captureStream(0)+requestFrame only sent one initial
+      // keyframe, which raced the camera track's negotiation and left attendees
+      // on a black screen until a camera toggle forced a new keyframe.
+      const stream = (canvas as HTMLCanvasElement & { captureStream: (fps?: number) => MediaStream }).captureStream(15);
       const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void };
       if (!track) throw new Error("Canvas capture is not supported in this browser.");
       track.contentHint = "detail";
@@ -1916,14 +1926,15 @@ function useClassMedia({
         degradationPreference: "maintain-resolution",
         videoEncoding: { maxBitrate: 4_000_000, maxFramerate: 15 },
       });
+      // Belt-and-suspenders for browsers that skip frames on a static canvas:
+      // nudge a fresh capture a few times a second so frames keep flowing.
       if (canvasFramePumpRef.current) window.clearInterval(canvasFramePumpRef.current);
       canvasFramePumpRef.current = window.setInterval(() => {
         const active = canvasTrackRef.current as (MediaStreamTrack & { requestFrame?: () => void }) | null;
         if (active && typeof active.requestFrame === "function") {
           active.requestFrame();
         }
-      }, 120);
-      track.requestFrame?.();
+      }, 250);
       setCanvasShareActive(true);
       setIsScreenSharing(true);
       buildLocalPreview(room);
@@ -2135,10 +2146,10 @@ function ClassPresenter({
     await task.promise.catch(() => undefined);
   }
 
-  async function presentMaterial(material: ClassMaterial) {
+  async function presentMaterial(material: ClassMaterial): Promise<boolean> {
     if (!/\.pdf$/i.test(material.name)) {
       notify("Only PDF files can be presented. Export your PPT as PDF and upload that.");
-      return;
+      return false;
     }
     try {
       setBusy(true);
@@ -2153,10 +2164,15 @@ function ClassPresenter({
       setMode("pdf");
       await renderPdfPage(1);
       const started = await media.startCanvasShare(canvas);
-      if (!started) notify("Could not start presenting the PDF.");
+      if (!started) {
+        notify("Could not start presenting the PDF.");
+        return false;
+      }
+      return true;
     } catch (error) {
       notify(error instanceof Error ? error.message : "Could not open the PDF.");
       setMode("menu");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -2189,19 +2205,30 @@ function ClassPresenter({
       notify("Material is too large. The limit is 60 MB.");
       return;
     }
+    if (!attendanceId) {
+      notify("Still connecting to the room — try the upload again in a moment.");
+      return;
+    }
     try {
       setUploading(true);
       const query = new URLSearchParams({ attendanceId, name: file.name });
-      const response = await fetch(`/api/rooms/${roomName}/materials?${query.toString()}`, {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(roomName)}/materials?${query.toString()}`, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: file,
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Material upload failed.");
-      setMaterials((current) => [...current, payload.material]);
+      // Refresh from the server so the list is authoritative and de-duplicated.
+      setMaterials((current) => {
+        const withoutDup = current.filter((m) => m.id !== payload.material.id);
+        return [...withoutDup, payload.material];
+      });
       if (/\.pdf$/i.test(payload.material.name)) {
-        await presentMaterial(payload.material);
+        const started = await presentMaterial(payload.material);
+        if (started === false) {
+          notify("Uploaded ✓ — tap the file below to present it.");
+        }
       } else {
         notify("PPT stored. Export it as PDF to present it inside the room.");
       }
@@ -2706,7 +2733,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       );
       return;
     }
-    if (!form.name.trim() || !form.phone.trim()) return;
+    if (!form.name.trim()) return;
+    if (role === "ATTENDEE" && form.phone.replace(/\D/g, "").length !== 10) {
+      setPaymentNotice("Enter a valid 10-digit phone number.");
+      return;
+    }
+    if (!form.phone.trim()) return;
     setPaymentNotice("");
     setJoined(true);
   }
@@ -2722,7 +2754,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       setPaymentLoading(true);
       setPaymentNotice("");
 
-      await api(`/api/attendance/${connection.attendanceId}/enroll-click`, { method: "POST" });
+      // Fire-and-forget analytics; must never block or fail the enrollment
+      // (the attendance record may be gone after a mobile background/redeploy).
+      api(`/api/attendance/${connection.attendanceId}/enroll-click`, { method: "POST" }).catch(() => undefined);
 
       const [created] = await Promise.all([
         api<{ order: { id: string; status?: string } }>("/api/public/webinar-enrollments", {
@@ -3191,6 +3225,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   type="tel"
                   placeholder="Phone Number"
                   value={form.phone}
+                  maxDigits={10}
                   onChange={(value) => setForm({ ...form, phone: value })}
                 />
 
@@ -3305,7 +3340,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
-            {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} /> : null}
+            {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} name={connection.activeToast.name} target={connection.activeToast.target} /> : null}
 
             {chatPreview && sidePanel !== "chat" ? (
               <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
@@ -3451,7 +3486,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                       <div className="gm-person-info">
                         <p className="gm-person-name">{participant.name}{participant.attendanceId === connection.attendanceId ? " (You)" : ""}{participant.role === "HOST" ? <span className="gm-person-role"> · Host</span> : null}</p>
                       </div>
-                      {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
+                      {participant.isHandRaised ? <span className="gm-hand-badge" title="Hand raised" aria-label="Hand raised"><ControlIcon name="hand" /></span> : null}
                     </div>
                   ))}
                 </div>
@@ -3535,7 +3570,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
-            {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} /> : null}
+            {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} name={connection.activeToast.name} target={connection.activeToast.target} /> : null}
 
             {chatPreview && sidePanel !== "chat" ? (
               <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
@@ -3728,7 +3763,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                         <p className="gm-person-name">{participant.name}{participant.attendanceId === connection.attendanceId ? " (You)" : ""}{participant.role === "HOST" ? <span className="gm-person-role"> · Host</span> : null}</p>
                         <p className="text-xs text-white/60">{participant.phone || participant.email || ""}</p>
                       </div>
-                      {participant.isHandRaised ? <span className="gm-hand-badge">Hand Raised</span> : null}
+                      {participant.isHandRaised ? <span className="gm-hand-badge" title="Hand raised" aria-label="Hand raised"><ControlIcon name="hand" /></span> : null}
                       {participant.socketId !== connection.ownSocketId ? (
                         <div className="gm-person-actions">
                           {participant.role === "ATTENDEE" && !participant.isMicOn ? (
