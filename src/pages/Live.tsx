@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track } from "livekit-client";
 import { TrackSource as ProtoTrackSource } from "@livekit/protocol";
 import * as pdfjsLib from "pdfjs-dist";
@@ -1222,6 +1222,78 @@ function StageVideo({ stream, muted = false }: { stream: MediaStream | null; mut
   }, [stream]);
 
   return <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-video-fill" />;
+}
+
+// Host-camera picture-in-picture the viewer can drag anywhere on the stage and
+// resize from its top-left corner (Zoom/Meet style). Defaults to bottom-right.
+function DraggableCameraPip({ stream, label }: { stream: MediaStream | null; label: string }) {
+  const pipRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ mode: "move" | "resize"; px: number; py: number; x: number; y: number; w: number; h: number } | null>(null);
+  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number }>({ x: Number.NaN, y: Number.NaN, w: 260, h: 148 });
+
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
+  function stageRect() {
+    const stage = pipRef.current?.parentElement;
+    return stage ? stage.getBoundingClientRect() : null;
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    const stage = stageRect();
+    const pip = pipRef.current;
+    if (!stage || !pip) return;
+    const rect = pip.getBoundingClientRect();
+    const mode = (event.target as HTMLElement).closest(".gm-pip-resize") ? "resize" : "move";
+    dragRef.current = { mode, px: event.clientX, py: event.clientY, x: rect.left - stage.left, y: rect.top - stage.top, w: rect.width, h: rect.height };
+    pip.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const stage = stageRect();
+    if (!drag || !stage) return;
+    const dx = event.clientX - drag.px;
+    const dy = event.clientY - drag.py;
+    if (drag.mode === "move") {
+      setBox((b) => ({ ...b, x: clamp(drag.x + dx, 0, stage.width - b.w), y: clamp(drag.y + dy, 0, stage.height - b.h) }));
+    } else {
+      // Resize from the top-left handle: shrinking/growing moves the top-left corner.
+      const w = clamp(drag.w - dx, 130, Math.min(stage.width, 560));
+      const h = clamp(drag.h - dy, 80, Math.min(stage.height, 360));
+      const x = clamp(drag.x + (drag.w - w), 0, stage.width - w);
+      const y = clamp(drag.y + (drag.h - h), 0, stage.height - h);
+      setBox({ x, y, w, h });
+    }
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    try {
+      pipRef.current?.releasePointerCapture(event.pointerId);
+    } catch {
+      // pointer already released
+    }
+  }
+
+  const style: CSSProperties = Number.isNaN(box.x)
+    ? { width: box.w, height: box.h }
+    : { left: box.x, top: box.y, right: "auto", bottom: "auto", width: box.w, height: box.h };
+
+  return (
+    <div
+      ref={pipRef}
+      className="gm-host-pip gm-host-pip-draggable"
+      style={style}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <VideoStream stream={stream} label={label} isCameraOn />
+      <span className="gm-pip-resize" title="Drag to resize" aria-label="Resize camera" />
+    </div>
+  );
 }
 
 const CONFETTI_COLORS = ["#f4c542", "#3d6aff", "#22c55e", "#ef4444", "#a855f7", "#06b6d4", "#f97316", "#ec4899"];
@@ -3268,9 +3340,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             )}
 
             {showHostCameraPreview ? (
-              <div className="gm-host-pip">
-                <VideoStream stream={leadHost?.cameraStream || null} label={`${hostLabel} camera`} isCameraOn />
-              </div>
+              <DraggableCameraPip stream={leadHost?.cameraStream || null} label={`${hostLabel} camera`} />
             ) : null}
 
             <div className="gm-name-pill">
@@ -3519,14 +3589,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             ) : null}
 
             {hostSidePreview ? (
-              <div className="gm-host-pip">
-                <VideoStream
-                  stream={hostSidePreview.stream}
-                  muted
-                  label={hostSidePreview.label}
-                  isCameraOn={hostSidePreview.isCameraOn}
-                />
-              </div>
+              <DraggableCameraPip stream={hostSidePreview.stream} label={hostSidePreview.label} />
             ) : null}
 
             <div className={`gm-host-offer-status ${connection.webinar?.payment_mode === "TOKEN" ? "gm-host-offer-status-live" : ""}`}>

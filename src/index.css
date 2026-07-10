@@ -1941,6 +1941,44 @@ a:hover {
   overflow: hidden;
   border: 2px solid rgba(255, 255, 255, 0.18);
   background: #303134;
+  z-index: 24;
+}
+
+.gm-host-pip-draggable {
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+  min-width: 0;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+
+.gm-host-pip-draggable:active {
+  border-color: rgba(244, 197, 66, 0.7);
+}
+
+/* Top-left resize handle */
+.gm-pip-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 26px;
+  height: 26px;
+  cursor: nwse-resize;
+  z-index: 2;
+  background:
+    linear-gradient(135deg, rgba(244, 197, 66, 0.95) 0 40%, transparent 40%);
+  border-top-left-radius: 16px;
+}
+
+.gm-pip-resize::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid #111;
+  border-left: 2px solid #111;
 }
 
 /* Meet-style camera tile belt shown under the stage on mobile while presenting */
