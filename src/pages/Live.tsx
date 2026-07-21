@@ -2659,8 +2659,46 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     };
   }, [paymentComplete, pendingCheckout, reconcileLivePaymentStatus]);
 
+  // The host mirrors the whole class chat into browser localStorage as it
+  // arrives (no cap), then flushes it to the durable server archive on a timer
+  // and at class end. This survives a mid-class server restart: the host's copy
+  // is pushed back so no message is lost, and the archive is written to disk.
+  const chatArchiveKey = `llw-chat-${roomName}`;
+  useEffect(() => {
+    if (role !== "HOST" || !joined) return;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(chatArchiveKey) || "[]");
+      const byId = new Map<string, (typeof connection.room.messages)[number]>(
+        Array.isArray(stored) ? stored.map((m: (typeof connection.room.messages)[number]) => [m.id, m]) : [],
+      );
+      connection.room.messages.forEach((m) => byId.set(m.id, m));
+      window.localStorage.setItem(chatArchiveKey, JSON.stringify([...byId.values()].slice(-20000)));
+    } catch {
+      // localStorage full/unavailable — skip
+    }
+  }, [connection.room.messages, joined, role, chatArchiveKey]);
+
+  const flushChatArchive = useCallback(async () => {
+    if (role !== "HOST") return;
+    try {
+      const messages = JSON.parse(window.localStorage.getItem(`llw-chat-${roomName}`) || "[]");
+      if (Array.isArray(messages) && messages.length) {
+        await api(`/api/rooms/${roomName}/chat/archive`, { method: "POST", body: JSON.stringify({ messages }) });
+      }
+    } catch {
+      // best-effort backup; the server also archives on meeting end
+    }
+  }, [role, roomName]);
+
+  useEffect(() => {
+    if (role !== "HOST" || !joined) return undefined;
+    const timer = window.setInterval(() => { void flushChatArchive(); }, 60000);
+    return () => window.clearInterval(timer);
+  }, [role, joined, flushChatArchive]);
+
   useEffect(() => {
     if (!connection.meetingEndedMessage) return;
+    void flushChatArchive();
     if (connection.attendanceId) {
       fetch(`/api/attendance/${connection.attendanceId}/leave`, { method: "POST", keepalive: true }).catch(() => undefined);
     }
@@ -2669,7 +2707,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     setHandRaised(false);
     setPaymentNotice(connection.meetingEndedMessage);
     connection.clearMeetingEndedMessage();
-  }, [connection.attendanceId, connection.clearMeetingEndedMessage, connection.meetingEndedMessage]);
+  }, [connection.attendanceId, connection.clearMeetingEndedMessage, connection.meetingEndedMessage, flushChatArchive]);
 
   // Keep the session start time in a ref so the 1s clock interval below never
   // has to depend on connection.room.participants (a new array on every
@@ -3003,6 +3041,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }
 
   async function leaveCurrentRoom(message = "") {
+    void flushChatArchive();
     if (connection.attendanceId) {
       await fetch(`/api/attendance/${connection.attendanceId}/leave`, { method: "POST", keepalive: true }).catch(() => undefined);
     }

@@ -2,7 +2,7 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHmac } from "node:crypto";
@@ -58,6 +58,9 @@ const liveEventStore = await createLiveEventStore();
 const liveBufferRooms = new Set();
 const chatUploadsDir = process.env.CHAT_UPLOAD_DIR || join(__dirname, "..", "data", "uploads");
 const CHAT_FILE_MAX_BYTES = 25 * 1024 * 1024;
+// Durable chat archive on persistent disk (same disk as DATA_FILE on Render).
+const chatArchiveDir = process.env.CHAT_ARCHIVE_DIR
+  || join(dirname(process.env.DATA_FILE || join(__dirname, "..", "data", "app-data.json")), "chat-archives");
 
 app.set("trust proxy", true);
 app.use(cors());
@@ -1510,7 +1513,58 @@ function getVisibleRoomMessages(roomName, viewer = {}, limit = 0) {
 // recent messages so re-broadcasting the whole chat to every attendee on each
 // new message doesn't blow up bandwidth in a large class.
 const ROOM_SNAPSHOT_MESSAGE_WINDOW = 300;
-const ROOM_CHAT_MAX_RETAINED = 5000;
+// Effectively uncapped for any real class; only a pathological-spam OOM backstop.
+const ROOM_CHAT_MAX_RETAINED = 50000;
+
+function chatArchiveFile(roomName) {
+  return join(chatArchiveDir, `${sanitizeRoomDirName(roomName)}.json`);
+}
+
+function readChatArchive(roomName) {
+  const file = chatArchiveFile(roomName);
+  if (!existsSync(file)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// Merge the live in-memory chat, any prior archive, and messages flushed from a
+// host's browser localStorage into one durable transcript file (dedup by id).
+function archiveRoomChat(roomName, incoming = []) {
+  try {
+    mkdirSync(chatArchiveDir, { recursive: true });
+    const byId = new Map();
+    for (const m of readChatArchive(roomName)) if (m?.id) byId.set(m.id, m);
+    for (const m of (roomChats.get(roomName) || [])) if (m?.id) byId.set(m.id, m);
+    for (const m of (Array.isArray(incoming) ? incoming : [])) {
+      if (m?.id && m.createdAt && (m.text || m.attachment)) {
+        byId.set(m.id, {
+          id: String(m.id),
+          role: String(m.role || ""),
+          name: String(m.name || ""),
+          text: String(m.text || "").slice(0, 2000),
+          createdAt: String(m.createdAt),
+          target: normalizeRoomMessageTarget(m.target),
+          messageType: normalizeRoomMessageType(m.messageType),
+          highlight: Boolean(m.highlight),
+          attendanceId: String(m.attendanceId || ""),
+          attachment: normalizeRoomMessageAttachment(m.attachment),
+        });
+      }
+    }
+    const merged = [...byId.values()].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    writeFileSync(chatArchiveFile(roomName), JSON.stringify(merged));
+    return merged;
+  } catch (error) {
+    console.error("Chat archive write failed:", error instanceof Error ? error.message : error);
+    return roomChats.get(roomName) || [];
+  }
+}
 
 function getRoomSockets(roomName) {
   const socketIds = io.sockets.adapter.rooms.get(roomName) || new Set();
@@ -1883,11 +1937,27 @@ app.get("/api/rooms/:roomName", (req, res) => {
   });
 });
 
-// Full chat transcript for a room (no display window / no cap) — for export.
+// Persist a host's browser-buffered chat into the durable archive. During a
+// class the host mirrors chat to localStorage; on class end it flushes here.
+app.post("/api/rooms/:roomName/chat/archive", (req, res) => {
+  const incoming = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  const merged = archiveRoomChat(req.params.roomName, incoming);
+  res.json({ ok: true, count: merged.length });
+});
+
+// Full chat transcript for a room — merges the durable archive with the live
+// in-memory chat (so it survives restarts and is complete). No window / no cap.
 // Optional ?format=csv returns a downloadable CSV.
 app.get("/api/rooms/:roomName/chat", (req, res) => {
   const roomName = req.params.roomName;
-  const messages = getVisibleRoomMessages(roomName, {}, 0);
+  const byId = new Map();
+  for (const m of readChatArchive(roomName)) {
+    if (m?.id && isRoomMessageVisibleToViewer(m, {})) byId.set(m.id, m);
+  }
+  for (const m of getVisibleRoomMessages(roomName, {}, 0)) byId.set(m.id, m);
+  const messages = [...byId.values()].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
   if (String(req.query.format || "").toLowerCase() === "csv") {
     const escape = (value) => '"' + String(value ?? "").split('"').join('""') + '"';
     const rows = [["time", "name", "role", "target", "type", "message", "attachment"].map(escape).join(",")];
@@ -3583,6 +3653,9 @@ io.on("connection", (socket) => {
       // Webinar is over: persist the whole class once and sync the sheet.
       void releaseLiveBuffer(roomName, "meeting-end");
     }, 150);
+    // Archive the full chat to durable storage as the class ends (server copy;
+    // the host's browser also flushes its localStorage buffer as a backup).
+    archiveRoomChat(roomName);
   });
 
   socket.on("webrtc:signal", (payload) => {
