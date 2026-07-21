@@ -2938,10 +2938,19 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     }
   }
 
-  function downloadChatTranscript() {
+  async function downloadChatTranscript() {
+    // Pull the FULL chat from the server (the in-memory panel only holds the
+    // recent display window), so the export is the complete class transcript.
+    let messages = connection.room.messages;
+    try {
+      const full = await api<{ messages: typeof connection.room.messages }>(`/api/rooms/${roomName}/chat`);
+      if (full?.messages?.length) messages = full.messages;
+    } catch {
+      // Fall back to whatever the panel currently holds.
+    }
     const escapeCell = (value: unknown) => '"' + String(value ?? "").split('"').join('""') + '"';
     const rows = [["Time", "Name", "Role", "Target", "Type", "Message", "Attachment"].map(escapeCell).join(",")];
-    connection.room.messages.forEach((message) => {
+    messages.forEach((message) => {
       rows.push([
         message.createdAt,
         message.name,

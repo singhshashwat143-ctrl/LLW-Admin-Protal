@@ -1501,9 +1501,16 @@ function isRoomMessageVisibleToViewer(message, viewer = {}) {
   return String(viewer?.role || "").toUpperCase() === "HOST" || Boolean(isSender);
 }
 
-function getVisibleRoomMessages(roomName, viewer = {}) {
-  return (roomChats.get(roomName) || []).filter((message) => isRoomMessageVisibleToViewer(message, viewer));
+function getVisibleRoomMessages(roomName, viewer = {}, limit = 0) {
+  const visible = (roomChats.get(roomName) || []).filter((message) => isRoomMessageVisibleToViewer(message, viewer));
+  return limit > 0 && visible.length > limit ? visible.slice(-limit) : visible;
 }
+
+// Full history is retained for export; the live snapshot only sends this many
+// recent messages so re-broadcasting the whole chat to every attendee on each
+// new message doesn't blow up bandwidth in a large class.
+const ROOM_SNAPSHOT_MESSAGE_WINDOW = 300;
+const ROOM_CHAT_MAX_RETAINED = 5000;
 
 function getRoomSockets(roomName) {
   const socketIds = io.sockets.adapter.rooms.get(roomName) || new Set();
@@ -1512,10 +1519,10 @@ function getRoomSockets(roomName) {
     .filter(Boolean);
 }
 
-function roomSnapshot(roomName, viewer = {}) {
+function roomSnapshot(roomName, viewer = {}, limit = ROOM_SNAPSHOT_MESSAGE_WINDOW) {
   return {
     participants: roomPresence.get(roomName) || [],
-    messages: getVisibleRoomMessages(roomName, viewer),
+    messages: getVisibleRoomMessages(roomName, viewer, limit),
   };
 }
 
@@ -1555,7 +1562,10 @@ function addRoomMessage(roomName, input = {}) {
   if (!message.text && !message.attachment) return null;
 
   const messages = roomChats.get(roomName) || [];
-  roomChats.set(roomName, [...messages.slice(-59), message]);
+  // Keep the whole class chat (60-cap removed) up to a large safety ceiling, so
+  // the full transcript is available for export.
+  const nextMessages = [...messages, message];
+  roomChats.set(roomName, nextMessages.length > ROOM_CHAT_MAX_RETAINED ? nextMessages.slice(-ROOM_CHAT_MAX_RETAINED) : nextMessages);
 
   // Pop a toast for broadcast-type messages (everyone) and for any host-only
   // targeted message (hosts only) — so a note sent to the hosts, or an
@@ -1871,6 +1881,27 @@ app.get("/api/rooms/:roomName", (req, res) => {
     session: serializeSession(req, room.session),
     room: roomSnapshot(req.params.roomName),
   });
+});
+
+// Full chat transcript for a room (no display window / no cap) — for export.
+// Optional ?format=csv returns a downloadable CSV.
+app.get("/api/rooms/:roomName/chat", (req, res) => {
+  const roomName = req.params.roomName;
+  const messages = getVisibleRoomMessages(roomName, {}, 0);
+  if (String(req.query.format || "").toLowerCase() === "csv") {
+    const escape = (value) => '"' + String(value ?? "").split('"').join('""') + '"';
+    const rows = [["time", "name", "role", "target", "type", "message", "attachment"].map(escape).join(",")];
+    for (const m of messages) {
+      rows.push([
+        m.createdAt, m.name, m.role, m.target || "ALL", m.messageType || "CHAT", m.text,
+        m.attachment ? `${m.attachment.name} ${m.attachment.url}` : "",
+      ].map(escape).join(","));
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${sanitizeRoomDirName(roomName)}-chat.csv"`);
+    return res.send("﻿" + rows.join("\n"));
+  }
+  res.json({ ok: true, count: messages.length, messages });
 });
 
 app.post("/api/rooms/:roomName/join", async (req, res) => {
