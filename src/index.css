@@ -3537,3 +3537,66 @@ select.gm-chat-input {
 [data-theme="dark"] .hover\:text-slate-600:hover {
   color: var(--text-strong) !important;
 }
+
+/* ── WealthX hand-holding webinar: live celebration overlay ── */
+.gm-celebrate {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  overflow: hidden;
+}
+.gm-celebrate-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.gm-celebrate-banner {
+  position: absolute;
+  left: 50%;
+  top: 16%;
+  transform: translateX(-50%) scale(0.6);
+  background: linear-gradient(135deg, #0b0b0b, #1a1405);
+  border: 2px solid #d59a00;
+  border-radius: 18px;
+  padding: 16px 30px;
+  text-align: center;
+  color: #fff;
+  box-shadow: 0 0 40px rgba(213, 154, 0, 0.55);
+  opacity: 0;
+  transition: all 0.45s cubic-bezier(0.2, 1.4, 0.4, 1);
+  max-width: 88%;
+}
+.gm-celebrate-banner.show {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+.gm-celebrate-em { font-size: 32px; line-height: 1.1; }
+.gm-celebrate-who {
+  font-size: 26px;
+  font-weight: 900;
+  color: #ffd45c;
+  margin: 4px 0;
+  word-break: break-word;
+}
+.gm-celebrate-what {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 0.03em;
+}
+
+/* WealthX hand-holding: primary signup button on the attendee pre-join screen */
+.gm-prejoin-btn-wealthx {
+  margin-top: 12px;
+  background: linear-gradient(135deg, #ffd45c, #d59a00);
+  color: #1a1405;
+  font-weight: 800;
+  border: none;
+  box-shadow: 0 12px 34px rgba(213, 154, 0, 0.4);
+}
+.gm-prejoin-btn-wealthx:hover {
+  filter: brightness(1.05);
+}

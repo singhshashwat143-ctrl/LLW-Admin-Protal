@@ -27,6 +27,8 @@ services:
         value: 60000
       - key: GOOGLE_SHEETS_FAIL_OPEN_ON_LOAD
         value: true
+      - key: EVENTS_API_KEY
+        sync: false
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET

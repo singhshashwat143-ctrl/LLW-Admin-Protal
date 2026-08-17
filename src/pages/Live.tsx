@@ -18,6 +18,12 @@ import { formatCurrency, formatDateTime } from "../lib/format";
 import { ensureRazorpayLoaded, useRazorpayCheckout } from "../lib/razorpay";
 import { navigate } from "../lib/router";
 
+// ── WealthX hand-holding webinar (single room) ──
+// This one room replaces Razorpay enrollment with a WealthX signup redirect and
+// shows live confetti celebrations when someone opens an account / connects Delta.
+const WEALTHX_HANDHOLDING_ROOM = "wealthx-handhoalding-session-n0wvvg12";
+const WEALTHX_SIGNUP_URL = "https://wealthx.tech/login?mode=signup&callbackUrl=%2Fapp";
+
 type Webinar = {
   id: string;
   title: string;
@@ -2416,6 +2422,169 @@ function ClassPresenter({
   );
 }
 
+type CelebrationEvent = { id: string; type: "signup" | "broker_connect"; name: string; at: number };
+
+// Live confetti + toast overlay for the WealthX hand-holding webinar. Polls the
+// scoped server proxy (names only) and pops one of two celebration toasts:
+// a WealthX account signup, or a Delta broker connection on CryptX.
+function WealthxCelebrations({ roomName }: { roomName: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const partsRef = useRef<Array<{ x: number; y: number; vx: number; vy: number; g: number; s: number; r: number; vr: number; c: string; life: number }>>([]);
+  const rafRef = useRef<number | null>(null);
+  const seenRef = useRef<Set<string>>(new Set());
+  const cursorRef = useRef<number>(Date.now());
+  const queueRef = useRef<Array<{ name: string; type: CelebrationEvent["type"] }>>([]);
+  const showingRef = useRef(false);
+  const [banner, setBanner] = useState<{ name: string; type: CelebrationEvent["type"] } | null>(null);
+  const [bannerShown, setBannerShown] = useState(false);
+
+  const burst = useCallback((count: number) => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const colors = ["#ffd45c", "#d59a00", "#22c55e", "#60a5fa", "#f472b6", "#ffffff"];
+    for (let i = 0; i < count; i += 1) {
+      partsRef.current.push({
+        x: cv.width / 2 + (Math.random() - 0.5) * cv.width * 0.5,
+        y: cv.height * 0.28,
+        vx: (Math.random() - 0.5) * 14,
+        vy: -(4 + Math.random() * 10),
+        g: 0.25 + Math.random() * 0.15,
+        s: 6 + Math.random() * 7,
+        r: Math.random() * Math.PI,
+        vr: (Math.random() - 0.5) * 0.3,
+        c: colors[(Math.random() * colors.length) | 0],
+        life: 220,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const cx = cv.getContext("2d");
+    if (!cx) return;
+    const fit = () => {
+      const rect = cv.getBoundingClientRect();
+      cv.width = Math.max(1, rect.width);
+      cv.height = Math.max(1, rect.height);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(cv);
+    const tick = () => {
+      cx.clearRect(0, 0, cv.width, cv.height);
+      partsRef.current = partsRef.current.filter((p) => p.life-- > 0 && p.y < cv.height + 40);
+      for (const p of partsRef.current) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += p.g;
+        p.vx *= 0.99;
+        p.r += p.vr;
+        cx.save();
+        cx.translate(p.x, p.y);
+        cx.rotate(p.r);
+        cx.fillStyle = p.c;
+        cx.globalAlpha = Math.min(1, p.life / 60);
+        cx.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * 0.6);
+        cx.restore();
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      ro.disconnect();
+    };
+  }, []);
+
+  const showNext = useCallback(() => {
+    const item = queueRef.current.shift();
+    if (!item) {
+      showingRef.current = false;
+      return;
+    }
+    showingRef.current = true;
+    setBanner(item);
+    setBannerShown(false);
+    // Use a timer (not rAF) to flip the reveal class — rAF is paused in
+    // backgrounded tabs, which would leave the toast stuck invisible.
+    window.setTimeout(() => setBannerShown(true), 30);
+    burst(180);
+    window.setTimeout(() => burst(120), 500);
+    window.setTimeout(() => {
+      setBannerShown(false);
+      window.setTimeout(() => {
+        setBanner(null);
+        showNext();
+      }, 500);
+    }, 5200);
+  }, [burst]);
+
+  const celebrate = useCallback((name: string, type: CelebrationEvent["type"]) => {
+    queueRef.current.push({ name, type });
+    if (!showingRef.current) showNext();
+  }, [showNext]);
+
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      try {
+        const data = await api<{ events: CelebrationEvent[]; now: number }>(`/api/rooms/${roomName}/celebrations?since=${cursorRef.current}`);
+        if (!active) return;
+        for (const event of data.events || []) {
+          if (seenRef.current.has(event.id) || event.at <= cursorRef.current - 600000) continue;
+          seenRef.current.add(event.id);
+          celebrate(event.name || "A new member", event.type);
+        }
+        cursorRef.current = Math.max(cursorRef.current, (data.now || Date.now()) - 15000);
+      } catch {
+        /* transient network error — retry on next interval */
+      }
+    };
+    let demoTimer: number | undefined;
+    if (new URLSearchParams(window.location.search).get("celebrateDemo")) {
+      const demoNames: Array<[string, CelebrationEvent["type"]]> = [
+        ["Rohit Reddy", "signup"],
+        ["Ananya Sharma", "broker_connect"],
+        ["Vikram Nair", "signup"],
+        ["Priya Menon", "broker_connect"],
+      ];
+      let demoIndex = 0;
+      const fireDemo = () => {
+        const [name, type] = demoNames[demoIndex % demoNames.length];
+        demoIndex += 1;
+        celebrate(name, type);
+      };
+      window.setTimeout(fireDemo, 800);
+      demoTimer = window.setInterval(fireDemo, 7000);
+    }
+    poll();
+    const id = window.setInterval(poll, 5000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+      if (demoTimer !== undefined) window.clearInterval(demoTimer);
+    };
+  }, [roomName, celebrate]);
+
+  const meta = banner?.type === "broker_connect"
+    ? { em: "🚀", what: "connected Delta on CryptX!" }
+    : { em: "🎉", what: "just opened a WealthX account!" };
+
+  return (
+    <div className="gm-celebrate" aria-live="polite">
+      <canvas ref={canvasRef} className="gm-celebrate-canvas" />
+      {banner ? (
+        <div className={`gm-celebrate-banner ${bannerShown ? "show" : ""}`}>
+          <div className="gm-celebrate-em">{meta.em}</div>
+          <div className="gm-celebrate-who">{banner.name}</div>
+          <div className="gm-celebrate-what">{meta.what}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomName: string }) {
   const { user } = useAuth();
   const { ready: razorpayReady, loadError: razorpayLoadError } = useRazorpayCheckout();
@@ -2452,6 +2621,10 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const chatRef = useRef<HTMLDivElement | null>(null);
   const previousScreenShareStateRef = useRef<Map<string, boolean>>(new Map());
   const connection = useRoomConnection(role, roomName, joined ? form : null);
+  const isWealthxHandholding = roomName === WEALTHX_HANDHOLDING_ROOM;
+  const openWealthxSignup = useCallback(() => {
+    window.open(WEALTHX_SIGNUP_URL, "_blank", "noopener,noreferrer");
+  }, []);
   const media = useClassMedia({
     joined,
     role,
@@ -2799,6 +2972,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   }
 
   async function launchEnrollNow() {
+    // WealthX hand-holding webinar: the enroll button opens the WealthX signup
+    // instead of Razorpay, and stays active regardless of payment state.
+    if (isWealthxHandholding) {
+      openWealthxSignup();
+      return;
+    }
     if (role !== "ATTENDEE" || !connection.webinar || !connection.attendanceId) return;
     if (!enrollEnabled) {
       setPaymentNotice("Enrollment is not open right now.");
@@ -3404,6 +3583,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} name={connection.activeToast.name} target={connection.activeToast.target} /> : null}
 
+            {isWealthxHandholding ? <WealthxCelebrations roomName={roomName} /> : null}
+
             {chatPreview && sidePanel !== "chat" ? (
               <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
                 <span className="gm-chat-preview-name">{chatPreview.name}</span>
@@ -3456,7 +3637,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 >
                   <ControlIcon name={media.isMicOn ? "mic" : "mic-off"} />
                 </button>
-                {enrollEnabled ? (
+                {isWealthxHandholding ? (
+                  <button className="gm-enroll-btn" type="button" onClick={openWealthxSignup} title="Open your WealthX account">
+                    <ControlIcon name="offer" />
+                    <span>Open WealthX Account</span>
+                  </button>
+                ) : enrollEnabled ? (
                   <button className={`gm-enroll-btn ${paymentComplete ? "gm-enroll-btn-done" : ""}`} type="button" onClick={launchEnrollNow} disabled={paymentLoading || paymentComplete}>
                     <ControlIcon name="offer" />
                     <span>{paymentComplete ? "Enrolled" : "Enroll Now"}</span>
@@ -3618,6 +3804,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} name={connection.activeToast.name} target={connection.activeToast.target} /> : null}
+
+            {isWealthxHandholding ? <WealthxCelebrations roomName={roomName} /> : null}
 
             {chatPreview && sidePanel !== "chat" ? (
               <div className="gm-chat-preview" role="button" tabIndex={0} onClick={() => setSidePanel("chat")}>
@@ -3840,8 +4028,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                 <WebinarPromoCard
                   webinar={connection.webinar}
                   attendeeCount={activeAttendees.length}
-                  ctaLabel={connection.webinar.payment_required ? `Enroll Now • ${formatCurrency((connection.webinar.price_inr || 0) / 100)}` : "Join Webinar"}
-                  ctaDisabled
+                  ctaLabel={isWealthxHandholding ? "Open your WealthX account →" : connection.webinar.payment_required ? `Enroll Now • ${formatCurrency((connection.webinar.price_inr || 0) / 100)}` : "Join Webinar"}
+                  ctaDisabled={!isWealthxHandholding}
+                  onCta={isWealthxHandholding ? openWealthxSignup : undefined}
                   secondaryAction={<span className="text-sm text-slate-300">Fill your details below to enter the room.</span>}
                 />
               ) : null}
@@ -3860,12 +4049,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
                   <WebinarPromoCard
                     webinar={connection.webinar}
                     attendeeCount={activeAttendees.length}
-                    ctaLabel={paymentComplete ? "Enrollment Completed" : `Enroll Now • ${formatCurrency((connection.webinar.price_inr || 0) / 100)}`}
-                    ctaDisabled={!connection.webinar.payment_required || paymentComplete}
-                    ctaBusy={paymentLoading}
+                    ctaLabel={isWealthxHandholding ? "Open your WealthX account →" : paymentComplete ? "Enrollment Completed" : `Enroll Now • ${formatCurrency((connection.webinar.price_inr || 0) / 100)}`}
+                    ctaDisabled={isWealthxHandholding ? false : !connection.webinar.payment_required || paymentComplete}
+                    ctaBusy={isWealthxHandholding ? false : paymentLoading}
                     onCta={launchEnrollNow}
-                    secondaryAction={paymentComplete ? <Badge tone="green">Paid</Badge> : <Badge tone="gold">Live Offer</Badge>}
-                    eyebrow="Live Conversion Webinar"
+                    secondaryAction={isWealthxHandholding ? <Badge tone="gold">Open Account</Badge> : paymentComplete ? <Badge tone="green">Paid</Badge> : <Badge tone="gold">Live Offer</Badge>}
+                    eyebrow={isWealthxHandholding ? "WealthX Hand-Holding Session" : "Live Conversion Webinar"}
                   />
                   {paymentNotice ? (
                     <div className={`rounded-2xl px-4 py-3 text-sm ${paymentComplete ? "border border-emerald-400/25 bg-emerald-400/10 text-emerald-100" : "border border-amber-400/25 bg-amber-400/10 text-amber-100"}`}>

@@ -20,3 +20,6 @@ db/app-data.json
 
 # Chat file uploads (user files, not code)
 data/uploads/
+
+# WealthX celebration: contains the events API key — never commit
+celebration/

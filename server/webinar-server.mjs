@@ -32,6 +32,37 @@ const googleSheetsMirror = createGoogleSheetsMirror({ appUrl: publicAppUrl });
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID || "";
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
 const razorpayBaseUrl = "https://api.razorpay.com/v1";
+
+// ── WealthX hand-holding webinar: live celebration feed proxy ──
+// Scoped to ONE room. The events API key and attendee emails stay server-side;
+// the browser only ever receives { id, type, name, at } for names to celebrate.
+const WEALTHX_CELEBRATION_ROOM = "wealthx-handhoalding-session-n0wvvg12";
+const wealthxSignupEventsUrl = process.env.WEALTHX_EVENTS_URL || "https://wealthx.tech/api/events/signups";
+const cryptxBrokerEventsUrl = process.env.CRYPTX_EVENTS_URL || "https://cryptx.wealthx.tech/events/broker-connections";
+const eventsApiKey = (() => {
+  if (process.env.EVENTS_API_KEY) return process.env.EVENTS_API_KEY;
+  try {
+    const raw = readFileSync(join(__dirname, "..", "celebration", "events.env"), "utf8");
+    const match = raw.match(/^EVENTS_API_KEY=(.+)$/m);
+    return match ? match[1].trim() : "";
+  } catch {
+    return "";
+  }
+})();
+
+async function fetchCelebrationFeed(url, type, since) {
+  if (!eventsApiKey) return [];
+  const query = `key=${encodeURIComponent(eventsApiKey)}${since ? `&since=${encodeURIComponent(since)}` : ""}`;
+  const response = await fetch(`${url}?${query}`, { cache: "no-store" });
+  if (!response.ok) return [];
+  const data = await response.json();
+  return (data.events || []).map((event) => ({
+    id: String(event.id),
+    type,
+    name: (event.name || "A new member").toString().trim() || "A new member",
+    at: Number(event.at) || Date.now(),
+  }));
+}
 const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
 const aisensyApiKey = process.env.AISSENSY_API_KEY || process.env.AISENSY_API_KEY || "";
@@ -1935,6 +1966,26 @@ app.get("/api/rooms/:roomName", (req, res) => {
     session: serializeSession(req, room.session),
     room: roomSnapshot(req.params.roomName),
   });
+});
+
+// Live celebration feed for the WealthX hand-holding webinar ONLY. Returns
+// merged signup + broker-connection events (names only) so the room can pop a
+// confetti toast when someone opens a WealthX account or connects Delta on CryptX.
+app.get("/api/rooms/:roomName/celebrations", async (req, res) => {
+  if (req.params.roomName !== WEALTHX_CELEBRATION_ROOM) {
+    return res.json({ ok: true, events: [], now: Date.now() });
+  }
+  const since = Number(req.query.since) || 0;
+  try {
+    const [signups, brokers] = await Promise.all([
+      fetchCelebrationFeed(wealthxSignupEventsUrl, "signup", since),
+      fetchCelebrationFeed(cryptxBrokerEventsUrl, "broker_connect", since),
+    ]);
+    const events = [...signups, ...brokers].sort((a, b) => a.at - b.at);
+    res.json({ ok: true, events, now: Date.now() });
+  } catch (error) {
+    res.json({ ok: true, events: [], now: Date.now(), error: String(error?.message || error) });
+  }
 });
 
 // Persist a host's browser-buffered chat into the durable archive. During a
