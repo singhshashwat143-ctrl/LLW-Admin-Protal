@@ -1183,14 +1183,56 @@ function VideoStream({ stream, muted, label, isCameraOn }: { stream: MediaStream
   );
 }
 
-function AudioStream({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
+function AudioStream({
+  stream,
+  muted = false,
+  register,
+  onBlocked,
+}: {
+  stream: MediaStream | null;
+  muted?: boolean;
+  register?: (el: HTMLAudioElement, add: boolean) => void;
+  onBlocked?: () => void;
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Register the element once so a user gesture can replay all of them together.
   useEffect(() => {
-    if (!audioRef.current) return;
-    audioRef.current.srcObject = stream;
-    audioRef.current.play().catch(() => undefined);
-  }, [stream]);
+    const el = audioRef.current;
+    if (!el || !register) return;
+    register(el, true);
+    return () => register(el, false);
+  }, [register]);
+
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    let cancelled = false;
+    let verifyTimer: number | undefined;
+
+    el.srcObject = stream;
+    el.play()
+      .then(() => {
+        // play() can resolve yet leave the element paused/silent on iOS. Re-check
+        // shortly and surface the prompt if it did not actually start.
+        verifyTimer = window.setTimeout(() => {
+          if (cancelled || el.srcObject !== stream) return;
+          if (el.paused) onBlocked?.();
+        }, 400);
+      })
+      .catch((err: unknown) => {
+        // An AbortError from our own srcObject reassignment (effect re-run) is not
+        // a real block — the newer run handles playback. Any OTHER rejection
+        // (NotAllowedError, NotSupportedError, …) means the attendee is silent.
+        if ((err as { name?: string })?.name === "AbortError" && cancelled) return;
+        onBlocked?.();
+      });
+
+    return () => {
+      cancelled = true;
+      if (verifyTimer) window.clearTimeout(verifyTimer);
+    };
+  }, [stream, onBlocked]);
 
   return <audio ref={audioRef} autoPlay playsInline muted={muted} className="hidden" />;
 }
@@ -1198,13 +1240,33 @@ function AudioStream({ stream, muted = false }: { stream: MediaStream | null; mu
 // Plays audio from every remote participant. Stage/tile video elements stay
 // muted so this is the single audio path — without it only the lead host on
 // stage was audible and co-hosts' mics were silently dropped.
-function RemoteAudioMixer({ streams }: { streams: Map<string, MediaStream> }) {
+function RemoteAudioMixer({
+  streams,
+  register,
+  onBlocked,
+}: {
+  streams: Map<string, MediaStream>;
+  register?: (el: HTMLAudioElement, add: boolean) => void;
+  onBlocked?: () => void;
+}) {
   return (
     <>
       {Array.from(streams.entries()).map(([identity, stream]) => (
-        <AudioStream key={identity} stream={stream} />
+        <AudioStream key={identity} stream={stream} register={register} onBlocked={onBlocked} />
       ))}
     </>
+  );
+}
+
+// Full-screen "tap to enable sound" prompt shown when the browser blocks audio
+// autoplay. One tap resumes playback for every remote participant.
+function AudioUnlockOverlay({ blocked, onResume }: { blocked: boolean; onResume: () => void }) {
+  if (!blocked) return null;
+  return (
+    <button type="button" className="gm-audio-unlock" onClick={onResume}>
+      <span className="gm-audio-unlock-icon">🔊</span>
+      <span className="gm-audio-unlock-text">Tap to enable sound</span>
+    </button>
   );
 }
 
@@ -1583,6 +1645,11 @@ function useClassMedia({
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [publishPermissions, setPublishPermissions] = useState<LocalPublishPermissions>(initialPublishPermissions);
   const [mediaError, setMediaError] = useState("");
+  // Autoplay guard: browsers (mobile Safari/Chrome especially) block remote
+  // audio playback until a user gesture. When that happens we surface a
+  // "tap to enable sound" prompt instead of leaving attendees in silence.
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
+  const audioElementsRef = useRef<Set<HTMLAudioElement>>(new Set());
   const roomRef = useRef<LiveKitRoom | null>(null);
   const canvasTrackRef = useRef<MediaStreamTrack | null>(null);
   const canvasFramePumpRef = useRef<number | null>(null);
@@ -1796,6 +1863,14 @@ function useClassMedia({
       buildLocalPreview(room);
     };
 
+    const onAudioPlaybackChanged = () => {
+      // canPlaybackAudio only reflects tracks LiveKit manages; this app renders
+      // audio through its own <audio> elements, so use this event only to
+      // ESCALATE to blocked — never to clear (clearing happens after a real
+      // gesture actually starts the elements, in resumeAudioPlayback).
+      if (active && !room.canPlaybackAudio) setAudioPlaybackBlocked(true);
+    };
+
     const onReconnecting = () => setConnectionState("reconnecting");
     const onReconnected = () => {
       setConnectionState("connected");
@@ -1819,6 +1894,7 @@ function useClassMedia({
     room.on(RoomEvent.Reconnecting, onReconnecting);
     room.on(RoomEvent.Reconnected, onReconnected);
     room.on(RoomEvent.Disconnected, onDisconnected);
+    room.on(RoomEvent.AudioPlaybackStatusChanged, onAudioPlaybackChanged);
 
     room.connect(livekit.url, livekit.token, { autoSubscribe: true })
       .then(() => {
@@ -1827,6 +1903,12 @@ function useClassMedia({
         setConnectionState("connected");
         room.remoteParticipants.forEach((participant) => syncExistingParticipant(participant));
         buildLocalPreview(room);
+        // Try to unlock audio using the activation from the "Join" click. If the
+        // browser still blocks it, each <audio> element's play() rejection (in
+        // AudioStream) raises the "tap to enable sound" prompt. We never clear
+        // the flag from canPlaybackAudio here — that signal is blind to our
+        // manually-attached elements.
+        room.startAudio().catch(() => undefined);
       })
       .catch((error) => {
         if (!active) return;
@@ -1848,6 +1930,7 @@ function useClassMedia({
       room.off(RoomEvent.ParticipantDisconnected, onParticipantDisconnected);
       room.off(RoomEvent.ActiveSpeakersChanged, onActiveSpeakersChanged);
       room.off(RoomEvent.ParticipantPermissionsChanged, onParticipantPermissionsChanged);
+      room.off(RoomEvent.AudioPlaybackStatusChanged, onAudioPlaybackChanged);
       if (canvasFramePumpRef.current) {
         window.clearInterval(canvasFramePumpRef.current);
         canvasFramePumpRef.current = null;
@@ -2062,6 +2145,42 @@ function useClassMedia({
     }
   }
 
+  // Track every remote <audio> element so a single user gesture can (re)start
+  // playback on all of them at once.
+  const registerAudioElement = useCallback((el: HTMLAudioElement, add: boolean) => {
+    if (add) audioElementsRef.current.add(el);
+    else audioElementsRef.current.delete(el);
+  }, []);
+
+  const reportAudioBlocked = useCallback(() => setAudioPlaybackBlocked(true), []);
+
+  // Called from a real user gesture (button tap or any page interaction).
+  // iOS/Safari only honor play() while the gesture's activation is still alive,
+  // and that activation is consumed by the first `await`. So we kick off play()
+  // on EVERY element synchronously first, and only THEN await startAudio().
+  const resumeAudioPlayback = useCallback(async () => {
+    const els = Array.from(audioElementsRef.current);
+    const playAttempts = els.map((el) => {
+      el.muted = false;
+      return el.play().then(() => true).catch(() => false);
+    });
+    const room = roomRef.current;
+    const startAudioAttempt = room
+      ? room.startAudio().then(() => true).catch(() => false)
+      : Promise.resolve(true);
+
+    const results = await Promise.all(playAttempts);
+    await startAudioAttempt;
+
+    // With real audio elements present, reconcile the prompt to reality: clear it
+    // only if every element is now playing, otherwise (re)raise it. An empty set
+    // proves nothing, so leave the flag (and the first-gesture net) as-is until the
+    // host's audio element mounts.
+    if (els.length > 0) {
+      setAudioPlaybackBlocked(!results.every(Boolean));
+    }
+  }, []);
+
   return {
     localStream,
     localCameraStream,
@@ -2086,6 +2205,10 @@ function useClassMedia({
     stopCanvasShare,
     hasMediaAccess: Boolean(livekit?.token),
     mediaError,
+    audioPlaybackBlocked,
+    registerAudioElement,
+    reportAudioBlocked,
+    resumeAudioPlayback,
   };
 }
 
@@ -2634,6 +2757,40 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     livekit: connection.livekit,
     sendMediaState: connection.sendMediaState,
   });
+
+  // Safety net: while audio is autoplay-blocked, the very first tap/click/keypress
+  // anywhere on the page resumes playback — so even an attendee who ignores the
+  // "tap to enable sound" button gets audio the moment they interact.
+  const audioPlaybackBlocked = media.audioPlaybackBlocked;
+  const resumeAudioPlayback = media.resumeAudioPlayback;
+  useEffect(() => {
+    if (!audioPlaybackBlocked) return;
+    const resume = () => { void resumeAudioPlayback(); };
+    window.addEventListener("pointerdown", resume);
+    window.addEventListener("touchend", resume);
+    window.addEventListener("keydown", resume);
+    return () => {
+      window.removeEventListener("pointerdown", resume);
+      window.removeEventListener("touchend", resume);
+      window.removeEventListener("keydown", resume);
+    };
+  }, [audioPlaybackBlocked, resumeAudioPlayback]);
+
+  // Mobile browsers pause media when the tab is backgrounded / the phone locks.
+  // Re-attempt playback whenever the room tab is refocused; resumeAudioPlayback
+  // reconciles the "tap to enable sound" prompt if it still can't play.
+  useEffect(() => {
+    if (!joined) return;
+    const reattempt = () => {
+      if (document.visibilityState === "visible") void resumeAudioPlayback();
+    };
+    document.addEventListener("visibilitychange", reattempt);
+    window.addEventListener("focus", reattempt);
+    return () => {
+      document.removeEventListener("visibilitychange", reattempt);
+      window.removeEventListener("focus", reattempt);
+    };
+  }, [joined, resumeAudioPlayback]);
 
   const activeAttendees = useMemo(() => connection.room.participants.filter((item) => item.role === "ATTENDEE"), [connection.room.participants]);
   const remoteParticipants = useMemo(
@@ -3551,7 +3708,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       <div className="gm-root gm-attendee-room">
         <div className="gm-main">
           <div className="gm-stage">
-            <RemoteAudioMixer streams={media.remoteAudioStreams} />
+            <RemoteAudioMixer streams={media.remoteAudioStreams} register={media.registerAudioElement} onBlocked={media.reportAudioBlocked} />
+            <AudioUnlockOverlay blocked={media.audioPlaybackBlocked} onResume={media.resumeAudioPlayback} />
             {media.connectionState === "reconnecting" ? (
               <div className="gm-reconnect-banner"><span className="gm-reconnect-dot" />Reconnecting…</div>
             ) : null}
@@ -3782,7 +3940,8 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
       <div className="gm-root">
         <div className="gm-main">
           <div className="gm-stage">
-            <RemoteAudioMixer streams={media.remoteAudioStreams} />
+            <RemoteAudioMixer streams={media.remoteAudioStreams} register={media.registerAudioElement} onBlocked={media.reportAudioBlocked} />
+            <AudioUnlockOverlay blocked={media.audioPlaybackBlocked} onResume={media.resumeAudioPlayback} />
             {leadShowsVideo ? (
               <StageVideo stream={leadStageStream} muted />
             ) : (
@@ -3800,6 +3959,12 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <span className="gm-live-dot" />
               <span>LIVE</span>
             </div>
+
+            {role === "HOST" && !media.isMicOn ? (
+              <button type="button" className="gm-mic-warning" onClick={media.toggleMic}>
+                🎤 Your mic is OFF — attendees can’t hear you. Tap to turn it on.
+              </button>
+            ) : null}
 
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
