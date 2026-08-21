@@ -3960,12 +3960,6 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
               <span>LIVE</span>
             </div>
 
-            {role === "HOST" && !media.isMicOn ? (
-              <button type="button" className="gm-mic-warning" onClick={media.toggleMic}>
-                🎤 Your mic is OFF — attendees can’t hear you. Tap to turn it on.
-              </button>
-            ) : null}
-
             {leadHost?.isScreenSharing ? <div className="gm-screen-badge">Presenting</div> : null}
 
             {connection.activeToast ? <StageToast text={connection.activeToast.text} messageType={connection.activeToast.messageType} name={connection.activeToast.name} target={connection.activeToast.target} /> : null}
