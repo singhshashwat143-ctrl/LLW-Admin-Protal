@@ -1000,7 +1000,7 @@ async function createLiveKitToken({
     canSubscribe: true,
   });
   return {
-    token: token.toJwt(),
+    token: await token.toJwt(),
     url: config.url,
   };
 }
