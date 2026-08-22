@@ -51,6 +51,8 @@ services:
         value: myapp
       - key: LIVEKIT_API_SECRET
         value: c58c9e8f6ff32981cf52387e850002f216464d95fff37bc452df3baa188ff3a7
+      - key: LIVEKIT_SERVER_CONFIGS_JSON
+        sync: false
       - key: DATABASE_SSL
         value: true
       - key: REQUIRE_DATABASE_PERSISTENCE

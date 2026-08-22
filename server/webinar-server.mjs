@@ -69,17 +69,108 @@ const aisensyApiKey = process.env.AISSENSY_API_KEY || process.env.AISENSY_API_KE
 const aisensyPaymentLinkCampaign = process.env.AISSENSY_PAYMENT_LINK_CAMPAIGN || "payment_link_onboarding_2";
 const aisensyWebhookUrl = process.env.AISSENSY_WEBHOOK_URL || "";
 const sessionSecret = process.env.SESSION_SECRET || "llw-demo-session-secret";
-const livekitUrl = process.env.LIVEKIT_URL || process.env.LIVEKIT_HOST_URL || "";
-const livekitApiKey = process.env.LIVEKIT_API_KEY || "";
-const livekitApiSecret = process.env.LIVEKIT_API_SECRET || "";
-const livekitControlUrl = livekitUrl.startsWith("wss://")
-  ? `https://${livekitUrl.slice("wss://".length)}`
-  : livekitUrl.startsWith("ws://")
-    ? `http://${livekitUrl.slice("ws://".length)}`
-    : livekitUrl;
-const roomService = livekitControlUrl && livekitApiKey && livekitApiSecret
-  ? new RoomServiceClient(livekitControlUrl, livekitApiKey, livekitApiSecret)
-  : null;
+
+function toLiveKitControlUrl(url) {
+  if (url.startsWith("wss://")) {
+    return `https://${url.slice("wss://".length)}`;
+  }
+  if (url.startsWith("ws://")) {
+    return `http://${url.slice("ws://".length)}`;
+  }
+  return url;
+}
+
+function createLiveKitConfig(url, apiKey, apiSecret) {
+  const normalizedUrl = String(url || "").trim();
+  const normalizedApiKey = String(apiKey || "").trim();
+  const normalizedApiSecret = String(apiSecret || "").trim();
+  if (!normalizedUrl || !normalizedApiKey || !normalizedApiSecret) {
+    return null;
+  }
+  return {
+    url: normalizedUrl,
+    apiKey: normalizedApiKey,
+    apiSecret: normalizedApiSecret,
+    controlUrl: toLiveKitControlUrl(normalizedUrl),
+  };
+}
+
+function toLiveKitServerEnvSuffix(serverNo) {
+  return String(serverNo || "")
+    .trim()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+}
+
+function createLiveKitServerConfigMap() {
+  const configs = new Map();
+  const defaultConfig = createLiveKitConfig(
+    process.env.LIVEKIT_URL || process.env.LIVEKIT_HOST_URL || "",
+    process.env.LIVEKIT_API_KEY || "",
+    process.env.LIVEKIT_API_SECRET || "",
+  );
+  if (defaultConfig) {
+    configs.set("DEFAULT", defaultConfig);
+  }
+
+  for (const serverNo of constants.serverOptions || []) {
+    const suffix = toLiveKitServerEnvSuffix(serverNo);
+    if (!suffix) continue;
+    const config = createLiveKitConfig(
+      process.env[`LIVEKIT_URL_${suffix}`] || process.env[`LIVEKIT_HOST_URL_${suffix}`] || "",
+      process.env[`LIVEKIT_API_KEY_${suffix}`] || "",
+      process.env[`LIVEKIT_API_SECRET_${suffix}`] || "",
+    );
+    if (config) {
+      configs.set(serverNo, config);
+    }
+  }
+
+  const jsonConfigRaw = String(process.env.LIVEKIT_SERVER_CONFIGS_JSON || "").trim();
+  if (jsonConfigRaw) {
+    try {
+      const parsed = JSON.parse(jsonConfigRaw);
+      if (parsed && typeof parsed === "object") {
+        for (const [serverNo, config] of Object.entries(parsed)) {
+          const resolved = createLiveKitConfig(config?.url, config?.apiKey, config?.apiSecret);
+          if (resolved) {
+            configs.set(serverNo, resolved);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Invalid LIVEKIT_SERVER_CONFIGS_JSON:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  return configs;
+}
+
+const livekitServerConfigs = createLiveKitServerConfigMap();
+const livekitRoomServices = new Map();
+
+function getLiveKitConfig(serverNo = "") {
+  return livekitServerConfigs.get(String(serverNo || "").trim()) || livekitServerConfigs.get("DEFAULT") || null;
+}
+
+function getLiveKitConfigForRoomName(roomName) {
+  const room = store.getRoomByName(roomName);
+  const serverNo = room?.webinar?.server_no || room?.session?.server_no || "";
+  return getLiveKitConfig(serverNo);
+}
+
+function getLiveKitRoomService(config) {
+  if (!config?.controlUrl || !config?.apiKey || !config?.apiSecret) {
+    return null;
+  }
+  const cacheKey = `${config.controlUrl}|${config.apiKey}|${config.apiSecret}`;
+  if (!livekitRoomServices.has(cacheKey)) {
+    livekitRoomServices.set(cacheKey, new RoomServiceClient(config.controlUrl, config.apiKey, config.apiSecret));
+  }
+  return livekitRoomServices.get(cacheKey) || null;
+}
+
 const googleOauthClient = new OAuth2Client(googleClientId, googleClientSecret);
 const roomPresence = new Map();
 const roomChats = new Map();
@@ -883,11 +974,20 @@ function isBdaInManagerScope(managerUser, member) {
   );
 }
 
-async function createLiveKitToken({ roomName, identity, name, canPublish, canPublishData = false, canPublishSources }) {
-  if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
+async function createLiveKitToken({
+  roomName,
+  identity,
+  name,
+  canPublish,
+  canPublishData = false,
+  canPublishSources,
+  serverNo = "",
+}) {
+  const config = getLiveKitConfig(serverNo) || getLiveKitConfigForRoomName(roomName);
+  if (!config) {
     return null;
   }
-  const token = new AccessToken(livekitApiKey, livekitApiSecret, {
+  const token = new AccessToken(config.apiKey, config.apiSecret, {
     identity,
     name,
   });
@@ -899,10 +999,15 @@ async function createLiveKitToken({ roomName, identity, name, canPublish, canPub
     canPublishSources,
     canSubscribe: true,
   });
-  return token.toJwt();
+  return {
+    token: token.toJwt(),
+    url: config.url,
+  };
 }
 
 async function updateParticipantPublishPermission(roomName, identity, canPublish, canPublishSources = []) {
+  const config = getLiveKitConfigForRoomName(roomName);
+  const roomService = getLiveKitRoomService(config);
   if (!roomService) {
     throw new Error("LiveKit room service is not configured.");
   }
@@ -2067,8 +2172,9 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
     const canPublishVideo = hostCanPublish;
     const canShareScreen = hostCanPublish;
     const canPublish = hostCanPublish;
-    const livekitToken = await createLiveKitToken({
+    const livekitAccess = await createLiveKitToken({
       roomName: req.params.roomName,
+      serverNo: joined.webinar?.server_no || "",
       identity: joined.attendance.id,
       name: joined.attendance.name,
       canPublish,
@@ -2087,8 +2193,8 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
       }),
       student: joined.student,
       livekit: {
-        url: livekitUrl,
-        token: livekitToken,
+        url: livekitAccess?.url || "",
+        token: livekitAccess?.token || null,
         identity: joined.attendance.id,
         canPublish: canPublishAudio || canPublishVideo || canShareScreen,
         canPublishAudio,
