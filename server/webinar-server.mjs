@@ -69,6 +69,8 @@ const aisensyApiKey = process.env.AISSENSY_API_KEY || process.env.AISENSY_API_KE
 const aisensyPaymentLinkCampaign = process.env.AISSENSY_PAYMENT_LINK_CAMPAIGN || "payment_link_onboarding_2";
 const aisensyWebhookUrl = process.env.AISSENSY_WEBHOOK_URL || "";
 const sessionSecret = process.env.SESSION_SECRET || "llw-demo-session-secret";
+const webinarMediaTransport = String(process.env.WEBINAR_MEDIA_TRANSPORT || "legacy-webrtc").trim().toLowerCase();
+const useLegacyWebinarMedia = webinarMediaTransport !== "livekit";
 
 function toLiveKitControlUrl(url) {
   if (url.startsWith("wss://")) {
@@ -2172,15 +2174,17 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
     const canPublishVideo = hostCanPublish;
     const canShareScreen = hostCanPublish;
     const canPublish = hostCanPublish;
-    const livekitAccess = await createLiveKitToken({
-      roomName: req.params.roomName,
-      serverNo: joined.webinar?.server_no || "",
-      identity: joined.attendance.id,
-      name: joined.attendance.name,
-      canPublish,
-      canPublishData: hostCanPublish,
-      canPublishSources: hostCanPublish ? undefined : [TrackSource.MICROPHONE],
-    });
+    const livekitAccess = useLegacyWebinarMedia
+      ? null
+      : await createLiveKitToken({
+        roomName: req.params.roomName,
+        serverNo: joined.webinar?.server_no || "",
+        identity: joined.attendance.id,
+        name: joined.attendance.name,
+        canPublish,
+        canPublishData: hostCanPublish,
+        canPublishSources: hostCanPublish ? undefined : [TrackSource.MICROPHONE],
+      });
 
     res.json({
       ok: true,
@@ -2192,6 +2196,7 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
         attendance: joined.attendance,
       }),
       student: joined.student,
+      mediaTransport: useLegacyWebinarMedia ? "legacy-webrtc" : "livekit",
       livekit: {
         url: livekitAccess?.url || "",
         token: livekitAccess?.token || null,
@@ -3672,7 +3677,10 @@ io.on("connection", (socket) => {
     const targetMeta = socketRoomMeta.get(targetSocketId) || {};
     if (!targetSocket || targetSocketId === socket.id) return;
     if (String(targetMeta.roomName || "") !== roomName || String(targetMeta.role || "").toUpperCase() !== "ATTENDEE") return;
-    updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), true, [TrackSource.MICROPHONE])
+    const grantMic = useLegacyWebinarMedia
+      ? Promise.resolve()
+      : updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), true, [TrackSource.MICROPHONE]);
+    grantMic
       .then(() => {
         targetSocket.emit("participant:unmute-request", {
           fromName: name,
@@ -3701,7 +3709,10 @@ io.on("connection", (socket) => {
     const targetMeta = socketRoomMeta.get(targetSocketId) || {};
     if (!targetSocket || targetSocketId === socket.id) return;
     if (String(targetMeta.roomName || "") !== roomName || String(targetMeta.role || "").toUpperCase() !== "ATTENDEE") return;
-    updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), false, [])
+    const revokeMic = useLegacyWebinarMedia
+      ? Promise.resolve()
+      : updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), false, []);
+    revokeMic
       .then(() => {
         targetSocket.emit("participant:muted", {
           fromName: name,
