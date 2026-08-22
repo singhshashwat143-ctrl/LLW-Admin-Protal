@@ -177,6 +177,7 @@ const googleOauthClient = new OAuth2Client(googleClientId, googleClientSecret);
 const roomPresence = new Map();
 const roomChats = new Map();
 const socketRoomMeta = new Map();
+const roomParticipantBroadcastTimers = new Map();
 const liveRuntimeReloadMs = Math.max(Number(process.env.GOOGLE_SHEETS_RUNTIME_REFRESH_MS || 120000) || 120000, 30000);
 const liveEventStore = await createLiveEventStore();
 const liveBufferRooms = new Set();
@@ -1718,6 +1719,29 @@ function roomSnapshot(roomName, viewer = {}, limit = ROOM_SNAPSHOT_MESSAGE_WINDO
   };
 }
 
+function emitRoomParticipants(roomName) {
+  io.to(roomName).emit("room:participants", roomPresence.get(roomName) || []);
+}
+
+function scheduleRoomParticipants(roomName, delayMs = 40) {
+  const existingTimer = roomParticipantBroadcastTimers.get(roomName);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+  const timer = setTimeout(() => {
+    roomParticipantBroadcastTimers.delete(roomName);
+    emitRoomParticipants(roomName);
+  }, delayMs);
+  timer.unref?.();
+  roomParticipantBroadcastTimers.set(roomName, timer);
+}
+
+function emitRoomSnapshotToSocket(socket) {
+  if (!socket) return;
+  const meta = socketRoomMeta.get(socket.id) || {};
+  socket.emit("room:snapshot", roomSnapshot(String(meta.roomName || ""), meta));
+}
+
 function emitRoomSnapshot(roomName) {
   for (const socket of getRoomSockets(roomName)) {
     socket.emit("room:snapshot", roomSnapshot(roomName, socketRoomMeta.get(socket.id) || {}));
@@ -2149,6 +2173,7 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
     const attendeeName = String(req.body?.name || "");
     const attendeePhone = String(req.body?.phone || "");
     const attendeeEmail = String(req.body?.email || "");
+    engageLiveBuffer(req.params.roomName);
     const joined = store.joinRoom({
       roomName: req.params.roomName,
       role,
@@ -2156,7 +2181,6 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
       phone: role === "HOST" ? hostPhone : attendeePhone,
       email: role === "HOST" ? hostEmail : attendeeEmail,
     });
-    engageLiveBuffer(req.params.roomName);
     recordLiveEvent(req.params.roomName, {
       type: "join",
       attendanceId: joined.attendance.id,
@@ -3600,7 +3624,8 @@ io.on("connection", (socket) => {
     ...participants.filter((item) => item.socketId !== socket.id && !(attendanceId && item.attendanceId === attendanceId)),
     participant,
   ]);
-  emitRoomSnapshot(roomName);
+  emitRoomSnapshotToSocket(socket);
+  scheduleRoomParticipants(roomName);
 
   socket.on("chat:send", (payload) => {
     const messageType = normalizeRoomMessageType(payload?.messageType);
@@ -3654,7 +3679,7 @@ io.on("connection", (socket) => {
       });
     }
 
-    emitRoomSnapshot(roomName);
+    scheduleRoomParticipants(roomName);
   });
 
   socket.on("participant:hand-raise", (payload) => {
@@ -3667,7 +3692,7 @@ io.on("connection", (socket) => {
       };
     });
     roomPresence.set(roomName, nextParticipants);
-    emitRoomSnapshot(roomName);
+    scheduleRoomParticipants(roomName);
   });
 
   socket.on("participant:request-unmute", (payload) => {
@@ -3722,7 +3747,7 @@ io.on("connection", (socket) => {
         roomPresence.set(roomName, participants.map((item) => (
           item.socketId === targetSocketId ? { ...item, isMicOn: false } : item
         )));
-        emitRoomSnapshot(roomName);
+        scheduleRoomParticipants(roomName);
       })
       .catch((error) => {
         socket.emit("room:toast", {
@@ -3747,7 +3772,7 @@ io.on("connection", (socket) => {
     }
     roomPresence.set(roomName, (roomPresence.get(roomName) || []).filter((item) => item.socketId !== targetSocketId));
     socketRoomMeta.delete(targetSocketId);
-    emitRoomSnapshot(roomName);
+    scheduleRoomParticipants(roomName);
     targetSocket.disconnect(true);
   });
 
@@ -3817,7 +3842,7 @@ io.on("connection", (socket) => {
         roomSocket.disconnect(true);
       }
       roomPresence.set(roomName, []);
-      emitRoomSnapshot(roomName);
+      scheduleRoomParticipants(roomName);
       // Webinar is over: persist the whole class once and sync the sheet.
       void releaseLiveBuffer(roomName, "meeting-end");
     }, 150);
@@ -3851,7 +3876,7 @@ io.on("connection", (socket) => {
         });
       }
     }
-    emitRoomSnapshot(roomName);
+    scheduleRoomParticipants(roomName);
   });
 });
 

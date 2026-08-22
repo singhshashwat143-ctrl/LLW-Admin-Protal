@@ -1750,6 +1750,10 @@ function groupTimeline(attendance) {
     .map(([minute, concurrent]) => ({ minute, concurrent }));
 }
 
+function getAttendanceIdentity(record) {
+  return String(record?.phone || record?.email || record?.id || "").trim().toLowerCase();
+}
+
 function getOrderPayments(data, orderId) {
   return data.payment_records
     .filter((record) => record.order_id === orderId)
@@ -3297,7 +3301,14 @@ export async function createDashboardStore() {
       if (existing) {
         existing.join_counts = Number(existing.join_counts || 1) + 1;
         existing.updated_at = nowIso();
-        store.recalculateWebinar(room.webinar.id);
+        if (role === "ATTENDEE") {
+          const webinar = store.getWebinarById(room.webinar.id);
+          if (webinar) {
+            webinar.total_entries = Number(webinar.total_entries || 0) + 1;
+            webinar.peak_attendance = Math.max(Number(webinar.peak_attendance || 0), Number(webinar.total_attendees || 0));
+            webinar.updated_at = nowIso();
+          }
+        }
         store.persist();
         return { webinar: room.webinar, session: room.session, student, attendance: existing };
       }
@@ -3330,7 +3341,24 @@ export async function createDashboardStore() {
       };
 
       store.data.webinarAttendance.unshift(attendance);
-      store.recalculateWebinar(room.webinar.id);
+      if (role === "ATTENDEE") {
+        const webinar = store.getWebinarById(room.webinar.id);
+        if (webinar) {
+          const identity = getAttendanceIdentity(attendance);
+          const seenBefore = store.data.webinarAttendance.some((item) => (
+            item.id !== attendance.id
+            && item.webinar_id === room.webinar.id
+            && item.role === "ATTENDEE"
+            && getAttendanceIdentity(item) === identity
+          ));
+          webinar.total_entries = Number(webinar.total_entries || 0) + 1;
+          if (!seenBefore) {
+            webinar.total_attendees = Number(webinar.total_attendees || 0) + 1;
+          }
+          webinar.peak_attendance = Math.max(Number(webinar.peak_attendance || 0), Number(webinar.total_attendees || 0));
+          webinar.updated_at = nowIso();
+        }
+      }
       store.persist();
       return { webinar: room.webinar, session: room.session, student, attendance };
     },
@@ -3343,7 +3371,6 @@ export async function createDashboardStore() {
       attendance.leave_time = nowIso();
       attendance.duration_mins = minutesBetween(attendance.join_time, attendance.leave_time);
       attendance.updated_at = nowIso();
-      store.recalculateWebinar(attendance.webinar_id);
       store.persist();
       return attendance;
     },

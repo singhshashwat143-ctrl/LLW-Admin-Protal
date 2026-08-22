@@ -914,6 +914,9 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       });
 
       socket.on("room:snapshot", (snapshot: RoomSnapshot) => setRoom(snapshot));
+      socket.on("room:participants", (participants: RoomSnapshot["participants"]) => {
+        setRoom((current) => ({ ...current, participants }));
+      });
       socket.on("connect", () => setOwnSocketId(socket.id || ""));
       socket.on("webinar:update", (nextWebinar: Webinar) => setWebinar(nextWebinar));
       socket.on("room:toast", (toast: { id: string; text: string; name?: string; messageType?: RoomMessageType; target?: "ALL" | "HOST" }) => setActiveToast(toast));
