@@ -236,6 +236,15 @@ async function reloadStoreFromPersistence(reason = "manual-admin-reload") {
   };
 }
 
+async function getRoomByNameFresh(roomName, reason = "room-cache-miss") {
+  const normalizedRoomName = String(roomName || "").trim();
+  let room = store.getRoomByName(normalizedRoomName);
+  if (room) return room;
+  await store.reloadFromPersistence(reason);
+  room = store.getRoomByName(normalizedRoomName);
+  return room;
+}
+
 function queueStoreFlush(context = "Deferred store flush failed") {
   void flushStore().catch((error) => {
     console.error(context, error instanceof Error ? error.message : error);
@@ -1969,6 +1978,7 @@ app.get("/api/webinars", (req, res) => {
 app.post("/api/webinars", async (req, res) => {
   try {
     const webinar = store.createWebinar(req.body ?? {});
+    await store.flush();
     try {
       const external = await ensureExternalShortLinks(req, {
         hostTarget: withPublicAbsolute(req, webinar.host_url),
@@ -2000,6 +2010,7 @@ app.post("/api/webinars", async (req, res) => {
         }
       });
       store.save();
+      await store.flush();
     } catch {
       // Fall back to local short links if the provider is unavailable.
     }
@@ -2047,6 +2058,7 @@ app.get("/api/webinars/:id/sessions", (req, res) => {
 app.post("/api/webinars/:id/sessions", async (req, res) => {
   try {
     const session = store.createSession(req.params.id, req.body ?? {});
+    await store.flush();
     try {
       const webinar = store.data.webinars.find((item) => item.id === session.webinar_id);
       if (webinar) {
@@ -2065,6 +2077,7 @@ app.post("/api/webinars/:id/sessions", async (req, res) => {
         webinar.short_attendee_url = external.short_attendee_url;
         webinar.updated_at = new Date().toISOString();
         store.save();
+        await store.flush();
       }
     } catch {
       // Fall back to local short links if the provider is unavailable.
@@ -2088,8 +2101,8 @@ app.get("/api/webinars/:id/analytics", (req, res) => {
   });
 });
 
-app.get("/api/rooms/:roomName", (req, res) => {
-  const room = store.getRoomByName(req.params.roomName);
+app.get("/api/rooms/:roomName", async (req, res) => {
+  const room = await getRoomByNameFresh(req.params.roomName, `room-read-miss:${req.params.roomName}`);
   if (!room) return res.status(404).json({ ok: false, message: "Room not found" });
   res.json({
     ok: true,
@@ -2173,6 +2186,13 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
     const attendeeName = String(req.body?.name || "");
     const attendeePhone = String(req.body?.phone || "");
     const attendeeEmail = String(req.body?.email || "");
+    let room = store.getRoomByName(req.params.roomName);
+    if (!room) {
+      room = await getRoomByNameFresh(req.params.roomName, `room-join-miss:${req.params.roomName}`);
+    }
+    if (!room?.session || !room.webinar) {
+      return res.status(404).json({ ok: false, message: "Room not found" });
+    }
     engageLiveBuffer(req.params.roomName);
     const joined = store.joinRoom({
       roomName: req.params.roomName,
@@ -3563,7 +3583,7 @@ app.get("/:slug", (req, res, next) => {
   res.redirect(302, withAbsolute(req, link.original_url));
 });
 
-io.on("connection", (socket) => {
+io.on("connection", async (socket) => {
   const auth = socket.handshake.auth || {};
   const roomName = String(auth.roomName || "");
   const attendanceId = String(auth.attendanceId || "");
@@ -3575,12 +3595,20 @@ io.on("connection", (socket) => {
     return;
   }
 
-  const attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId);
+  let attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId);
+  if (!attendance) {
+    await store.reloadFromPersistence(`socket-attendance-miss:${attendanceId}`);
+    attendance = store.data.webinarAttendance.find((item) => item.id === attendanceId);
+  }
   if (!attendance) {
     socket.disconnect(true);
     return;
   }
-  const room = store.getRoomByName(roomName);
+  let room = store.getRoomByName(roomName);
+  if (!room) {
+    await store.reloadFromPersistence(`socket-room-miss:${roomName}`);
+    room = store.getRoomByName(roomName);
+  }
   if (!room?.session || attendance.session_id !== room.session.id) {
     socket.disconnect(true);
     return;
