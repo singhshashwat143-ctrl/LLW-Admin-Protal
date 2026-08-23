@@ -2597,6 +2597,12 @@ export async function createDashboardStore() {
       const snapshot = buildPersistentData(structuredClone(store.data));
       writeFileSync(dataFile, JSON.stringify(snapshot, null, 2));
       store.pendingPersist = runtimePersistence.save(snapshot, reason);
+      store.pendingPersist.catch((error) => {
+        console.error(
+          `Runtime persistence failed during ${reason}:`,
+          error instanceof Error ? error.message : error,
+        );
+      });
       snapshotDataFile();
       store.lastPersistAt = Date.now();
       store.persistHoldDirty = false;
