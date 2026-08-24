@@ -69,8 +69,7 @@ const aisensyApiKey = process.env.AISSENSY_API_KEY || process.env.AISENSY_API_KE
 const aisensyPaymentLinkCampaign = process.env.AISSENSY_PAYMENT_LINK_CAMPAIGN || "payment_link_onboarding_2";
 const aisensyWebhookUrl = process.env.AISSENSY_WEBHOOK_URL || "";
 const sessionSecret = process.env.SESSION_SECRET || "llw-demo-session-secret";
-const webinarMediaTransport = String(process.env.WEBINAR_MEDIA_TRANSPORT || "legacy-webrtc").trim().toLowerCase();
-const useLegacyWebinarMedia = webinarMediaTransport !== "livekit";
+const webinarMediaTransport = String(process.env.WEBINAR_MEDIA_TRANSPORT || "auto").trim().toLowerCase();
 
 function toLiveKitControlUrl(url) {
   if (url.startsWith("wss://")) {
@@ -171,6 +170,23 @@ function getLiveKitRoomService(config) {
     livekitRoomServices.set(cacheKey, new RoomServiceClient(config.controlUrl, config.apiKey, config.apiSecret));
   }
   return livekitRoomServices.get(cacheKey) || null;
+}
+
+function resolveWebinarMediaTransport({ roomName = "", serverNo = "" } = {}) {
+  if (webinarMediaTransport === "legacy-webrtc") {
+    return "legacy-webrtc";
+  }
+
+  const livekitConfig = getLiveKitConfig(serverNo) || getLiveKitConfigForRoomName(roomName);
+  if (livekitConfig) {
+    return "livekit";
+  }
+
+  return "legacy-webrtc";
+}
+
+function isLegacyWebinarMedia(options = {}) {
+  return resolveWebinarMediaTransport(options) !== "livekit";
 }
 
 const googleOauthClient = new OAuth2Client(googleClientId, googleClientSecret);
@@ -2218,7 +2234,11 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
     const canPublishVideo = hostCanPublish;
     const canShareScreen = hostCanPublish;
     const canPublish = hostCanPublish;
-    const livekitAccess = useLegacyWebinarMedia
+    const mediaTransport = resolveWebinarMediaTransport({
+      roomName: req.params.roomName,
+      serverNo: joined.webinar?.server_no || "",
+    });
+    const livekitAccess = mediaTransport !== "livekit"
       ? null
       : await createLiveKitToken({
         roomName: req.params.roomName,
@@ -2240,7 +2260,7 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
         attendance: joined.attendance,
       }),
       student: joined.student,
-      mediaTransport: useLegacyWebinarMedia ? "legacy-webrtc" : "livekit",
+      mediaTransport,
       livekit: {
         url: livekitAccess?.url || "",
         token: livekitAccess?.token || null,
@@ -3730,7 +3750,7 @@ io.on("connection", async (socket) => {
     const targetMeta = socketRoomMeta.get(targetSocketId) || {};
     if (!targetSocket || targetSocketId === socket.id) return;
     if (String(targetMeta.roomName || "") !== roomName || String(targetMeta.role || "").toUpperCase() !== "ATTENDEE") return;
-    const grantMic = useLegacyWebinarMedia
+    const grantMic = isLegacyWebinarMedia({ roomName })
       ? Promise.resolve()
       : updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), true, [TrackSource.MICROPHONE]);
     grantMic
@@ -3762,7 +3782,7 @@ io.on("connection", async (socket) => {
     const targetMeta = socketRoomMeta.get(targetSocketId) || {};
     if (!targetSocket || targetSocketId === socket.id) return;
     if (String(targetMeta.roomName || "") !== roomName || String(targetMeta.role || "").toUpperCase() !== "ATTENDEE") return;
-    const revokeMic = useLegacyWebinarMedia
+    const revokeMic = isLegacyWebinarMedia({ roomName })
       ? Promise.resolve()
       : updateParticipantPublishPermission(roomName, String(targetMeta.attendanceId || ""), false, []);
     revokeMic
