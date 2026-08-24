@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import PdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
+import { ConnectionState as LiveKitConnectionState, LocalVideoTrack, Room as LiveKitRoom, RoomEvent, Track as LiveKitTrack } from "livekit-client";
 
 // Vite bundles the worker and hands us a real Worker instance. Assigning it as
 // workerPort avoids the module-worker bootstrap deadlock that the ?url approach
@@ -864,6 +865,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   const [unmutePrompt, setUnmutePrompt] = useState("");
   const [forceMuteSignal, setForceMuteSignal] = useState(0);
   const [livekit, setLivekit] = useState<LiveKitJoinInfo | null>(null);
+  const [mediaTransport, setMediaTransport] = useState("legacy-webrtc");
   const [legacyMicPermission, setLegacyMicPermission] = useState(role === "HOST");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState("");
@@ -898,6 +900,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       attendanceIdRef.current = response.attendance.id;
       localAttendanceId = response.attendance.id;
       setLivekit(response.livekit || null);
+      setMediaTransport(response.mediaTransport || "legacy-webrtc");
 
       const socket = io(window.location.origin, {
         transports: ["websocket", "polling"],
@@ -961,6 +964,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
       setSocketInstance(null);
       setOwnSocketId("");
       setLivekit(null);
+      setMediaTransport("legacy-webrtc");
       setLegacyMicPermission(role === "HOST");
     };
   }, [joinPayload, role, roomName]);
@@ -1039,6 +1043,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
     forceMuteSignal,
     legacyMicPermission,
     livekit,
+    mediaTransport,
     joining,
     joinError,
     clearMeetingEndedMessage,
@@ -1261,6 +1266,12 @@ function composeMediaStream(...tracks: Array<MediaStreamTrack | null | undefined
     }
   });
   return stream.getTracks().length ? stream : null;
+}
+
+function toAppConnectionState(state: LiveKitConnectionState | string | undefined): "connected" | "reconnecting" | "disconnected" {
+  if (state === LiveKitConnectionState.Connected) return "connected";
+  if (state === LiveKitConnectionState.Disconnected) return "disconnected";
+  return "reconnecting";
 }
 
 function StageVideo({ stream, muted = false }: { stream: MediaStream | null; muted?: boolean }) {
@@ -2130,6 +2141,541 @@ function useClassMedia({
   };
 }
 
+function useLiveKitClassMedia({
+  joined,
+  role,
+  livekit,
+  canPublishAudio,
+  canPublishVideo,
+  canShareScreen,
+  participants,
+  sendMediaState,
+}: {
+  joined: boolean;
+  role: "HOST" | "ATTENDEE";
+  livekit: LiveKitJoinInfo | null;
+  canPublishAudio: boolean;
+  canPublishVideo: boolean;
+  canShareScreen: boolean;
+  participants: RoomSnapshot["participants"];
+  sendMediaState: (isMicOn: boolean, isCameraOn: boolean, isScreenSharing?: boolean) => void;
+}) {
+  const initialPublishPermissions = useMemo<LocalPublishPermissions>(() => ({
+    canPublishAudio,
+    canPublishVideo,
+    canShareScreen,
+  }), [canPublishAudio, canPublishVideo, canShareScreen]);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteAudioStreams, setRemoteAudioStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteCameraStreams, setRemoteCameraStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [activeSpeakerIds, setActiveSpeakerIds] = useState<string[]>([]);
+  const [isMicOn, setIsMicOn] = useState(false);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [publishPermissions, setPublishPermissions] = useState<LocalPublishPermissions>(initialPublishPermissions);
+  const [mediaError, setMediaError] = useState("");
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
+  const audioElementsRef = useRef<Set<HTMLAudioElement>>(new Set());
+  const roomRef = useRef<LiveKitRoom | null>(null);
+  const canvasTrackRef = useRef<LocalVideoTrack | null>(null);
+  const remoteTrackRefs = useRef<Map<string, {
+    microphone?: MediaStreamTrack | null;
+    screenAudio?: MediaStreamTrack | null;
+    camera?: MediaStreamTrack | null;
+    screen?: MediaStreamTrack | null;
+  }>>(new Map());
+  const canvasRafRef = useRef<number | null>(null);
+  const [canvasShareActive, setCanvasShareActive] = useState(false);
+  const [connectionState, setConnectionState] = useState<"connected" | "reconnecting" | "disconnected">("disconnected");
+
+  useEffect(() => {
+    setPublishPermissions(initialPublishPermissions);
+  }, [initialPublishPermissions]);
+
+  const resolveSocketIdByIdentity = useCallback((identity: string) => {
+    const participant = participants.find((entry) => entry.attendanceId === identity);
+    return participant?.socketId || identity;
+  }, [participants]);
+
+  const syncRemoteDerivedStreams = useCallback(() => {
+    const nextRemote = new Map<string, MediaStream>();
+    const nextAudio = new Map<string, MediaStream>();
+    const nextCamera = new Map<string, MediaStream>();
+    const nextScreen = new Map<string, MediaStream>();
+
+    remoteTrackRefs.current.forEach((tracks, identity) => {
+      const socketId = resolveSocketIdByIdentity(identity);
+      const audioTracks = [tracks.microphone, tracks.screenAudio].filter(Boolean) as MediaStreamTrack[];
+      const screenTrack = tracks.screen || null;
+      const cameraTrack = tracks.camera || null;
+      const stageTrack = screenTrack || cameraTrack;
+
+      const audioStream = composeMediaStream(...audioTracks);
+      const stageStream = composeMediaStream(...audioTracks, stageTrack);
+      const cameraStream = composeMediaStream(cameraTrack);
+      const screenStream = composeMediaStream(screenTrack);
+
+      if (stageStream) nextRemote.set(socketId, stageStream);
+      if (audioStream) nextAudio.set(socketId, audioStream);
+      if (cameraStream) nextCamera.set(socketId, cameraStream);
+      if (screenStream) nextScreen.set(socketId, screenStream);
+    });
+
+    setRemoteStreams(nextRemote);
+    setRemoteAudioStreams(nextAudio);
+    setRemoteCameraStreams(nextCamera);
+    setRemoteScreenStreams(nextScreen);
+  }, [resolveSocketIdByIdentity]);
+
+  const syncLocalStreams = useCallback(() => {
+    const room = roomRef.current;
+    if (!room) {
+      setLocalStream(null);
+      setLocalCameraStream(null);
+      setLocalScreenStream(null);
+      setIsMicOn(false);
+      setIsCameraOn(false);
+      setIsScreenSharing(false);
+      return;
+    }
+    const audioPub = room.localParticipant.getTrackPublication(LiveKitTrack.Source.Microphone);
+    const cameraPub = room.localParticipant.getTrackPublication(LiveKitTrack.Source.Camera);
+    const screenPub = room.localParticipant.getTrackPublication(LiveKitTrack.Source.ScreenShare);
+
+    const audioTrack = audioPub?.audioTrack?.mediaStreamTrack || null;
+    const cameraTrack = cameraPub?.videoTrack?.mediaStreamTrack || null;
+    const screenTrack = screenPub?.videoTrack?.mediaStreamTrack || null;
+
+    setLocalCameraStream(composeMediaStream(cameraTrack));
+    setLocalScreenStream(composeMediaStream(screenTrack));
+    setLocalStream(composeMediaStream(audioTrack, screenTrack || cameraTrack));
+    setIsMicOn(Boolean(audioTrack && !audioPub?.isMuted));
+    setIsCameraOn(Boolean(cameraTrack && !cameraPub?.isMuted));
+    setIsScreenSharing(Boolean(screenTrack && !screenPub?.isMuted));
+  }, []);
+
+  const syncActiveSpeakers = useCallback(() => {
+    const room = roomRef.current;
+    if (!room) {
+      setActiveSpeakerIds([]);
+      return;
+    }
+    setActiveSpeakerIds(room.activeSpeakers.map((participant) => resolveSocketIdByIdentity(participant.identity)));
+  }, [resolveSocketIdByIdentity]);
+
+  useEffect(() => {
+    if (!joined || !livekit?.token || !livekit.url) {
+      roomRef.current?.disconnect(true).catch(() => undefined);
+      roomRef.current = null;
+      remoteTrackRefs.current.clear();
+      canvasTrackRef.current?.stop();
+      canvasTrackRef.current = null;
+      if (canvasRafRef.current != null) {
+        cancelAnimationFrame(canvasRafRef.current);
+        canvasRafRef.current = null;
+      }
+      setCanvasShareActive(false);
+      setLocalStream(null);
+      setLocalCameraStream(null);
+      setLocalScreenStream(null);
+      setRemoteStreams(new Map());
+      setRemoteAudioStreams(new Map());
+      setRemoteCameraStreams(new Map());
+      setRemoteScreenStreams(new Map());
+      setActiveSpeakerIds([]);
+      setIsMicOn(false);
+      setIsCameraOn(false);
+      setIsScreenSharing(false);
+      setMediaError("");
+      setAudioPlaybackBlocked(false);
+      setConnectionState("disconnected");
+      return;
+    }
+
+    let active = true;
+    const room = new LiveKitRoom({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+    roomRef.current = room;
+    setConnectionState("reconnecting");
+
+    const updateRemoteTrack = (identity: string, source: string, track: MediaStreamTrack | null) => {
+      const current = remoteTrackRefs.current.get(identity) || {};
+      if (source === LiveKitTrack.Source.Camera) {
+        current.camera = track;
+      } else if (source === LiveKitTrack.Source.ScreenShare) {
+        current.screen = track;
+      } else if (source === LiveKitTrack.Source.ScreenShareAudio) {
+        current.screenAudio = track;
+      } else if (source === LiveKitTrack.Source.Microphone) {
+        current.microphone = track;
+      }
+      remoteTrackRefs.current.set(identity, current);
+      syncRemoteDerivedStreams();
+    };
+
+    const removeRemoteTrack = (identity: string, source: string) => {
+      const current = remoteTrackRefs.current.get(identity);
+      if (!current) return;
+      if (source === LiveKitTrack.Source.Camera) {
+        delete current.camera;
+      } else if (source === LiveKitTrack.Source.ScreenShare) {
+        delete current.screen;
+      } else if (source === LiveKitTrack.Source.ScreenShareAudio) {
+        delete current.screenAudio;
+      } else if (source === LiveKitTrack.Source.Microphone) {
+        delete current.microphone;
+      }
+      if (!current.camera && !current.screen && !current.microphone && !current.screenAudio) {
+        remoteTrackRefs.current.delete(identity);
+      } else {
+        remoteTrackRefs.current.set(identity, current);
+      }
+      syncRemoteDerivedStreams();
+    };
+
+    room.on(RoomEvent.Connected, () => {
+      if (!active) return;
+      setConnectionState("connected");
+      syncLocalStreams();
+      syncActiveSpeakers();
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((publication) => {
+          const remoteTrack = publication.track;
+          if (!remoteTrack) return;
+          updateRemoteTrack(participant.identity, publication.source, remoteTrack.mediaStreamTrack);
+        });
+      });
+    });
+    room.on(RoomEvent.Reconnecting, () => {
+      if (active) setConnectionState("reconnecting");
+    });
+    room.on(RoomEvent.SignalReconnecting, () => {
+      if (active) setConnectionState("reconnecting");
+    });
+    room.on(RoomEvent.Reconnected, () => {
+      if (!active) return;
+      setConnectionState("connected");
+      syncLocalStreams();
+      syncActiveSpeakers();
+      syncRemoteDerivedStreams();
+    });
+    room.on(RoomEvent.Disconnected, () => {
+      if (active) setConnectionState("disconnected");
+    });
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      if (!active) return;
+      updateRemoteTrack(participant.identity, publication.source, track.mediaStreamTrack);
+      syncActiveSpeakers();
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
+      if (!active) return;
+      removeRemoteTrack(participant.identity, publication.source);
+      syncActiveSpeakers();
+    });
+    room.on(RoomEvent.TrackMuted, (_publication, participant) => {
+      if (!active) return;
+      if (participant.isLocal) {
+        syncLocalStreams();
+      } else {
+        syncRemoteDerivedStreams();
+      }
+      syncActiveSpeakers();
+    });
+    room.on(RoomEvent.TrackUnmuted, (_publication, participant) => {
+      if (!active) return;
+      if (participant.isLocal) {
+        syncLocalStreams();
+      } else {
+        syncRemoteDerivedStreams();
+      }
+      syncActiveSpeakers();
+    });
+    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+      if (!active) return;
+      remoteTrackRefs.current.delete(participant.identity);
+      syncRemoteDerivedStreams();
+      syncActiveSpeakers();
+    });
+    room.on(RoomEvent.ActiveSpeakersChanged, () => {
+      if (active) syncActiveSpeakers();
+    });
+    room.on(RoomEvent.ConnectionStateChanged, (state) => {
+      if (active) setConnectionState(toAppConnectionState(state));
+    });
+    room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+      if (active) setAudioPlaybackBlocked(!room.canPlaybackAudio);
+    });
+    room.on(RoomEvent.MediaDevicesError, (error) => {
+      if (active) setMediaError(error instanceof Error ? error.message : "Media device error.");
+    });
+    room.on(RoomEvent.LocalTrackPublished, () => {
+      if (active) syncLocalStreams();
+    });
+    room.on(RoomEvent.LocalTrackUnpublished, () => {
+      if (active) syncLocalStreams();
+    });
+
+    room.connect(livekit.url, livekit.token)
+      .then(() => {
+        if (!active) return;
+        setAudioPlaybackBlocked(!room.canPlaybackAudio);
+        syncLocalStreams();
+        syncActiveSpeakers();
+      })
+      .catch((error) => {
+        if (!active) return;
+        setMediaError(describeMediaError("room connection", error));
+        setConnectionState("disconnected");
+      });
+
+    return () => {
+      active = false;
+      room.disconnect(true).catch(() => undefined);
+      roomRef.current = null;
+      remoteTrackRefs.current.clear();
+      canvasTrackRef.current?.stop();
+      canvasTrackRef.current = null;
+      if (canvasRafRef.current != null) {
+        cancelAnimationFrame(canvasRafRef.current);
+        canvasRafRef.current = null;
+      }
+    };
+  }, [joined, livekit, resolveSocketIdByIdentity, syncActiveSpeakers, syncLocalStreams, syncRemoteDerivedStreams]);
+
+  useEffect(() => {
+    sendMediaState(isMicOn, isCameraOn, isScreenSharing);
+  }, [isCameraOn, isMicOn, isScreenSharing, sendMediaState]);
+
+  async function toggleMic() {
+    const next = !isMicOn;
+    const room = roomRef.current;
+    if (!room) {
+      setMediaError("Could not connect to the webinar media server.");
+      return false;
+    }
+    if (next && !publishPermissions.canPublishAudio) {
+      setMediaError(describePublishPermissionError(role, "microphone"));
+      return false;
+    }
+    try {
+      setMediaError("");
+      const publication = room.localParticipant.getTrackPublication(LiveKitTrack.Source.Microphone);
+      if (next) {
+        if (publication) {
+          await publication.unmute();
+        } else {
+          await room.localParticipant.setMicrophoneEnabled(true);
+        }
+      } else if (publication) {
+        await publication.mute();
+      } else {
+        await room.localParticipant.setMicrophoneEnabled(false);
+      }
+      syncLocalStreams();
+      return true;
+    } catch (error) {
+      setMediaError(describeMediaError("microphone", error));
+      syncLocalStreams();
+      return false;
+    }
+  }
+
+  async function toggleCamera() {
+    const next = !isCameraOn;
+    const room = roomRef.current;
+    if (!room) {
+      setMediaError("Could not connect to the webinar media server.");
+      return false;
+    }
+    if (next && !publishPermissions.canPublishVideo) {
+      setMediaError(describePublishPermissionError(role, "camera"));
+      return false;
+    }
+    try {
+      setMediaError("");
+      const publication = room.localParticipant.getTrackPublication(LiveKitTrack.Source.Camera);
+      if (next) {
+        if (publication) {
+          await publication.unmute();
+        } else {
+          await room.localParticipant.setCameraEnabled(true);
+        }
+      } else if (publication) {
+        await publication.mute();
+      } else {
+        await room.localParticipant.setCameraEnabled(false);
+      }
+      syncLocalStreams();
+      return true;
+    } catch (error) {
+      setMediaError(describeMediaError("camera", error));
+      syncLocalStreams();
+      return false;
+    }
+  }
+
+  async function stopCanvasShare() {
+    const room = roomRef.current;
+    if (!room) return;
+    const canvasTrack = canvasTrackRef.current;
+    if (canvasTrack) {
+      await room.localParticipant.unpublishTrack(canvasTrack, true).catch(() => undefined);
+      canvasTrack.stop();
+      canvasTrackRef.current = null;
+    } else {
+      await room.localParticipant.setScreenShareEnabled(false).catch(() => undefined);
+    }
+    if (canvasRafRef.current != null) {
+      cancelAnimationFrame(canvasRafRef.current);
+      canvasRafRef.current = null;
+    }
+    setCanvasShareActive(false);
+    syncLocalStreams();
+  }
+
+  async function startCanvasShare(canvas: HTMLCanvasElement) {
+    if (!publishPermissions.canShareScreen) {
+      setMediaError(describePublishPermissionError(role, "screen share"));
+      return false;
+    }
+    const room = roomRef.current;
+    if (!room) {
+      setMediaError("Could not connect to the webinar media server.");
+      return false;
+    }
+    try {
+      setMediaError("");
+      const mirror = document.createElement("canvas");
+      mirror.width = canvas.width || 1600;
+      mirror.height = canvas.height || 1000;
+      const context = mirror.getContext("2d");
+      const paint = () => {
+        if (context) {
+          try {
+            context.drawImage(canvas, 0, 0, mirror.width, mirror.height);
+          } catch {
+            // canvas not ready on this frame
+          }
+        }
+        canvasRafRef.current = requestAnimationFrame(paint);
+      };
+      if (canvasRafRef.current != null) cancelAnimationFrame(canvasRafRef.current);
+      paint();
+      const captureStream = mirror.captureStream(15);
+      const captureTrack = captureStream.getVideoTracks()[0];
+      if (!captureTrack) throw new Error("Canvas capture is not supported in this browser.");
+
+      const publication = room.localParticipant.getTrackPublication(LiveKitTrack.Source.ScreenShare);
+      if (publication?.track) {
+        await room.localParticipant.unpublishTrack(publication.track, true).catch(() => undefined);
+      }
+      canvasTrackRef.current?.stop();
+      const localTrack = new LocalVideoTrack(captureTrack, undefined, true);
+      canvasTrackRef.current = localTrack;
+      await room.localParticipant.publishTrack(localTrack, {
+        source: LiveKitTrack.Source.ScreenShare,
+        stream: "screen",
+      });
+      setCanvasShareActive(true);
+      syncLocalStreams();
+      return true;
+    } catch (error) {
+      setMediaError(describeMediaError("screen share", error));
+      return false;
+    }
+  }
+
+  async function toggleScreenShare() {
+    const room = roomRef.current;
+    if (!room) {
+      setMediaError("Could not connect to the webinar media server.");
+      return false;
+    }
+    const publication = room.localParticipant.getTrackPublication(LiveKitTrack.Source.ScreenShare);
+    if (publication) {
+      await stopCanvasShare();
+      return true;
+    }
+    if (!publishPermissions.canShareScreen) {
+      setMediaError(describePublishPermissionError(role, "screen share"));
+      return false;
+    }
+    try {
+      setMediaError("");
+      await room.localParticipant.setScreenShareEnabled(true, {
+        audio: false,
+      });
+      setCanvasShareActive(false);
+      syncLocalStreams();
+      return true;
+    } catch (error) {
+      setMediaError(describeMediaError("screen share", error));
+      return false;
+    }
+  }
+
+  const registerAudioElement = useCallback((el: HTMLAudioElement, add: boolean) => {
+    if (add) audioElementsRef.current.add(el);
+    else audioElementsRef.current.delete(el);
+  }, []);
+
+  const reportAudioBlocked = useCallback(() => setAudioPlaybackBlocked(true), []);
+
+  const resumeAudioPlayback = useCallback(async () => {
+    const room = roomRef.current;
+    const els = Array.from(audioElementsRef.current);
+    const playAttempts = els.map((el) => {
+      el.muted = false;
+      return el.play().then(() => true).catch(() => false);
+    });
+    const results = await Promise.all(playAttempts);
+    if (room?.canPlaybackAudio === false) {
+      await room.startAudio().catch(() => undefined);
+    }
+    if (els.length > 0) {
+      setAudioPlaybackBlocked(!results.every(Boolean));
+    } else {
+      setAudioPlaybackBlocked(Boolean(room && !room.canPlaybackAudio));
+    }
+  }, []);
+
+  return {
+    localStream,
+    localCameraStream,
+    localScreenStream,
+    remoteStreams,
+    remoteAudioStreams,
+    remoteCameraStreams,
+    remoteScreenStreams,
+    activeSpeakerIds,
+    canPublishAudio: publishPermissions.canPublishAudio,
+    canPublishVideo: publishPermissions.canPublishVideo,
+    canShareScreen: publishPermissions.canShareScreen,
+    isMicOn,
+    isCameraOn,
+    isScreenSharing,
+    canvasShareActive,
+    connectionState,
+    toggleMic,
+    toggleCamera,
+    toggleScreenShare,
+    startCanvasShare,
+    stopCanvasShare,
+    hasMediaAccess: Boolean(role === "ATTENDEE" || roomRef.current || localStream || localCameraStream || localScreenStream),
+    mediaError,
+    audioPlaybackBlocked,
+    registerAudioElement,
+    reportAudioBlocked,
+    resumeAudioPlayback,
+  };
+}
+
 type ClassMaterial = { id: string; name: string; url: string; size?: number };
 
 const WHITEBOARD_COLORS = ["#111111", "#e11d48", "#2563eb", "#16a34a", "#f4c542"];
@@ -2666,8 +3212,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   const openWealthxSignup = useCallback(() => {
     window.open(WEALTHX_SIGNUP_URL, "_blank", "noopener,noreferrer");
   }, []);
-  const media = useClassMedia({
-    joined,
+  const livekitMediaEnabled = Boolean(connection.mediaTransport === "livekit" && connection.livekit?.token && connection.livekit?.url);
+  const legacyMedia = useClassMedia({
+    joined: joined && !livekitMediaEnabled,
     role,
     canPublishAudio: role === "HOST" || connection.legacyMicPermission,
     canPublishVideo: role === "HOST",
@@ -2677,6 +3224,17 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     participants: connection.room.participants,
     sendMediaState: connection.sendMediaState,
   });
+  const livekitMedia = useLiveKitClassMedia({
+    joined: joined && livekitMediaEnabled,
+    role,
+    livekit: connection.livekit,
+    canPublishAudio: role === "HOST" || connection.legacyMicPermission,
+    canPublishVideo: role === "HOST",
+    canShareScreen: role === "HOST",
+    participants: connection.room.participants,
+    sendMediaState: connection.sendMediaState,
+  });
+  const media = livekitMediaEnabled ? livekitMedia : legacyMedia;
 
   // Safety net: while audio is autoplay-blocked, the very first tap/click/keypress
   // anywhere on the page resumes playback — so even an attendee who ignores the
