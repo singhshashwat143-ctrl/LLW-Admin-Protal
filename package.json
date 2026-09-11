@@ -19,7 +19,7 @@
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
     "google-auth-library": "^10.6.2",
-    "livekit-client": "^2.18.1",
+    "livekit-client": "2.15.8",
     "livekit-server-sdk": "^2.15.1",
     "pdfjs-dist": "^4.10.38",
     "pg": "^8.16.3",
