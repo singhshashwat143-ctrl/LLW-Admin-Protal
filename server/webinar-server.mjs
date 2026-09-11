@@ -1737,21 +1737,62 @@ function getRoomSockets(roomName) {
     .filter(Boolean);
 }
 
+// Presence fan-out for large classes.
+//
+// Every join/leave/mic/hand event used to re-send the FULL participant list
+// (including every attendee's phone + email) to EVERY socket, coalesced only
+// 40 ms. At 500 attendees that is ~70 MB per broadcast wave and hundreds of
+// Mbps of Socket.IO traffic during the join rush — on the same NIC as the
+// LiveKit media. Now:
+//   - attendees receive a slimmed entry (no phone/email) — only hosts need
+//     contact details for the "people" panel actions;
+//   - the broadcast interval scales with room size, and behaves as a throttle
+//     (a pending broadcast is never pushed back by newer events), so a busy
+//     room still gets regular updates instead of starving.
+function roomRoleChannel(roomName, role) {
+  return `${roomName}::${String(role || "ATTENDEE").toUpperCase() === "HOST" ? "HOST" : "ATTENDEE"}`;
+}
+
+function toPublicParticipant(participant) {
+  // Strip phone/email; keep everything the attendee UI actually renders.
+  const { phone: _phone, email: _email, ...publicFields } = participant;
+  return publicFields;
+}
+
+function participantsForViewer(roomName, viewer = {}) {
+  const participants = roomPresence.get(roomName) || [];
+  if (String(viewer.role || "").toUpperCase() === "HOST") {
+    return participants;
+  }
+  return participants.map(toPublicParticipant);
+}
+
+function presenceBroadcastDelayMs(roomName) {
+  const size = (roomPresence.get(roomName) || []).length;
+  if (size <= 50) return 40;
+  if (size <= 150) return 500;
+  if (size <= 300) return 1500;
+  return 3000;
+}
+
 function roomSnapshot(roomName, viewer = {}, limit = ROOM_SNAPSHOT_MESSAGE_WINDOW) {
   return {
-    participants: roomPresence.get(roomName) || [],
+    participants: participantsForViewer(roomName, viewer),
     messages: getVisibleRoomMessages(roomName, viewer, limit),
   };
 }
 
 function emitRoomParticipants(roomName) {
-  io.to(roomName).emit("room:participants", roomPresence.get(roomName) || []);
+  const participants = roomPresence.get(roomName) || [];
+  io.to(roomRoleChannel(roomName, "HOST")).emit("room:participants", participants);
+  io.to(roomRoleChannel(roomName, "ATTENDEE")).emit("room:participants", participants.map(toPublicParticipant));
 }
 
-function scheduleRoomParticipants(roomName, delayMs = 40) {
-  const existingTimer = roomParticipantBroadcastTimers.get(roomName);
-  if (existingTimer) {
-    clearTimeout(existingTimer);
+function scheduleRoomParticipants(roomName, delayMs = presenceBroadcastDelayMs(roomName)) {
+  if (roomParticipantBroadcastTimers.has(roomName)) {
+    // Throttle, not debounce: let the already-scheduled broadcast fire on time
+    // and pick up this change too.
+    return;
   }
   const timer = setTimeout(() => {
     roomParticipantBroadcastTimers.delete(roomName);
@@ -3651,6 +3692,7 @@ io.on("connection", async (socket) => {
 
   socketRoomMeta.set(socket.id, { roomName, attendanceId, role, name, phone, email });
   socket.join(roomName);
+  socket.join(roomRoleChannel(roomName, role));
   const participant = {
     socketId: socket.id,
     attendanceId,

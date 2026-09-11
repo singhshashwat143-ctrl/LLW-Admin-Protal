@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import PdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
-import { ConnectionState as LiveKitConnectionState, LocalVideoTrack, Room as LiveKitRoom, RoomEvent, Track as LiveKitTrack } from "livekit-client";
+import { ConnectionState as LiveKitConnectionState, LocalVideoTrack, Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track as LiveKitTrack, VideoPresets } from "livekit-client";
 
 // Vite bundles the worker and hands us a real Worker instance. Assigning it as
 // workerPort avoids the module-worker bootstrap deadlock that the ?url approach
@@ -119,6 +119,11 @@ type LiveKitJoinInfo = {
   canPublishVideo?: boolean;
   canShareScreen?: boolean;
 };
+
+// Host publish caps for large classes (bits per second). See the Room options
+// in the LiveKit connection effect for the reasoning.
+const LARGE_CLASS_CAMERA_MAX_BITRATE = 800_000;
+const LARGE_CLASS_SCREEN_MAX_BITRATE = 1_200_000;
 
 type RoomSnapshot = {
   participants: Array<{ socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string }>;
@@ -2300,6 +2305,20 @@ function useLiveKitClassMedia({
     const room = new LiveKitRoom({
       adaptiveStream: true,
       dynacast: true,
+      // Large-class egress budget. The SFU forwards the host's published
+      // layers to every viewer, so (per-viewer bitrate × attendees) is the
+      // server's outbound load. Caps below keep a 500-seat class near
+      // ~0.7 Gbps worst case instead of >1.5 Gbps with library defaults.
+      // Simulcast + adaptiveStream let small tiles (e.g. camera PiP while
+      // sharing) pull the low layers automatically.
+      videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
+      publishDefaults: {
+        simulcast: true,
+        videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
+        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 24 },
+        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 12 },
+        screenShareSimulcastLayers: [ScreenSharePresets.h360fps3, ScreenSharePresets.h720fps5],
+      },
     });
     roomRef.current = room;
     setConnectionState("reconnecting");
