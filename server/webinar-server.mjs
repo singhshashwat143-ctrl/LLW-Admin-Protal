@@ -13,6 +13,8 @@ import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
 import { createGoogleSheetsMirror } from "./google-sheets-sync.mjs";
 import { createLiveEventStore } from "./live-event-store.mjs";
+import { createReminderStore, REMINDER_OFFSET_MINUTES } from "./reminder-store.mjs";
+import { configurePush, getPublicKey, isPushEnabled, sendPush } from "./push-sender.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -23,6 +25,8 @@ const io = new Server(httpServer, {
   cors: { origin: true, credentials: false },
 });
 const store = await createDashboardStore();
+const reminderStore = await createReminderStore();
+await configurePush();
 const port = Number(process.env.PORT || 4000);
 const pyMdApiKey = process.env.PYMD_API_KEY || "";
 const pyMdBaseUrl = "https://py.md/api";
@@ -2169,6 +2173,49 @@ app.get("/api/rooms/:roomName", async (req, res) => {
   });
 });
 
+// --- Registration + reminder push notifications -------------------------
+// Public: the VAPID public key the registration page needs to subscribe a
+// browser to Web Push. Empty string when push is not configured.
+app.get("/api/push/vapid-public-key", (_req, res) => {
+  res.json({ ok: true, key: getPublicKey(), enabled: isPushEnabled() });
+});
+
+// Public: register for a webinar and (optionally) store the browser's push
+// subscription so it receives 15/10/5-minute reminders before start_time.
+app.post("/api/rooms/:roomName/register", async (req, res) => {
+  const roomName = req.params.roomName;
+  const room = await getRoomByNameFresh(roomName, `room-register-miss:${roomName}`);
+  if (!room || !room.webinar) {
+    return res.status(404).json({ ok: false, message: "Webinar not found" });
+  }
+  const name = String(req.body?.name || "").trim().slice(0, 120);
+  const email = String(req.body?.email || "").trim().slice(0, 160);
+  const phone = String(req.body?.phone || "").trim().slice(0, 40);
+  const subscription = req.body?.subscription || null;
+
+  if (!name) {
+    return res.status(400).json({ ok: false, message: "Name is required" });
+  }
+  if (!email && !phone) {
+    return res.status(400).json({ ok: false, message: "Enter an email or phone number" });
+  }
+
+  try {
+    const result = await reminderStore.register({
+      webinarId: room.webinar.id,
+      roomName,
+      name,
+      email,
+      phone,
+      subscription,
+    });
+    res.json({ ok: true, subscribed: result.subscribed, pushEnabled: isPushEnabled() });
+  } catch (error) {
+    console.error("[register] failed:", error?.message || error);
+    res.status(500).json({ ok: false, message: "Could not save your registration. Please try again." });
+  }
+});
+
 // Live celebration feed for the WealthX hand-holding webinar ONLY. Returns
 // merged signup + broker-connection events (names only) so the room can pop a
 // confetti toast when someone opens a WealthX account or connects Delta on CryptX.
@@ -4006,6 +4053,88 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     }
   });
 }
+
+// --- Reminder scheduler ---------------------------------------------------
+// Every tick, look at scheduled webinars and fire a Web Push reminder to their
+// registrants at start-15m, start-10m and start-5m. Each (webinar, offset) is
+// claimed atomically via reminderStore.claimOffset so it fires exactly once,
+// even across scheduler ticks or a process restart.
+const REMINDER_TICK_MS = Math.max(Number(process.env.REMINDER_TICK_MS || 30000) || 30000, 10000);
+const REMINDER_FIRE_GRACE_MS = 2 * 60 * 1000; // don't fire a reminder more than 2 min late
+
+async function dispatchReminder(webinar, offset) {
+  let subs = [];
+  try {
+    subs = await reminderStore.listSubscriptions(webinar.id);
+  } catch (error) {
+    console.error("[reminder] listSubscriptions failed:", error?.message || error);
+    return;
+  }
+  if (!subs.length) return;
+
+  const attendeeUrl = webinar.attendee_url || `/webinar/attend/${webinar.livekit_room_name}`;
+  const absoluteUrl = publicAppUrl ? `${publicAppUrl}${attendeeUrl}` : attendeeUrl;
+  const payload = {
+    title: `${webinar.title || "Your class"} starts in ${offset} min`,
+    body: offset <= 5 ? "Starting now — tap to join the live session." : "Get ready — tap to open your class.",
+    url: absoluteUrl,
+    tag: `webinar-${webinar.id}`,
+  };
+
+  const results = await Promise.allSettled(
+    subs.map((row) => sendPush(row.subscription, payload).then((r) => ({ row, r }))),
+  );
+  let sent = 0;
+  let pruned = 0;
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const { row, r } = result.value;
+    if (r.ok) {
+      sent += 1;
+    } else if (r.gone) {
+      pruned += 1;
+      reminderStore.removeById(row.id).catch(() => {});
+    }
+  }
+  console.log(`[reminder] webinar=${webinar.id} offset=${offset}m sent=${sent} pruned=${pruned} of=${subs.length}`);
+}
+
+async function runReminderTick() {
+  if (!isPushEnabled()) return;
+  const now = Date.now();
+  const webinars = Array.isArray(store.data?.webinars) ? store.data.webinars : [];
+  for (const webinar of webinars) {
+    if (!webinar || !webinar.start_time) continue;
+    if (String(webinar.status || "").toUpperCase() === "ENDED") continue;
+    const startMs = new Date(webinar.start_time).getTime();
+    if (!Number.isFinite(startMs)) continue;
+
+    const firstFireMs = startMs - REMINDER_OFFSET_MINUTES[0] * 60 * 1000;
+    if (now < firstFireMs) continue; // too early even for the first reminder
+    if (now - startMs > 60 * 60 * 1000) continue; // more than an hour past start — stop
+
+    for (const offset of REMINDER_OFFSET_MINUTES) {
+      const fireAt = startMs - offset * 60 * 1000;
+      if (now < fireAt) continue; // not due yet
+      if (now - fireAt > REMINDER_FIRE_GRACE_MS) continue; // missed the window; don't blast late
+
+      let claimed = false;
+      try {
+        claimed = await reminderStore.claimOffset(webinar.id, offset);
+      } catch (error) {
+        console.error("[reminder] claimOffset failed:", error?.message || error);
+        continue;
+      }
+      if (!claimed) continue; // another tick/instance already sent this one
+      await dispatchReminder(webinar, offset);
+    }
+  }
+}
+
+const reminderTimer = setInterval(() => {
+  runReminderTick().catch((error) => console.error("[reminder] tick failed:", error?.message || error));
+}, REMINDER_TICK_MS);
+reminderTimer.unref?.();
 
 httpServer.listen(port, () => {
   console.log(`LLW API listening on http://localhost:${port}`);

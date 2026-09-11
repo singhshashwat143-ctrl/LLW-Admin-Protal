@@ -32,6 +32,7 @@ const LiveClassesPage = lazyNamed(Live, "LiveClassesPage");
 const WebinarDetailPage = lazyNamed(Live, "WebinarDetailPage");
 const WebinarAttendPage = lazyNamed(Live, "WebinarAttendPage");
 const WebinarHostPage = lazyNamed(Live, "WebinarHostPage");
+const WebinarRegisterPage = lazyNamed(() => import("./pages/Register"), "WebinarRegisterPage");
 const MarketingPage = lazyNamed(() => import("./pages/Marketing"), "MarketingPage");
 const OrdersPage = lazyNamed(() => import("./pages/Orders"), "OrdersPage");
 const OperationsPage = lazyNamed(() => import("./pages/Operations"), "OperationsPage");
@@ -132,6 +133,10 @@ export default function App() {
 
   if (route.pattern === "/webinar/host/:roomName") {
     return publicRoute(<WebinarHostPage roomName={route.params.roomName} />);
+  }
+
+  if (route.pattern === "/webinar/register/:roomName") {
+    return publicRoute(<WebinarRegisterPage roomName={route.params.roomName} />);
   }
 
   if (route.pattern === "/payment/:id") {

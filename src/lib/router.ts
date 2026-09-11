@@ -27,6 +27,7 @@ const routes = [
   "/settings",
   "/webinar/attend/:roomName",
   "/webinar/host/:roomName",
+  "/webinar/register/:roomName",
   "/payment/:id",
   "/subscription/:id",
   "/privacy-policy",
