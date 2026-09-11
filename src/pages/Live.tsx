@@ -402,6 +402,24 @@ export function LiveClassesPage() {
   const [form, setForm] = useState(defaultMeetingForm);
   const [createdLinks, setCreatedLinks] = useState<{ host_url: string; attendee_url: string } | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [copiedRegId, setCopiedRegId] = useState<string | null>(null);
+
+  // The registration/reminders page is the attendee room name under
+  // /webinar/register/<room>. Derive the room from the attendee URL.
+  function registrationUrl(attendeeUrl: string) {
+    const room = (attendeeUrl || "").split("?")[0].split("/").filter(Boolean).pop() || "";
+    return `${window.location.origin}/webinar/register/${room}`;
+  }
+
+  async function copyRegLink(row: Webinar) {
+    try {
+      await navigator.clipboard?.writeText(registrationUrl(row.attendee_url));
+      setCopiedRegId(row.id);
+      window.setTimeout(() => setCopiedRegId((current) => (current === row.id ? null : current)), 2000);
+    } catch {
+      // Clipboard unavailable (permissions) — silently ignore.
+    }
+  }
 
   async function createMeeting() {
     const response = await api<{ webinar: Webinar }>("/api/webinars", { method: "POST", body: JSON.stringify(form) });
@@ -470,6 +488,9 @@ export function LiveClassesPage() {
                     <td>
                       <div className="table-action-row">
                         <button className="btn-secondary text-sm" type="button" onClick={() => navigate(`/live/${row.id}`)}>Preview</button>
+                        <button className="btn-secondary text-sm" type="button" onClick={() => copyRegLink(row)} title="Copy the public registration + reminders link to share">
+                          {copiedRegId === row.id ? "Copied ✓" : "Copy Reg Link"}
+                        </button>
                         <a className="btn-primary text-sm" href={row.attendee_url} target="_blank" rel="noreferrer">Open Attendee Room</a>
                       </div>
                     </td>
@@ -528,6 +549,7 @@ export function LiveClassesPage() {
                     <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-[13px] text-emerald-900">
                       <div className="font-mono">Host: {createdLinks.host_url}</div>
                       <div className="mt-1 font-mono">Attendee: {createdLinks.attendee_url}</div>
+                      <div className="mt-1 font-mono break-all">Registration: {registrationUrl(createdLinks.attendee_url)}</div>
                     </div>
                   ) : null}
                 </div>

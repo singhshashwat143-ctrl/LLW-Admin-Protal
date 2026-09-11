@@ -3,6 +3,14 @@ import { PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
 import { formatCurrency, formatDateTime } from "../lib/format";
 
+// The public registration + reminders page lives at /webinar/register/<room>,
+// where <room> is the same room name used in the attendee URL.
+function registrationUrlFromAttendee(attendeeUrl: string): string {
+  const room = (attendeeUrl || "").split("?")[0].split("/").filter(Boolean).pop() || "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return `${origin}/webinar/register/${room}`;
+}
+
 export function WebinarsPage() {
   const { data } = useApi<any>("/api/webinars", { webinars: [] });
 
@@ -24,6 +32,7 @@ export function WebinarsPage() {
                 <th>Price</th>
                 <th>Host URL</th>
                 <th>Attendee URL</th>
+                <th>Registration Link</th>
               </tr>
             </thead>
             <tbody>
@@ -39,6 +48,9 @@ export function WebinarsPage() {
                   <td>{row.payment_required ? formatCurrency((row.price_inr || 0) / 100) : "Free"}</td>
                   <td className="font-mono text-xs">{row.short_host_url}</td>
                   <td className="font-mono text-xs">{row.short_attendee_url}</td>
+                  <td className="font-mono text-xs">
+                    <a className="underline decoration-slate-400" href={`/webinar/register/${(row.attendee_url || "").split("?")[0].split("/").filter(Boolean).pop()}`} target="_blank" rel="noreferrer">Open ↗</a>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -137,6 +149,11 @@ export function WebinarFormPage() {
                   <div className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-4">
                     <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Attendee</div>
                     <div className="mt-2 break-all font-mono text-sm text-white">{created.short_attendee_url}</div>
+                  </div>
+                  <div className="mt-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-300">Registration + reminders</div>
+                    <a className="mt-2 block break-all font-mono text-sm text-white underline decoration-white/30" href={registrationUrlFromAttendee(created.attendee_url)} target="_blank" rel="noreferrer">{registrationUrlFromAttendee(created.attendee_url)}</a>
+                    <div className="mt-1 text-[11px] text-slate-400">Share this so attendees register and get 15/10/5-min reminders.</div>
                   </div>
                 </div>
                 <div className="text-sm leading-6 text-slate-300">
