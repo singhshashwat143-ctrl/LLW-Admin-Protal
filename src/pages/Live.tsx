@@ -2223,10 +2223,23 @@ function useLiveKitClassMedia({
     setPublishPermissions(initialPublishPermissions);
   }, [initialPublishPermissions]);
 
-  const resolveSocketIdByIdentity = useCallback((identity: string) => {
-    const participant = participants.find((entry) => entry.attendanceId === identity);
-    return participant?.socketId || identity;
+  // Keep the latest participants list in a ref so identity->socketId lookups
+  // read fresh data WITHOUT changing this callback's identity. This is
+  // critical: resolveSocketIdByIdentity feeds syncRemoteDerivedStreams and
+  // syncActiveSpeakers, which are in the room-connect effect's deps. If this
+  // callback were recreated on every presence update (room:participants fires
+  // after every mic/camera toggle via participant:media), the connect effect
+  // would tear down and recreate the LiveKit Room each time, killing the track
+  // that was just published. Reading through a ref keeps the callback stable.
+  const participantsRef = useRef(participants);
+  useEffect(() => {
+    participantsRef.current = participants;
   }, [participants]);
+
+  const resolveSocketIdByIdentity = useCallback((identity: string) => {
+    const participant = participantsRef.current.find((entry) => entry.attendanceId === identity);
+    return participant?.socketId || identity;
+  }, []);
 
   const syncRemoteDerivedStreams = useCallback(() => {
     const nextRemote = new Map<string, MediaStream>();
@@ -2293,6 +2306,16 @@ function useLiveKitClassMedia({
     }
     setActiveSpeakerIds(room.activeSpeakers.map((participant) => resolveSocketIdByIdentity(participant.identity)));
   }, [resolveSocketIdByIdentity]);
+
+  // Re-map remote streams + active speakers when the presence list changes
+  // (a new joiner, or a socketId assigned after their track already arrived)
+  // WITHOUT rebuilding the room. The connect effect below intentionally does
+  // not depend on `participants`, for the reason documented on participantsRef.
+  useEffect(() => {
+    if (!joined) return;
+    syncRemoteDerivedStreams();
+    syncActiveSpeakers();
+  }, [participants, joined, syncRemoteDerivedStreams, syncActiveSpeakers]);
 
   useEffect(() => {
     if (!joined || !livekit?.token || !livekit.url) {
