@@ -120,14 +120,10 @@ type LiveKitJoinInfo = {
   canShareScreen?: boolean;
 };
 
-// Host publish caps (bits per second). Sized for the dedicated 1 Gbps media
-// box and a target of up to ~300 concurrent viewers: camera 720p @ 2 Mbps and
-// screen @ 2.5 Mbps, both at 30 fps for smooth motion (charts/scrolling). At
-// 300 viewers worst-case egress is ~300 x 2.5 = ~750 Mbps, well under 1 Gbps.
-// (Previously 800 kbps / 1.2 Mbps at 24/12 fps for the old ~100 Mbps box —
-// that made screen share choppy once media moved to the dedicated box.)
-const LARGE_CLASS_CAMERA_MAX_BITRATE = 2_000_000;
-const LARGE_CLASS_SCREEN_MAX_BITRATE = 2_500_000;
+// Host publish caps for large classes (bits per second). See the Room options
+// in the LiveKit connection effect for the reasoning.
+const LARGE_CLASS_CAMERA_MAX_BITRATE = 800_000;
+const LARGE_CLASS_SCREEN_MAX_BITRATE = 1_200_000;
 
 type RoomSnapshot = {
   participants: Array<{ socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string }>;
@@ -2354,20 +2350,19 @@ function useLiveKitClassMedia({
     const room = new LiveKitRoom({
       adaptiveStream: true,
       dynacast: true,
-      // Media egress budget for the dedicated 1 Gbps box (target up to ~300
-      // viewers). The SFU forwards the host's top layer to full-screen viewers,
-      // so (top-layer bitrate × viewers) is the outbound load: ~300 x 2.5 Mbps
-      // = ~750 Mbps worst case, comfortably under 1 Gbps. 30 fps on both camera
-      // and screen keeps motion (charts/scrolling) smooth; simulcast +
-      // adaptiveStream still let small tiles (camera PiP while sharing) pull
-      // the low layers automatically.
+      // Large-class egress budget. The SFU forwards the host's published
+      // layers to every viewer, so (per-viewer bitrate × attendees) is the
+      // server's outbound load. Caps below keep a 500-seat class near
+      // ~0.7 Gbps worst case instead of >1.5 Gbps with library defaults.
+      // Simulcast + adaptiveStream let small tiles (e.g. camera PiP while
+      // sharing) pull the low layers automatically.
       videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
       publishDefaults: {
         simulcast: true,
         videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
-        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 30 },
-        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 30 },
-        screenShareSimulcastLayers: [ScreenSharePresets.h720fps15],
+        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 24 },
+        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 12 },
+        screenShareSimulcastLayers: [ScreenSharePresets.h360fps3, ScreenSharePresets.h720fps5],
       },
     });
     roomRef.current = room;
