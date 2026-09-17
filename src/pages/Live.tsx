@@ -2348,7 +2348,14 @@ function useLiveKitClassMedia({
 
     let active = true;
     const room = new LiveKitRoom({
-      adaptiveStream: true,
+      // adaptiveStream MUST stay off: this app renders remote video by setting
+      // element.srcObject to a raw MediaStream (see RemoteVideo below), not via
+      // LiveKit's track.attach(). adaptiveStream needs .attach() to observe the
+      // <video> element's size and pick a simulcast layer; with raw srcObject it
+      // has no element to watch, so it serves a low, fluctuating layer -> blurry
+      // and unstable video (audio is never affected). Off = each subscriber gets
+      // the full top layer, stable and sharp.
+      adaptiveStream: false,
       dynacast: true,
       // Large-class egress budget. The SFU forwards the host's published
       // layers to every viewer, so (per-viewer bitrate × attendees) is the
