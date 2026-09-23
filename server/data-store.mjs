@@ -19,6 +19,7 @@ const couponResetMarkerFile = process.env.RESET_COUPONS_FROM_GIT_MARKER_FILE || 
 const gitCouponResetToken = String(process.env.RESET_COUPONS_FROM_GIT_TOKEN || "2026-05-13-price-update-coupons").trim() || "2026-05-13-price-update-coupons";
 const runtimePersistence = await createRuntimePersistence();
 const requiredTeamMembers = [
+  { name: "Harikrishnan", email: "harikrishnan@livelongwealth.com", role: "SUPER_ADMIN", manager_name: "", team_name: "Leadership" },
   { name: "Punith Raj S N", email: "punith@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Punith Raj S N Team" },
   { name: "Aman Israr", email: "aman@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Harshitha Gowda", email: "harshitha@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
