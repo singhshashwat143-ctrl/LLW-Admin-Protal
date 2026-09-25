@@ -15,6 +15,7 @@ import { createGoogleSheetsMirror } from "./google-sheets-sync.mjs";
 import { createLiveEventStore } from "./live-event-store.mjs";
 import { createReminderStore, REMINDER_OFFSET_MINUTES } from "./reminder-store.mjs";
 import { configurePush, getPublicKey, isPushEnabled, sendPush } from "./push-sender.mjs";
+import { createCryptxSyncStore } from "./cryptx-sync-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,6 +27,8 @@ const io = new Server(httpServer, {
 });
 const store = await createDashboardStore();
 const reminderStore = await createReminderStore();
+const cryptxSyncStore = await createCryptxSyncStore();
+const cryptxSyncToken = String(process.env.CRYPTX_SYNC_TOKEN || "").trim();
 await configurePush();
 const port = Number(process.env.PORT || 4000);
 const pyMdApiKey = process.env.PYMD_API_KEY || "";
@@ -2213,6 +2216,55 @@ app.post("/api/rooms/:roomName/register", async (req, res) => {
   } catch (error) {
     console.error("[register] failed:", error?.message || error);
     res.status(500).json({ ok: false, message: "Could not save your registration. Please try again." });
+  }
+});
+
+// --- CryptX client sync -------------------------------------------------
+// Server-to-server ingest: the CryptX box's read-only exporter POSTs its mapped
+// client roster here on a cron, authenticated by a shared token (NOT an admin
+// session). We upsert into cryptx_clients keyed by email so the funnel can join
+// a lead to their CryptX deposit / profit / payment state.
+app.post("/api/cryptx-sync/ingest", express.json({ limit: "4mb" }), async (req, res) => {
+  if (!cryptxSyncToken) {
+    return res.status(503).json({ ok: false, message: "CryptX sync is not configured (CRYPTX_SYNC_TOKEN unset)." });
+  }
+  const token = String(req.get("x-sync-token") || "").trim();
+  if (token !== cryptxSyncToken) {
+    return res.status(401).json({ ok: false, message: "Invalid sync token." });
+  }
+  const clients = Array.isArray(req.body?.clients) ? req.body.clients : null;
+  if (!clients) {
+    return res.status(400).json({ ok: false, message: "Expected { clients: [...] }." });
+  }
+  try {
+    const result = await cryptxSyncStore.upsertMany(clients);
+    console.log(`[cryptx-sync] ingested ${result.upserted}/${clients.length} clients`);
+    res.json({ ok: true, upserted: result.upserted, received: clients.length });
+  } catch (error) {
+    console.error("[cryptx-sync] ingest failed:", error?.message || error);
+    res.status(500).json({ ok: false, message: "Ingest failed." });
+  }
+});
+
+// Admin: sync status (counts, totals, last sync time).
+app.get("/api/cryptx-sync/status", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view CryptX sync status.");
+  if (!user) return;
+  try {
+    res.json({ ok: true, status: await cryptxSyncStore.status() });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
+// Admin: the synced CryptX client roster (for the funnel / RM dashboard).
+app.get("/api/cryptx-sync/clients", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view CryptX clients.");
+  if (!user) return;
+  try {
+    res.json({ ok: true, clients: await cryptxSyncStore.list() });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
   }
 });
 
