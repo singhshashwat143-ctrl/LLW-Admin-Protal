@@ -12,10 +12,8 @@ export function resolvePreferredTheme(): ThemeMode {
     return storedTheme;
   }
 
-  if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) {
-    return "dark";
-  }
-
+  // CryptX brand: default to the white + light-orange light theme (ignore the
+  // OS dark preference). Users can still toggle to dark, which persists.
   return "light";
 }
 

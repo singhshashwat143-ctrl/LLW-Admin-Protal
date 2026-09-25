@@ -18,6 +18,7 @@ function normalizeClient(row = {}) {
   const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
   return {
     email,
+    name: row.name ? String(row.name) : null,
     cryptx_uid: row.cryptx_uid ?? null,
     balance_usd: num(row.balance_usd),
     payment_status: String(row.payment_status || "none"),
@@ -86,6 +87,7 @@ async function createPostgresStore() {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS cryptx_clients (
           email            TEXT PRIMARY KEY,
+          name             TEXT,
           cryptx_uid       INTEGER,
           balance_usd      DOUBLE PRECISION,
           payment_status   TEXT DEFAULT 'none',
@@ -101,6 +103,7 @@ async function createPostgresStore() {
           synced_at        TIMESTAMPTZ NOT NULL DEFAULT now()
         );
       `);
+      await pool.query(`ALTER TABLE cryptx_clients ADD COLUMN IF NOT EXISTS name TEXT;`);
       await pool.query(`CREATE INDEX IF NOT EXISTS cryptx_clients_is_client_idx ON cryptx_clients (is_client);`);
       return this;
     },
@@ -111,17 +114,17 @@ async function createPostgresStore() {
       for (const c of normalized) {
         await pool.query(
           `INSERT INTO cryptx_clients
-             (email, cryptx_uid, balance_usd, payment_status, paid_until, activation_paid,
+             (email, name, cryptx_uid, balance_usd, payment_status, paid_until, activation_paid,
               total_profit_usd, total_paid_inr, open_inr, n_accounts, n_invoices, is_client, signed_up, synced_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
            ON CONFLICT (email) DO UPDATE SET
-             cryptx_uid=EXCLUDED.cryptx_uid, balance_usd=EXCLUDED.balance_usd,
+             name=EXCLUDED.name, cryptx_uid=EXCLUDED.cryptx_uid, balance_usd=EXCLUDED.balance_usd,
              payment_status=EXCLUDED.payment_status, paid_until=EXCLUDED.paid_until,
              activation_paid=EXCLUDED.activation_paid, total_profit_usd=EXCLUDED.total_profit_usd,
              total_paid_inr=EXCLUDED.total_paid_inr, open_inr=EXCLUDED.open_inr,
              n_accounts=EXCLUDED.n_accounts, n_invoices=EXCLUDED.n_invoices,
              is_client=EXCLUDED.is_client, signed_up=EXCLUDED.signed_up, synced_at=now()`,
-          [c.email, c.cryptx_uid, c.balance_usd, c.payment_status, c.paid_until, c.activation_paid,
+          [c.email, c.name, c.cryptx_uid, c.balance_usd, c.payment_status, c.paid_until, c.activation_paid,
            c.total_profit_usd, c.total_paid_inr, c.open_inr, c.n_accounts, c.n_invoices, c.is_client, c.signed_up],
         );
         upserted += 1;

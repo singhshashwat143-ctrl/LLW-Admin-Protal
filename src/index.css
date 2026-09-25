@@ -8,8 +8,8 @@
   --bg-card: #ffffff;
   --surface-soft: #f1f5f9;
   --surface-elevated: #ffffff;
-  --accent: #4f46e5;
-  --accent-soft: #e0e7ff;
+  --accent: #F7931A;
+  --accent-soft: #FDEBD2;
   --text-primary: #334155;
   --text-strong: #0f172a;
   --text-secondary: #64748b;
@@ -23,10 +23,10 @@
   --table-head-bg: #f8fafc;
   --sidebar-bg: rgba(255, 255, 255, 0.95);
   --sidebar-panel-bg: linear-gradient(180deg, #ffffff, #f8fafc);
-  --sidebar-active-bg: #eef2ff;
-  --sidebar-active-text: #4338ca;
-  --sidebar-hover-bg: #f8fafc;
-  --sidebar-badge-bg: rgba(79, 70, 229, 0.08);
+  --sidebar-active-bg: #FEF1E1;
+  --sidebar-active-text: #B45309;
+  --sidebar-hover-bg: #FFF8F0;
+  --sidebar-badge-bg: rgba(247, 147, 26, 0.10);
   --sidebar-user-bg: #ffffff;
   --sidebar-user-border: #fde68a;
   --sidebar-role: #d97706;
@@ -55,8 +55,8 @@
   --bg-card: #0f172a;
   --surface-soft: #111c2e;
   --surface-elevated: #162235;
-  --accent: #a5b4fc;
-  --accent-soft: rgba(129, 140, 248, 0.16);
+  --accent: #FBBF6B;
+  --accent-soft: rgba(247, 147, 26, 0.18);
   --text-primary: #cbd5e1;
   --text-strong: #f8fafc;
   --text-secondary: #94a3b8;
@@ -70,10 +70,10 @@
   --table-head-bg: rgba(15, 23, 42, 0.88);
   --sidebar-bg: rgba(15, 23, 42, 0.92);
   --sidebar-panel-bg: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.84));
-  --sidebar-active-bg: rgba(99, 102, 241, 0.18);
-  --sidebar-active-text: #c7d2fe;
+  --sidebar-active-bg: rgba(247, 147, 26, 0.18);
+  --sidebar-active-text: #FBBF6B;
   --sidebar-hover-bg: rgba(148, 163, 184, 0.08);
-  --sidebar-badge-bg: rgba(99, 102, 241, 0.18);
+  --sidebar-badge-bg: rgba(247, 147, 26, 0.16);
   --sidebar-user-bg: rgba(15, 23, 42, 0.72);
   --sidebar-user-border: rgba(250, 204, 21, 0.24);
   --sidebar-role: #fcd34d;
@@ -439,19 +439,19 @@ a:hover {
 
 .btn-primary {
   border-radius: 0.85rem;
-  background: linear-gradient(135deg, #4f46e5, #4338ca 60%, #3730a3);
+  background: linear-gradient(135deg, #F7931A, #E67C0E 60%, #CE6A08);
   color: white;
   padding: 0.7rem 1.25rem;
   font-weight: 600;
   font-size: 0.875rem;
   cursor: pointer;
   border: 1px solid transparent;
-  box-shadow: 0 12px 24px rgba(79, 70, 229, 0.18);
+  box-shadow: 0 12px 24px rgba(247, 147, 26, 0.20);
   transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
 }
 .btn-primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 16px 30px rgba(79, 70, 229, 0.24);
+  box-shadow: 0 16px 30px rgba(247, 147, 26, 0.28);
   filter: brightness(1.02);
 }
 
@@ -641,7 +641,7 @@ a:hover {
 
 .live-link-chip-label {
   flex: none;
-  color: #6366f1;
+  color: #E67C0E;
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.08em;

@@ -4,6 +4,7 @@ import { formatCurrency } from "../lib/format";
 
 type CryptxClient = {
   email: string;
+  name: string | null;
   cryptx_uid: number | null;
   balance_usd: number | null;
   payment_status: string;
@@ -72,7 +73,7 @@ export function CryptxPage() {
             <thead>
               <tr>
                 <th>#</th>
-                <th>Email</th>
+                <th>Client</th>
                 <th>Status</th>
                 <th>Balance (USD)</th>
                 <th>Profit (USD)</th>
@@ -86,7 +87,10 @@ export function CryptxPage() {
               {clients.map((c, i) => (
                 <tr key={c.email}>
                   <td>{i + 1}</td>
-                  <td className="font-medium text-[var(--text-strong)]">{c.email}</td>
+                  <td>
+                    <div className="font-medium text-[var(--text-strong)]">{c.name || c.email}</div>
+                    {c.email.includes("@") && <div className="text-xs text-[var(--text-secondary)]">{c.email}</div>}
+                  </td>
                   <td><StatusPill status={c.payment_status} /></td>
                   <td className="font-mono">{c.balance_usd != null ? usd(c.balance_usd) : "—"}</td>
                   <td className="font-mono">{c.total_profit_usd ? usd(c.total_profit_usd) : "—"}</td>
