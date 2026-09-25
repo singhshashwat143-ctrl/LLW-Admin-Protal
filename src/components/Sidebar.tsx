@@ -6,10 +6,9 @@ import type { ThemeMode } from "../lib/theme";
 import { ThemeToggle } from "./ThemeToggle";
 
 const sections = [
-  { label: "CryptX", items: [{ path: "/cryptx", name: "CryptX Clients" }] },
-  { label: "Primary", items: [{ path: "/", name: "Dashboard" }, { path: "/sales", name: "Sale Stats" }, { path: "/tracker", name: "Tracker" }, { path: "/live", name: "Live Classes" }, { path: "/webinars", name: "Webinars" }] },
-  { label: "Catalog", items: [{ path: "/teachers", name: "Teachers" }, { path: "/products", name: "Products" }, { path: "/bootcamps", name: "Bootcamps" }] },
-  { label: "Operations", items: [{ path: "/students", name: "Students" }, { path: "/orders", name: "Orders" }, { path: "/payments", name: "Payments" }, { path: "/payments/subscriptions", name: "Subscriptions" }, { path: "/payments/import", name: "Payment Import" }, { path: "/exports", name: "Exports" }, { path: "/marketing", name: "Marketing" }, { path: "/operations", name: "Operations" }, { path: "/onboarding", name: "Ondoarding Form" }, { path: "/refunds", name: "Refunds" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
+  { label: "CryptX", items: [{ path: "/", name: "Conversion Funnel" }, { path: "/cryptx", name: "CryptX Clients" }] },
+  { label: "Webinars", items: [{ path: "/live", name: "Live Classes" }, { path: "/webinars", name: "Webinars" }] },
+  { label: "Operations", items: [{ path: "/students", name: "Leads / Students" }, { path: "/orders", name: "Orders" }, { path: "/payments", name: "Payments" }, { path: "/payments/subscriptions", name: "Subscriptions" }, { path: "/payments/import", name: "Payment Import" }, { path: "/exports", name: "Exports" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
 ];
 
 export function Sidebar({

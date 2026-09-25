@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 const routes = [
   "/",
+  "/revenue-legacy",
   "/sales",
   "/tracker",
   "/live",

@@ -45,6 +45,7 @@ const PrivacyPolicyPage = lazyNamed(() => import("./pages/PrivacyPolicy"), "Priv
 const OnboardingPage = lazyNamed(() => import("./pages/Onboarding"), "OnboardingPage");
 const ProductsPage = lazyNamed(() => import("./pages/Products"), "ProductsPage");
 const CryptxPage = lazyNamed(() => import("./pages/Cryptx"), "CryptxPage");
+const FunnelPage = lazyNamed(() => import("./pages/Funnel"), "FunnelPage");
 const RefundsPage = lazyNamed(() => import("./pages/Refunds"), "RefundsPage");
 const SaleStatsPage = lazyNamed(() => import("./pages/SaleStats"), "SaleStatsPage");
 const SettingsPage = lazyNamed(() => import("./pages/Settings"), "SettingsPage");
@@ -181,7 +182,8 @@ export default function App() {
       {routeRestriction ? <AccessDenied title={routeRestriction.title} description={routeRestriction.description} /> : null}
       {!routeRestriction && (
         <Suspense fallback={<RouteFallback />}>
-          {route.pattern === "/" && <DashboardPage />}
+          {route.pattern === "/" && <FunnelPage />}
+          {route.pattern === "/revenue-legacy" && <DashboardPage />}
           {route.pattern === "/sales" && <SaleStatsPage />}
           {route.pattern === "/tracker" && <DailyTrackerPage />}
           {route.pattern === "/live" && <LiveClassesPage />}

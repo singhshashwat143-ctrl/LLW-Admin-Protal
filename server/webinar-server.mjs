@@ -2268,6 +2268,70 @@ app.get("/api/cryptx-sync/clients", async (req, res) => {
   }
 });
 
+// The CryptX conversion funnel: webinar attendees (leads) joined to CryptX by
+// email → who signed up, converted (paid/active account) and deposited. Built
+// entirely from real data — webinarAttendance + the synced cryptx_clients.
+app.get("/api/funnel/overview", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view the funnel.");
+  if (!user) return;
+  try {
+    const attendance = (store.data.webinarAttendance || []).filter(
+      (a) => String(a.role || "").toUpperCase() === "ATTENDEE" && a.email,
+    );
+    const leads = new Map(); // email -> lead
+    for (const a of attendance) {
+      const email = String(a.email).trim().toLowerCase();
+      if (!email) continue;
+      const cur = leads.get(email) || { email, name: a.name || "", phone: a.phone || "", sessions: new Set(), duration: 0, attended: false, last_seen: a.join_time || a.created_at || "" };
+      cur.sessions.add(a.session_id);
+      cur.duration += Number(a.duration_mins || 0);
+      if (Number(a.duration_mins || 0) >= 1) cur.attended = true;
+      if (!cur.name && a.name) cur.name = a.name;
+      leads.set(email, cur);
+    }
+    const cryptx = await cryptxSyncStore.list();
+    const cxByEmail = new Map(cryptx.map((c) => [String(c.email || "").toLowerCase(), c]));
+    const cxStatus = await cryptxSyncStore.status();
+
+    let signup = 0, clients = 0, deposited = 0;
+    const journey = [...leads.values()].map((l) => {
+      const cx = cxByEmail.get(l.email) || null;
+      if (cx) {
+        signup += 1;
+        if (cx.is_client) clients += 1;
+        if ((cx.balance_usd || 0) > 0) deposited += 1;
+      }
+      return {
+        email: l.email, name: l.name, phone: l.phone,
+        sessions: l.sessions.size, attended: l.attended,
+        cryptx_signup: Boolean(cx), is_client: cx?.is_client || false,
+        balance_usd: cx?.balance_usd ?? null, profit_usd: cx?.total_profit_usd || 0,
+        payment_status: cx?.payment_status || null,
+      };
+    }).sort((a, b) => Number(b.is_client) - Number(a.is_client) || (b.profit_usd - a.profit_usd) || Number(b.attended) - Number(a.attended));
+
+    const attended = journey.filter((j) => j.attended).length;
+    res.json({
+      ok: true,
+      funnel: {
+        leads: leads.size,           // distinct webinar attendees = leads reached
+        attended,                    // actually joined the class
+        cryptx_signup: signup,       // of those, opened a CryptX account
+        converted: clients,          // paid / active CryptX account
+        deposited,                   // funded account
+        total_balance_usd: Number(cxStatus.total_balance_usd) || 0,
+        total_profit_usd: Number(cxStatus.total_profit_usd) || 0,
+        cryptx_total: cxStatus.total,
+        last_sync_at: cxStatus.last_sync_at,
+      },
+      journey,
+    });
+  } catch (error) {
+    console.error("[funnel] overview failed:", error?.message || error);
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
 // Live celebration feed for the WealthX hand-holding webinar ONLY. Returns
 // merged signup + broker-connection events (names only) so the room can pop a
 // confetti toast when someone opens a WealthX account or connects Delta on CryptX.
