@@ -30,6 +30,8 @@ function normalizeClient(row = {}) {
     n_accounts: Number(row.n_accounts || 0),
     n_invoices: Number(row.n_invoices || 0),
     is_client: Boolean(row.is_client),
+    is_seed: Boolean(row.is_seed),
+    via_razorpay: Boolean(row.via_razorpay),
     signed_up: row.signed_up || null,
   };
 }
@@ -59,9 +61,11 @@ function createMemoryStore() {
         mode: "memory",
         total: all.length,
         clients: all.filter((r) => r.is_client).length,
+        seed_count: all.filter((r) => r.is_seed).length,
         paid: all.filter((r) => r.payment_status === "paid").length,
-        total_balance_usd: all.reduce((s, r) => s + (r.balance_usd || 0), 0),
-        total_profit_usd: all.reduce((s, r) => s + (r.total_profit_usd || 0), 0),
+        total_balance_usd: all.filter((r) => r.is_client).reduce((s, r) => s + (r.balance_usd || 0), 0),
+        total_profit_usd: all.filter((r) => r.is_client).reduce((s, r) => s + (r.total_profit_usd || 0), 0),
+        seed_balance_usd: all.filter((r) => r.is_seed).reduce((s, r) => s + (r.balance_usd || 0), 0),
         last_sync_at: lastSyncAt,
       };
     },
@@ -99,11 +103,15 @@ async function createPostgresStore() {
           n_accounts       INTEGER DEFAULT 0,
           n_invoices       INTEGER DEFAULT 0,
           is_client        BOOLEAN DEFAULT false,
+          is_seed          BOOLEAN DEFAULT false,
+          via_razorpay     BOOLEAN DEFAULT false,
           signed_up        TEXT,
           synced_at        TIMESTAMPTZ NOT NULL DEFAULT now()
         );
       `);
       await pool.query(`ALTER TABLE cryptx_clients ADD COLUMN IF NOT EXISTS name TEXT;`);
+      await pool.query(`ALTER TABLE cryptx_clients ADD COLUMN IF NOT EXISTS is_seed BOOLEAN DEFAULT false;`);
+      await pool.query(`ALTER TABLE cryptx_clients ADD COLUMN IF NOT EXISTS via_razorpay BOOLEAN DEFAULT false;`);
       await pool.query(`CREATE INDEX IF NOT EXISTS cryptx_clients_is_client_idx ON cryptx_clients (is_client);`);
       return this;
     },
@@ -115,17 +123,18 @@ async function createPostgresStore() {
         await pool.query(
           `INSERT INTO cryptx_clients
              (email, name, cryptx_uid, balance_usd, payment_status, paid_until, activation_paid,
-              total_profit_usd, total_paid_inr, open_inr, n_accounts, n_invoices, is_client, signed_up, synced_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
+              total_profit_usd, total_paid_inr, open_inr, n_accounts, n_invoices, is_client, is_seed, via_razorpay, signed_up, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
            ON CONFLICT (email) DO UPDATE SET
              name=EXCLUDED.name, cryptx_uid=EXCLUDED.cryptx_uid, balance_usd=EXCLUDED.balance_usd,
              payment_status=EXCLUDED.payment_status, paid_until=EXCLUDED.paid_until,
              activation_paid=EXCLUDED.activation_paid, total_profit_usd=EXCLUDED.total_profit_usd,
              total_paid_inr=EXCLUDED.total_paid_inr, open_inr=EXCLUDED.open_inr,
              n_accounts=EXCLUDED.n_accounts, n_invoices=EXCLUDED.n_invoices,
-             is_client=EXCLUDED.is_client, signed_up=EXCLUDED.signed_up, synced_at=now()`,
+             is_client=EXCLUDED.is_client, is_seed=EXCLUDED.is_seed, via_razorpay=EXCLUDED.via_razorpay,
+             signed_up=EXCLUDED.signed_up, synced_at=now()`,
           [c.email, c.name, c.cryptx_uid, c.balance_usd, c.payment_status, c.paid_until, c.activation_paid,
-           c.total_profit_usd, c.total_paid_inr, c.open_inr, c.n_accounts, c.n_invoices, c.is_client, c.signed_up],
+           c.total_profit_usd, c.total_paid_inr, c.open_inr, c.n_accounts, c.n_invoices, c.is_client, c.is_seed, c.via_razorpay, c.signed_up],
         );
         upserted += 1;
       }
@@ -144,9 +153,11 @@ async function createPostgresStore() {
       const r = await pool.query(`
         SELECT COUNT(*)::int AS total,
                COUNT(*) FILTER (WHERE is_client)::int AS clients,
+               COUNT(*) FILTER (WHERE is_seed)::int AS seed_count,
                COUNT(*) FILTER (WHERE payment_status='paid')::int AS paid,
-               COALESCE(SUM(balance_usd),0) AS total_balance_usd,
-               COALESCE(SUM(total_profit_usd),0) AS total_profit_usd,
+               COALESCE(SUM(balance_usd) FILTER (WHERE is_client),0) AS total_balance_usd,
+               COALESCE(SUM(total_profit_usd) FILTER (WHERE is_client),0) AS total_profit_usd,
+               COALESCE(SUM(balance_usd) FILTER (WHERE is_seed),0) AS seed_balance_usd,
                MAX(synced_at) AS last_sync_at
         FROM cryptx_clients`);
       return { mode: "postgres", ...r.rows[0] };

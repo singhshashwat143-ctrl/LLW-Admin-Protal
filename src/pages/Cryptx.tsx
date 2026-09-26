@@ -16,6 +16,8 @@ type CryptxClient = {
   n_accounts: number;
   n_invoices: number;
   is_client: boolean;
+  is_seed?: boolean;
+  via_razorpay?: boolean;
   signed_up: string | null;
   synced_at: string | null;
 };
@@ -24,9 +26,11 @@ type SyncStatus = {
   mode: string;
   total: number;
   clients: number;
+  seed_count?: number;
   paid: number;
   total_balance_usd: number;
   total_profit_usd: number;
+  seed_balance_usd?: number;
   last_sync_at: string | null;
 };
 
@@ -60,11 +64,11 @@ export function CryptxPage() {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <StatCard label="Real Clients" value={String(status?.clients ?? 0)} meta="Paid ₹2,000 activation via Razorpay" />
+        <StatCard label="Customer Deposits" value={usd(status?.total_balance_usd)} meta="Balance of real (paid) clients" />
+        <StatCard label="Customer Profit" value={usd(status?.total_profit_usd)} meta="Profit for real clients" />
+        <StatCard label="Founder Books" value={`${status?.seed_count ?? 0} · ${usd(status?.seed_balance_usd)}`} meta="Seed/engine accounts — not funnel customers" />
         <StatCard label="Synced Records" value={String(status?.total ?? 0)} meta={`Last sync ${lastSync}`} />
-        <StatCard label="Converted Clients" value={String(status?.clients ?? 0)} meta="Active or paid CryptX account" />
-        <StatCard label="Paid" value={String(status?.paid ?? 0)} meta="Payment status = paid" />
-        <StatCard label="Total Balance" value={usd(status?.total_balance_usd)} meta="Across all client accounts" />
-        <StatCard label="Total Profit" value={usd(status?.total_profit_usd)} meta="Gross profit for the share" />
       </div>
 
       <SectionCard title="Client Roster" subtitle="Synced from CryptX. A record becomes a client once it has an active or paid account.">
@@ -80,7 +84,7 @@ export function CryptxPage() {
                 <th>Paid (INR)</th>
                 <th>Accts</th>
                 <th>Invoices</th>
-                <th>Client</th>
+                <th>Type</th>
               </tr>
             </thead>
             <tbody>
@@ -97,7 +101,13 @@ export function CryptxPage() {
                   <td className="font-mono">{c.total_paid_inr ? formatCurrency(c.total_paid_inr) : "—"}</td>
                   <td>{c.n_accounts}</td>
                   <td>{c.n_invoices}</td>
-                  <td>{c.is_client ? "✓" : "—"}</td>
+                  <td>
+                    {c.is_client
+                      ? <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">customer</span>
+                      : c.is_seed
+                        ? <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-500/15 dark:text-slate-300">founder book</span>
+                        : <span className="text-[var(--text-secondary)]">signup</span>}
+                  </td>
                 </tr>
               ))}
               {clients.length === 0 && (
