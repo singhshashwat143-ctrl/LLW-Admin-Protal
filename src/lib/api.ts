@@ -43,7 +43,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function useApi<T>(path: string, initial: T) {
+// `pollMs` re-fetches on an interval so live figures (e.g. CryptX AUM) stay
+// current without a manual reload. A background refresh does not flip `loading`,
+// so the UI updates in place instead of flashing a spinner.
+export function useApi<T>(path: string, initial: T, pollMs = 0) {
   const [data, setData] = useState<T>(initial);
   const [loading, setLoading] = useState(true);
   const [version, setVersion] = useState(0);
@@ -52,17 +55,15 @@ export function useApi<T>(path: string, initial: T) {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    api<T>(path)
-      .then((response) => {
-        if (active) setData(response);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    const load = () => api<T>(path).then((response) => { if (active) setData(response); }).catch(() => undefined);
+    load().finally(() => { if (active) setLoading(false); });
+    let timer: ReturnType<typeof setInterval> | null = null;
+    if (pollMs > 0) timer = setInterval(load, pollMs);
     return () => {
       active = false;
+      if (timer) clearInterval(timer);
     };
-  }, [path, version]);
+  }, [path, version, pollMs]);
 
   return { data, loading, setData, refresh };
 }

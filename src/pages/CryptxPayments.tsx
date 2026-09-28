@@ -41,7 +41,7 @@ function KindTag({ kind }: { kind: string }) {
 }
 
 export function CryptxPaymentsPage() {
-  const { data } = useApi<{ summary: Summary | null; invoices: Invoice[] }>("/api/cryptx-sync/invoices", { summary: null, invoices: [] });
+  const { data } = useApi<{ summary: Summary | null; invoices: Invoice[] }>("/api/cryptx-sync/invoices", { summary: null, invoices: [] }, 60000);
   const s = data.summary;
   const invoices = data.invoices || [];
 

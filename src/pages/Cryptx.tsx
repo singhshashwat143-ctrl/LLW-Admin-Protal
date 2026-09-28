@@ -49,8 +49,8 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export function CryptxPage() {
-  const { data: statusData } = useApi<{ status: SyncStatus | null }>("/api/cryptx-sync/status", { status: null });
-  const { data: clientsData, loading } = useApi<{ clients: CryptxClient[] }>("/api/cryptx-sync/clients", { clients: [] });
+  const { data: statusData } = useApi<{ status: SyncStatus | null }>("/api/cryptx-sync/status", { status: null }, 60000);
+  const { data: clientsData, loading } = useApi<{ clients: CryptxClient[] }>("/api/cryptx-sync/clients", { clients: [] }, 60000);
   const status = statusData.status;
   const clients = clientsData.clients;
   const lastSync = status?.last_sync_at ? new Date(status.last_sync_at).toLocaleString("en-IN") : "—";
@@ -60,7 +60,7 @@ export function CryptxPage() {
       <PageHeader
         eyebrow="CryptX"
         title="CryptX Clients"
-        description="Live sync from cryptx.wealthx.tech — deposit balance, profit, and payment status per client, joined to the funnel by email. Refreshes automatically every 15 minutes."
+        description="Live sync from cryptx.wealthx.tech — deposit balance, profit, and payment status per client, joined to the funnel by email. Pushed every 2 minutes and refreshed on this page every minute."
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
@@ -113,7 +113,7 @@ export function CryptxPage() {
               {clients.length === 0 && (
                 <tr>
                   <td colSpan={9} style={{ textAlign: "center", padding: "28px", color: "var(--text-secondary)" }}>
-                    {loading ? "Loading…" : "No CryptX clients synced yet. The sync runs every 15 minutes."}
+                    {loading ? "Loading…" : "No CryptX clients synced yet. The sync runs every 2 minutes."}
                   </td>
                 </tr>
               )}

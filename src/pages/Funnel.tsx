@@ -43,7 +43,7 @@ function Dot({ on }: { on: boolean }) {
 }
 
 export function FunnelPage() {
-  const { data } = useApi<{ funnel: Funnel | null; journey: Journey[] }>("/api/funnel/overview", { funnel: null, journey: [] });
+  const { data } = useApi<{ funnel: Funnel | null; journey: Journey[] }>("/api/funnel/overview", { funnel: null, journey: [] }, 60000);
   const f = data.funnel;
   const journey = data.journey || [];
   const top = f?.leads || 0;
