@@ -20,6 +20,9 @@ const gitCouponResetToken = String(process.env.RESET_COUPONS_FROM_GIT_TOKEN || "
 const runtimePersistence = await createRuntimePersistence();
 const requiredTeamMembers = [
   { name: "Harikrishnan", email: "harikrishnan@livelongwealth.com", role: "SUPER_ADMIN", manager_name: "", team_name: "Leadership" },
+  { name: "Sharon", email: "sharon@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Sharon Team" },
+  { name: "Amit", email: "amit@livelongwealth.com", role: "BDA", manager_name: "Sharon", team_name: "Sharon Team" },
+  { name: "Sujin", email: "sujin@livelongwealth.com", role: "BDA", manager_name: "Sharon", team_name: "Sharon Team" },
   { name: "Punith Raj S N", email: "punith@livelongwealth.com", role: "BDM", manager_name: "", team_name: "Punith Raj S N Team" },
   { name: "Aman Israr", email: "aman@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
   { name: "Harshitha Gowda", email: "harshitha@livelongwealth.com", role: "BDA", manager_name: "Punith Raj S N", team_name: "Punith Raj S N Team" },
