@@ -9,6 +9,7 @@ import { createHmac } from "node:crypto";
 import { OAuth2Client } from "google-auth-library";
 import { Server } from "socket.io";
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
+import { hlsEnabled, ensureRoomHls, getRoomHls, stopRoomHls } from "./livekit-egress.mjs";
 import { TrackSource } from "@livekit/protocol";
 import { constants, createDashboardStore } from "./data-store.mjs";
 import { createGoogleSheetsMirror } from "./google-sheets-sync.mjs";
@@ -2701,6 +2702,19 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
         canPublishSources: hostCanPublish ? undefined : [TrackSource.MICROPHONE],
       });
 
+    // Hybrid broadcast: view-only attendees watch over LL-HLS instead of a
+    // WebRTC subscription. The host going live starts the room's HLS egress;
+    // attendees receive the playlist URL and skip the SFU entirely.
+    let hlsUrl = "";
+    if (mediaTransport === "livekit" && hlsEnabled()) {
+      const lkConfig = getLiveKitConfig(joined.webinar?.server_no || "") || getLiveKitConfigForRoomName(req.params.roomName);
+      if (role === "HOST") {
+        ensureRoomHls(req.params.roomName, lkConfig).catch(() => undefined);
+      }
+      hlsUrl = getRoomHls(req.params.roomName) || "";
+    }
+    const broadcast = Boolean(hlsUrl) && role === "ATTENDEE";
+
     res.json({
       ok: true,
       webinar: serializeWebinar(req, joined.webinar),
@@ -2720,11 +2734,34 @@ app.post("/api/rooms/:roomName/join", async (req, res) => {
         canPublishAudio,
         canPublishVideo,
         canShareScreen,
+        hls_url: hlsUrl,
+        broadcast,
       },
     });
   } catch (error) {
     res.status(404).json({ ok: false, message: error instanceof Error ? error.message : "Join failed" });
   }
+});
+
+// Manually start / stop the LL-HLS broadcast egress for a room (admin/host).
+// Normally the host going live auto-starts it; this is for testing and control.
+app.post("/api/rooms/:roomName/broadcast/start", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can start a broadcast.");
+  if (!user) return;
+  if (!hlsEnabled()) return res.status(400).json({ ok: false, message: "HLS broadcast is not configured (LIVEKIT_HLS_BASE unset)." });
+  const config = getLiveKitConfigForRoomName(req.params.roomName);
+  if (!config) return res.status(404).json({ ok: false, message: "No LiveKit config for this room." });
+  const hlsUrl = await ensureRoomHls(req.params.roomName, config);
+  if (!hlsUrl) return res.status(500).json({ ok: false, message: "Could not start the broadcast egress." });
+  res.json({ ok: true, hls_url: hlsUrl });
+});
+
+app.post("/api/rooms/:roomName/broadcast/stop", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can stop a broadcast.");
+  if (!user) return;
+  const config = getLiveKitConfigForRoomName(req.params.roomName);
+  const stopped = await stopRoomHls(req.params.roomName, config);
+  res.json({ ok: true, stopped });
 });
 
 app.post("/api/attendance/:id/leave", (req, res) => {

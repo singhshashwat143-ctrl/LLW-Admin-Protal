@@ -118,6 +118,10 @@ type LiveKitJoinInfo = {
   canPublishAudio?: boolean;
   canPublishVideo?: boolean;
   canShareScreen?: boolean;
+  // Hybrid broadcast: view-only attendees watch this LL-HLS playlist instead of
+  // opening a WebRTC subscription, so the SFU never fans out to the audience.
+  hls_url?: string;
+  broadcast?: boolean;
 };
 
 // Host publish caps for large classes (bits per second). See the Room options
@@ -1339,6 +1343,83 @@ function StageVideo({ stream, muted = false }: { stream: MediaStream | null; mut
   }, [stream]);
 
   return <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-video-fill" />;
+}
+
+// View-only attendee player: plays the room's LL-HLS broadcast. Safari plays
+// HLS natively; everywhere else we lazy-load hls.js from the CDN. Retries while
+// the playlist is not up yet (the host may still be going live).
+function HlsStage({ src, label }: { src: string; label: string }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [waiting, setWaiting] = useState(true);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !src) return;
+    let cancelled = false;
+    let hls: { destroy: () => void } | null = null;
+    let retry: number | null = null;
+
+    const markReady = () => { if (!cancelled) setWaiting(false); };
+    el.addEventListener("playing", markReady);
+
+    const native = el.canPlayType("application/vnd.apple.mpegurl");
+    if (native) {
+      el.src = src;
+      el.play().catch(() => undefined);
+      // If the playlist 404s (host not live yet), reload periodically.
+      retry = window.setInterval(() => { if (!cancelled && el.readyState < 2) { el.src = src; el.play().catch(() => undefined); } }, 4000);
+    } else {
+      // Lazy-load hls.js UMD once.
+      const start = () => {
+        const HlsCtor = (window as unknown as { Hls?: any }).Hls;
+        if (cancelled || !HlsCtor) return;
+        if (!HlsCtor.isSupported()) { el.src = src; el.play().catch(() => undefined); return; }
+        hls = new HlsCtor({ lowLatencyMode: true, liveSyncDurationCount: 3, backBufferLength: 30, manifestLoadingMaxRetry: 8, manifestLoadingRetryDelay: 3000 });
+        (hls as any).on(HlsCtor.Events.MEDIA_ATTACHED, () => (hls as any).loadSource(src));
+        (hls as any).on(HlsCtor.Events.ERROR, (_e: unknown, data: any) => {
+          if (data?.fatal && !cancelled) {
+            // Recover from network/media stalls; the host may still be starting.
+            if (data.type === "networkError") setTimeout(() => { try { (hls as any).startLoad(); } catch { /* ignore */ } }, 3000);
+            else { try { (hls as any).recoverMediaError(); } catch { /* ignore */ } }
+          }
+        });
+        (hls as any).attachMedia(el);
+        el.play().catch(() => undefined);
+      };
+      if ((window as unknown as { Hls?: unknown }).Hls) start();
+      else {
+        const existing = document.getElementById("hlsjs-cdn") as HTMLScriptElement | null;
+        if (existing) existing.addEventListener("load", start);
+        else {
+          const s = document.createElement("script");
+          s.id = "hlsjs-cdn";
+          s.src = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js";
+          s.async = true;
+          s.addEventListener("load", start);
+          document.head.appendChild(s);
+        }
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      if (retry) window.clearInterval(retry);
+      el.removeEventListener("playing", markReady);
+      try { hls?.destroy(); } catch { /* ignore */ }
+    };
+  }, [src]);
+
+  return (
+    <div className="gm-hls-stage" style={{ position: "relative", width: "100%", height: "100%" }}>
+      <video ref={videoRef} autoPlay playsInline controls className="gm-video-fill" />
+      {waiting ? (
+        <div className="gm-avatar-stage" style={{ position: "absolute", inset: 0 }}>
+          <div className="gm-avatar-circle">{(label || "L").slice(0, 1).toUpperCase()}</div>
+          <p className="gm-avatar-name">Waiting for {label || "the host"} to go live…</p>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 // Host-camera picture-in-picture the viewer can drag anywhere on the stage and
@@ -3357,6 +3438,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     window.open(WEALTHX_SIGNUP_URL, "_blank", "noopener,noreferrer");
   }, []);
   const livekitMediaEnabled = Boolean(connection.mediaTransport === "livekit" && connection.livekit?.token && connection.livekit?.url);
+  // View-only attendee served over LL-HLS: skip the WebRTC subscription entirely.
+  const broadcastMode = role === "ATTENDEE" && Boolean(connection.livekit?.broadcast) && Boolean(connection.livekit?.hls_url);
+  const hlsUrl = connection.livekit?.hls_url || "";
   const legacyMedia = useClassMedia({
     joined: joined && !livekitMediaEnabled,
     role,
@@ -3369,7 +3453,7 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
     sendMediaState: connection.sendMediaState,
   });
   const livekitMedia = useLiveKitClassMedia({
-    joined: joined && livekitMediaEnabled,
+    joined: joined && livekitMediaEnabled && !broadcastMode,
     role,
     livekit: connection.livekit,
     canPublishAudio: role === "HOST" || connection.legacyMicPermission,
@@ -4336,7 +4420,9 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
             {media.connectionState === "reconnecting" ? (
               <div className="gm-reconnect-banner"><span className="gm-reconnect-dot" />Reconnecting…</div>
             ) : null}
-            {presenting ? (
+            {broadcastMode ? (
+              <HlsStage src={hlsUrl} label={hostLabel} />
+            ) : presenting ? (
               <StageVideo stream={leadScreenStream} muted />
             ) : showRemoteVideo ? (
               <StageVideo stream={leadRemoteStageStream} muted />
