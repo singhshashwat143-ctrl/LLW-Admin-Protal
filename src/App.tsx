@@ -34,6 +34,7 @@ const WebinarAttendPage = lazyNamed(Live, "WebinarAttendPage");
 const WebinarHostPage = lazyNamed(Live, "WebinarHostPage");
 const WebinarRegisterPage = lazyNamed(() => import("./pages/Register"), "WebinarRegisterPage");
 const MarketingPage = lazyNamed(() => import("./pages/Marketing"), "MarketingPage");
+const CampaignsPage = lazyNamed(() => import("./pages/Campaigns"), "CampaignsPage");
 const OrdersPage = lazyNamed(() => import("./pages/Orders"), "OrdersPage");
 const OperationsPage = lazyNamed(() => import("./pages/Operations"), "OperationsPage");
 const PaymentImportsPage = lazyNamed(() => import("./pages/PaymentImports"), "PaymentImportsPage");
@@ -197,6 +198,7 @@ export default function App() {
           {route.pattern === "/payments/subscriptions" && <SubscriptionPaymentsPage />}
           {route.pattern === "/payments/import" && <PaymentImportsPage />}
           {route.pattern === "/marketing" && <MarketingPage />}
+          {route.pattern === "/campaigns" && <CampaignsPage />}
           {route.pattern === "/exports" && <ExportsPage />}
           {route.pattern === "/operations" && <OperationsPage />}
           {route.pattern === "/refunds" && <RefundsPage />}

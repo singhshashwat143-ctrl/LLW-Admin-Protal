@@ -16,6 +16,7 @@ import { createLiveEventStore } from "./live-event-store.mjs";
 import { createReminderStore, REMINDER_OFFSET_MINUTES } from "./reminder-store.mjs";
 import { configurePush, getPublicKey, isPushEnabled, sendPush } from "./push-sender.mjs";
 import { createCryptxSyncStore } from "./cryptx-sync-store.mjs";
+import { createFunnelStore } from "./funnel-store.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +29,7 @@ const io = new Server(httpServer, {
 const store = await createDashboardStore();
 const reminderStore = await createReminderStore();
 const cryptxSyncStore = await createCryptxSyncStore();
+const funnelStore = await createFunnelStore();
 const cryptxSyncToken = String(process.env.CRYPTX_SYNC_TOKEN || "").trim();
 await configurePush();
 const port = Number(process.env.PORT || 4000);
@@ -2282,6 +2284,112 @@ app.get("/api/cryptx-sync/clients", async (req, res) => {
   } catch (error) {
     res.status(500).json({ ok: false, message: String(error?.message || error) });
   }
+});
+
+// --- Campaigns + Leads (sales & marketing funnel) -----------------------
+app.post("/api/campaigns", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can create campaigns.");
+  if (!user) return;
+  const name = String(req.body?.name || "").trim();
+  if (!name) return res.status(400).json({ ok: false, message: "Campaign name is required." });
+  try {
+    const campaign = await funnelStore.createCampaign({
+      name,
+      channel: req.body?.channel,
+      lp: req.body?.lp,
+      whatsapp_group_url: req.body?.whatsapp_group_url,
+      distribution: req.body?.distribution,
+      webinar_id: req.body?.webinar_id,
+    });
+    const adLink = withPublicAbsolute(req, `/go/${campaign.slug}`);
+    res.json({ ok: true, campaign, ad_link: adLink });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
+app.get("/api/campaigns", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view campaigns.");
+  if (!user) return;
+  try { res.json({ ok: true, campaigns: await funnelStore.listCampaigns() }); }
+  catch (error) { res.status(500).json({ ok: false, message: String(error?.message || error) }); }
+});
+
+// Public: capture a lead from a landing-page form (campaign slug ties it back).
+app.post("/api/leads", async (req, res) => {
+  const name = String(req.body?.name || "").trim().slice(0, 120);
+  const email = String(req.body?.email || "").trim().slice(0, 160);
+  const phone = String(req.body?.phone || "").trim().slice(0, 40);
+  const slug = String(req.body?.campaign || req.body?.slug || "").trim();
+  if (!name && !email && !phone) return res.status(400).json({ ok: false, message: "Provide a name, email or phone." });
+  try {
+    const campaign = slug ? await funnelStore.getCampaignBySlug(slug) : null;
+    await funnelStore.upsertLead({
+      name, email, phone,
+      campaign_id: campaign?.id || null,
+      source: String(req.body?.source || "lp"),
+      stage: "new",
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: "Could not save lead." });
+  }
+});
+
+// Admin: import an arbitrary lead CSV (rows already parsed to objects client-side).
+app.post("/api/leads/import", express.json({ limit: "16mb" }), async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can import leads.");
+  if (!user) return;
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+  if (!rows) return res.status(400).json({ ok: false, message: "Expected { rows: [...] }." });
+  try {
+    const result = await funnelStore.importLeads(rows, req.body?.campaign_id || null, req.body?.source || "csv");
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
+app.get("/api/leads", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view leads.");
+  if (!user) return;
+  try {
+    res.json({ ok: true, stats: await funnelStore.leadStats(), leads: await funnelStore.listLeads({ limit: 1000 }) });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
+// Public landing page for a campaign ad link. Captures the lead, then sends them
+// to the WhatsApp group behind the LP (the "behind the LP is a WhatsApp group").
+app.get("/go/:slug", async (req, res) => {
+  let campaign = null;
+  try { campaign = await funnelStore.getCampaignBySlug(req.params.slug); } catch { /* ignore */ }
+  if (!campaign) return res.status(404).type("html").send("<p style='font:16px system-ui;padding:40px'>Campaign not found.</p>");
+  const group = String(campaign.whatsapp_group_url || "").replace(/"/g, "");
+  const title = String(campaign.name || "Join us").replace(/</g, "&lt;");
+  res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>:root{--o:#F7931A}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#fff;color:#161c2d;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px}
+.card{width:100%;max-width:420px;border:1px solid #eee;border-radius:18px;box-shadow:0 10px 40px rgba(0,0,0,.06);overflow:hidden}
+.hd{background:linear-gradient(135deg,#F7931A,#E67C0E);color:#fff;padding:22px 24px}.hd h1{margin:0;font-size:22px}.hd p{margin:6px 0 0;opacity:.9;font-size:13px}
+.bd{padding:20px 24px 24px}label{display:block;font-size:12px;color:#667;margin:10px 0 4px;font-weight:600}
+input{width:100%;padding:12px;border:1px solid #e2e6ec;border-radius:11px;font-size:15px;outline:none}input:focus{border-color:var(--o)}
+button{margin-top:18px;width:100%;padding:13px;background:var(--o);color:#fff;border:0;border-radius:11px;font-size:15px;font-weight:700;cursor:pointer}
+.mut{font-size:12px;color:#8994ac;margin-top:12px;text-align:center}</style></head>
+<body><div class="card"><div class="hd"><h1>${title}</h1><p>Register free — join the group to get the link &amp; reminders.</p></div>
+<div class="bd"><form id="f"><label>Your name</label><input id="name" autocomplete="name" placeholder="Full name">
+<label>WhatsApp number</label><input id="phone" type="tel" autocomplete="tel" placeholder="+91…">
+<label>Email</label><input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+<button type="submit">Register &amp; join the group →</button><p class="mut" id="m">Free · we'll never share your details.</p></form></div></div>
+<script>
+var GROUP=${JSON.stringify(group)}, SLUG=${JSON.stringify(campaign.slug)};
+document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();
+var b={name:name.value.trim(),phone:phone.value.trim(),email:email.value.trim(),campaign:SLUG,source:'lp'};
+if(!b.name&&!b.phone&&!b.email)return;document.getElementById('m').textContent='Registering…';
+fetch('/api/leads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)})
+.finally(function(){ if(GROUP){location.href=GROUP;} else {document.getElementById('m').textContent='Registered! We will be in touch.';} });});
+</script></body></html>`);
 });
 
 // The CryptX conversion funnel: webinar attendees (leads) joined to CryptX by

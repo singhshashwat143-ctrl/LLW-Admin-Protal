@@ -15,6 +15,8 @@ const routes = [
   "/payments",
   "/payments/subscriptions",
   "/payments/import",
+  "/marketing",
+  "/campaigns",
   "/exports",
   "/operations",
   "/refunds",

@@ -7,8 +7,9 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const sections = [
   { label: "CryptX", items: [{ path: "/", name: "Conversion Funnel" }, { path: "/cryptx", name: "CryptX Clients" }, { path: "/cryptx-payments", name: "Payments & Profit Share" }] },
+  { label: "Marketing", items: [{ path: "/campaigns", name: "Campaigns & Leads" }, { path: "/marketing", name: "Marketing Spend" }] },
   { label: "Webinars", items: [{ path: "/live", name: "Live Classes" }, { path: "/webinars", name: "Webinars" }] },
-  { label: "Operations", items: [{ path: "/students", name: "Leads / Students" }, { path: "/orders", name: "Orders" }, { path: "/payments", name: "Payments" }, { path: "/payments/subscriptions", name: "Subscriptions" }, { path: "/payments/import", name: "Payment Import" }, { path: "/exports", name: "Exports" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
+  { label: "Operations", items: [{ path: "/students", name: "Leads / Students" }, { path: "/orders", name: "Orders" }, { path: "/exports", name: "Exports" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
 ];
 
 export function Sidebar({
