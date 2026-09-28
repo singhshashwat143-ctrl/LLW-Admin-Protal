@@ -6,7 +6,7 @@ import type { ThemeMode } from "../lib/theme";
 import { ThemeToggle } from "./ThemeToggle";
 
 const sections = [
-  { label: "CryptX", items: [{ path: "/", name: "Conversion Funnel" }, { path: "/cryptx", name: "CryptX Clients" }] },
+  { label: "CryptX", items: [{ path: "/", name: "Conversion Funnel" }, { path: "/cryptx", name: "CryptX Clients" }, { path: "/cryptx-payments", name: "Payments & Profit Share" }] },
   { label: "Webinars", items: [{ path: "/live", name: "Live Classes" }, { path: "/webinars", name: "Webinars" }] },
   { label: "Operations", items: [{ path: "/students", name: "Leads / Students" }, { path: "/orders", name: "Orders" }, { path: "/payments", name: "Payments" }, { path: "/payments/subscriptions", name: "Subscriptions" }, { path: "/payments/import", name: "Payment Import" }, { path: "/exports", name: "Exports" }, { path: "/team", name: "Team" }, { path: "/links", name: "Links" }, { path: "/settings", name: "Settings" }] },
 ];

@@ -36,12 +36,61 @@ function normalizeClient(row = {}) {
   };
 }
 
+function normalizeInvoice(row = {}) {
+  if (row.id === undefined || row.id === null) return null;
+  const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+  return {
+    id: Number(row.id),
+    email: row.email ? String(row.email).trim().toLowerCase() : null,
+    name: row.name ? String(row.name) : null,
+    kind: String(row.kind || ""),
+    period: row.period || "",
+    amount_inr: num(row.amount_inr) || 0,
+    profit_usd: num(row.profit_usd),
+    status: String(row.status || "open"),
+    rzp_payment_id: row.rzp_payment_id || null,
+    rzp_order_id: row.rzp_order_id || null,
+    created_at: row.created_at || null,
+    paid_at: row.paid_at || null,
+  };
+}
+
+function summarizeInvoices(rows) {
+  const paid = rows.filter((r) => r.status === "paid");
+  const sum = (list, f) => list.reduce((s, r) => s + (Number(r[f]) || 0), 0);
+  const byKind = (kind) => paid.filter((r) => r.kind === kind);
+  return {
+    total: rows.length,
+    paid_count: paid.length,
+    open_count: rows.length - paid.length,
+    revenue_inr: sum(paid, "amount_inr"),
+    open_inr: sum(rows.filter((r) => r.status !== "paid"), "amount_inr"),
+    activation_count: byKind("activation").length,
+    activation_inr: sum(byKind("activation"), "amount_inr"),
+    profit_share_count: byKind("profit_share").length,
+    profit_share_inr: sum(byKind("profit_share"), "amount_inr"),
+    profit_share_profit_usd: sum(byKind("profit_share"), "profit_usd"),
+  };
+}
+
 function createMemoryStore() {
   const rows = new Map();
+  const invRows = new Map();
   let lastSyncAt = null;
   return {
     mode: "memory",
     async init() { return this; },
+    async upsertInvoices(invoices = []) {
+      let n = 0;
+      for (const raw of invoices) {
+        const iv = normalizeInvoice(raw);
+        if (!iv) continue;
+        invRows.set(iv.id, iv); n += 1;
+      }
+      return { upserted: n };
+    },
+    async listInvoices() { return [...invRows.values()].sort((a, b) => b.id - a.id); },
+    async invoiceSummary() { return summarizeInvoices([...invRows.values()]); },
     async upsertMany(clients = []) {
       let n = 0;
       for (const raw of clients) {
@@ -113,7 +162,53 @@ async function createPostgresStore() {
       await pool.query(`ALTER TABLE cryptx_clients ADD COLUMN IF NOT EXISTS is_seed BOOLEAN DEFAULT false;`);
       await pool.query(`ALTER TABLE cryptx_clients ADD COLUMN IF NOT EXISTS via_razorpay BOOLEAN DEFAULT false;`);
       await pool.query(`CREATE INDEX IF NOT EXISTS cryptx_clients_is_client_idx ON cryptx_clients (is_client);`);
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS cryptx_invoices (
+          id             INTEGER PRIMARY KEY,
+          email          TEXT,
+          name           TEXT,
+          kind           TEXT,
+          period         TEXT,
+          amount_inr     DOUBLE PRECISION DEFAULT 0,
+          profit_usd     DOUBLE PRECISION,
+          status         TEXT DEFAULT 'open',
+          rzp_payment_id TEXT,
+          rzp_order_id   TEXT,
+          created_at     TEXT,
+          paid_at        TEXT,
+          synced_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `);
       return this;
+    },
+
+    async upsertInvoices(invoices = []) {
+      const normalized = invoices.map(normalizeInvoice).filter(Boolean);
+      let upserted = 0;
+      for (const iv of normalized) {
+        await pool.query(
+          `INSERT INTO cryptx_invoices
+             (id, email, name, kind, period, amount_inr, profit_usd, status, rzp_payment_id, rzp_order_id, created_at, paid_at, synced_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+           ON CONFLICT (id) DO UPDATE SET
+             email=EXCLUDED.email, name=EXCLUDED.name, kind=EXCLUDED.kind, period=EXCLUDED.period,
+             amount_inr=EXCLUDED.amount_inr, profit_usd=EXCLUDED.profit_usd, status=EXCLUDED.status,
+             rzp_payment_id=EXCLUDED.rzp_payment_id, rzp_order_id=EXCLUDED.rzp_order_id,
+             created_at=EXCLUDED.created_at, paid_at=EXCLUDED.paid_at, synced_at=now()`,
+          [iv.id, iv.email, iv.name, iv.kind, iv.period, iv.amount_inr, iv.profit_usd, iv.status,
+           iv.rzp_payment_id, iv.rzp_order_id, iv.created_at, iv.paid_at],
+        );
+        upserted += 1;
+      }
+      return { upserted };
+    },
+    async listInvoices() {
+      const r = await pool.query(`SELECT * FROM cryptx_invoices ORDER BY id DESC`);
+      return r.rows;
+    },
+    async invoiceSummary() {
+      const r = await pool.query(`SELECT * FROM cryptx_invoices`);
+      return summarizeInvoices(r.rows);
     },
 
     async upsertMany(clients = []) {

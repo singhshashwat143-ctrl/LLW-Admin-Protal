@@ -2238,11 +2238,27 @@ app.post("/api/cryptx-sync/ingest", express.json({ limit: "4mb" }), async (req, 
   }
   try {
     const result = await cryptxSyncStore.upsertMany(clients);
-    console.log(`[cryptx-sync] ingested ${result.upserted}/${clients.length} clients`);
-    res.json({ ok: true, upserted: result.upserted, received: clients.length });
+    let invoicesUpserted = 0;
+    if (Array.isArray(req.body?.invoices)) {
+      const ir = await cryptxSyncStore.upsertInvoices(req.body.invoices);
+      invoicesUpserted = ir.upserted;
+    }
+    console.log(`[cryptx-sync] ingested ${result.upserted}/${clients.length} clients, ${invoicesUpserted} invoices`);
+    res.json({ ok: true, upserted: result.upserted, received: clients.length, invoices: invoicesUpserted });
   } catch (error) {
     console.error("[cryptx-sync] ingest failed:", error?.message || error);
     res.status(500).json({ ok: false, message: "Ingest failed." });
+  }
+});
+
+// Admin: CryptX Razorpay payments + profit-sharing invoices (list + summary).
+app.get("/api/cryptx-sync/invoices", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view CryptX payments.");
+  if (!user) return;
+  try {
+    res.json({ ok: true, summary: await cryptxSyncStore.invoiceSummary(), invoices: await cryptxSyncStore.listInvoices() });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
   }
 });
 

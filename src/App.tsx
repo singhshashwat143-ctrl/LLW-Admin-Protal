@@ -45,6 +45,7 @@ const PrivacyPolicyPage = lazyNamed(() => import("./pages/PrivacyPolicy"), "Priv
 const OnboardingPage = lazyNamed(() => import("./pages/Onboarding"), "OnboardingPage");
 const ProductsPage = lazyNamed(() => import("./pages/Products"), "ProductsPage");
 const CryptxPage = lazyNamed(() => import("./pages/Cryptx"), "CryptxPage");
+const CryptxPaymentsPage = lazyNamed(() => import("./pages/CryptxPayments"), "CryptxPaymentsPage");
 const FunnelPage = lazyNamed(() => import("./pages/Funnel"), "FunnelPage");
 const RefundsPage = lazyNamed(() => import("./pages/Refunds"), "RefundsPage");
 const SaleStatsPage = lazyNamed(() => import("./pages/SaleStats"), "SaleStatsPage");
@@ -202,6 +203,7 @@ export default function App() {
           {route.pattern === "/teachers" && <InstructorsPage />}
           {route.pattern === "/products" && <ProductsPage />}
           {route.pattern === "/cryptx" && <CryptxPage />}
+          {route.pattern === "/cryptx-payments" && <CryptxPaymentsPage />}
           {route.pattern === "/students" && <StudentsPage />}
           {route.pattern === "/orders" && <OrdersPage />}
           {route.pattern === "/onboarding" && <OnboardingPage />}

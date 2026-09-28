@@ -21,6 +21,7 @@ const routes = [
   "/teachers",
   "/products",
   "/cryptx",
+  "/cryptx-payments",
   "/students",
   "/orders",
   "/onboarding",
