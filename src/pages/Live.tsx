@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import PdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
@@ -1305,9 +1305,37 @@ function StageVideo({ stream, muted = false }: { stream: MediaStream | null; mut
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (!videoRef.current) return;
-    videoRef.current.srcObject = stream;
-    videoRef.current.play().catch(() => undefined);
+    const el = videoRef.current;
+    if (!el) return;
+    let cancelled = false;
+    if (el.srcObject !== stream) el.srcObject = stream;
+    const tryPlay = () => { el.play().catch(() => undefined); };
+    // Re-bind srcObject and replay. A LiveKit reconnect can leave the element
+    // paused at 0×0 with a live track behind it (the reported blank screen that
+    // never recovers); events + the watchdog below both route through here.
+    const recover = () => {
+      if (cancelled || !stream) return;
+      try { if (el.srcObject !== stream) el.srcObject = stream; } catch { /* ignore */ }
+      tryPlay();
+    };
+    tryPlay();
+    el.addEventListener("stalled", recover);
+    el.addEventListener("waiting", recover);
+    el.addEventListener("emptied", recover);
+    el.addEventListener("pause", tryPlay);
+    const watchdog = window.setInterval(() => {
+      if (cancelled || !stream) return;
+      const live = stream.getVideoTracks().some((track) => track.readyState === "live");
+      if (live && (el.paused || el.readyState < 2 || el.videoWidth === 0)) recover();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(watchdog);
+      el.removeEventListener("stalled", recover);
+      el.removeEventListener("waiting", recover);
+      el.removeEventListener("emptied", recover);
+      el.removeEventListener("pause", tryPlay);
+    };
   }, [stream]);
 
   return <video ref={videoRef} autoPlay playsInline muted={muted} className="gm-video-fill" />;
@@ -2410,18 +2438,53 @@ function useLiveKitClassMedia({
       syncRemoteDerivedStreams();
     };
 
+    const sourceKey = (source: string) =>
+      source === LiveKitTrack.Source.Camera ? "camera"
+        : source === LiveKitTrack.Source.ScreenShare ? "screen"
+          : source === LiveKitTrack.Source.ScreenShareAudio ? "screenAudio"
+            : source === LiveKitTrack.Source.Microphone ? "microphone"
+              : null;
+
+    // Rebuild our remote-track refs from the CURRENT room state, pulling the
+    // *fresh* mediaStreamTrack off each subscribed publication. After a LiveKit
+    // reconnect the underlying MediaStreamTracks are swapped, so the refs we
+    // cached on first subscribe go stale and render a blank tile (the reported
+    // "screen-share stayed blank after reconnect"). Re-reading here heals that.
+    // Also used by a periodic watchdog to catch a track that is subscribed but
+    // silently producing no frames. Only touches state when something changed.
+    const resyncFromRoom = () => {
+      const r = roomRef.current;
+      if (!r) return;
+      let changed = false;
+      const present = new Set<string>();
+      r.remoteParticipants.forEach((participant) => {
+        present.add(participant.identity);
+        const bucket = { ...(remoteTrackRefs.current.get(participant.identity) || {}) } as {
+          microphone?: MediaStreamTrack | null; screenAudio?: MediaStreamTrack | null;
+          camera?: MediaStreamTrack | null; screen?: MediaStreamTrack | null;
+        };
+        participant.trackPublications.forEach((publication) => {
+          const key = sourceKey(publication.source);
+          if (!key) return;
+          const fresh = publication.isSubscribed && publication.track
+            ? publication.track.mediaStreamTrack
+            : (bucket[key] ?? null);
+          if (bucket[key] !== fresh) { bucket[key] = fresh; changed = true; }
+        });
+        remoteTrackRefs.current.set(participant.identity, bucket);
+      });
+      remoteTrackRefs.current.forEach((_value, identity) => {
+        if (!present.has(identity)) { remoteTrackRefs.current.delete(identity); changed = true; }
+      });
+      if (changed) syncRemoteDerivedStreams();
+    };
+
     room.on(RoomEvent.Connected, () => {
       if (!active) return;
       setConnectionState("connected");
       syncLocalStreams();
       syncActiveSpeakers();
-      room.remoteParticipants.forEach((participant) => {
-        participant.trackPublications.forEach((publication) => {
-          const remoteTrack = publication.track;
-          if (!remoteTrack) return;
-          updateRemoteTrack(participant.identity, publication.source, remoteTrack.mediaStreamTrack);
-        });
-      });
+      resyncFromRoom();
     });
     room.on(RoomEvent.Reconnecting, () => {
       if (active) setConnectionState("reconnecting");
@@ -2434,7 +2497,8 @@ function useLiveKitClassMedia({
       setConnectionState("connected");
       syncLocalStreams();
       syncActiveSpeakers();
-      syncRemoteDerivedStreams();
+      // Pull fresh MediaStreamTracks — the reconnect swapped the old ones.
+      resyncFromRoom();
     });
     room.on(RoomEvent.Disconnected, () => {
       if (active) setConnectionState("disconnected");
@@ -2492,6 +2556,14 @@ function useLiveKitClassMedia({
       if (active) syncLocalStreams();
     });
 
+    // Frame watchdog: while connected, periodically reconcile our track refs
+    // with the room's real publications. Cheap (only re-renders on an actual
+    // change) and it self-heals a subscribed-but-blank track that no LiveKit
+    // event fired for — the failure mode the incident report flagged.
+    const watchdog = window.setInterval(() => {
+      if (active && roomRef.current?.state === LiveKitConnectionState.Connected) resyncFromRoom();
+    }, 5000);
+
     room.connect(livekit.url, livekit.token)
       .then(() => {
         if (!active) return;
@@ -2507,6 +2579,7 @@ function useLiveKitClassMedia({
 
     return () => {
       active = false;
+      window.clearInterval(watchdog);
       room.disconnect(true).catch(() => undefined);
       roomRef.current = null;
       remoteTrackRefs.current.clear();
@@ -4935,10 +5008,39 @@ function WebinarRoomPage({ role, roomName }: { role: "HOST" | "ATTENDEE"; roomNa
   );
 }
 
+// A render or WebRTC exception inside the room used to blank the whole page
+// (the reported white screen). This boundary catches it and shows a reconnect
+// panel instead, so the attendee can rejoin rather than staring at nothing.
+class RoomErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: unknown) { console.error("[room] render crash", error, info); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#0b0f1a", color: "#fff", padding: 24, textAlign: "center" }}>
+        <div style={{ maxWidth: 420 }}>
+          <h2 style={{ margin: "0 0 8px", fontSize: 22 }}>Connection interrupted</h2>
+          <p style={{ margin: "0 0 18px", opacity: 0.8, fontSize: 14, lineHeight: 1.5 }}>
+            The live room hit an error. Your seat is still reserved — reconnect to rejoin the session.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            style={{ padding: "12px 22px", background: "#F7931A", color: "#fff", border: 0, borderRadius: 11, fontSize: 15, fontWeight: 700, cursor: "pointer" }}
+          >
+            Reconnect
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
 export function WebinarAttendPage({ roomName }: { roomName: string }) {
-  return <WebinarRoomPage role="ATTENDEE" roomName={roomName} />;
+  return <RoomErrorBoundary><WebinarRoomPage role="ATTENDEE" roomName={roomName} /></RoomErrorBoundary>;
 }
 
 export function WebinarHostPage({ roomName }: { roomName: string }) {
-  return <WebinarRoomPage role="HOST" roomName={roomName} />;
+  return <RoomErrorBoundary><WebinarRoomPage role="HOST" roomName={roomName} /></RoomErrorBoundary>;
 }
