@@ -2456,6 +2456,129 @@ app.get("/api/funnel/overview", async (req, res) => {
   }
 });
 
+// Phase 3+4: per-webinar attendance timeline (minute-by-minute concurrency,
+// joins/leaves so the UI can paint drop-off in red, peak, retention) plus the
+// post-webinar conversion for that session's attendees (paid %, ARPU, AOV).
+app.get("/api/funnel/webinar-timeline", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can view webinar analytics.");
+  if (!user) return;
+  try {
+    const all = (store.data.webinarAttendance || []).filter((a) => String(a.role || "").toUpperCase() === "ATTENDEE");
+    // Sessions that actually have attendance, newest first, for the picker.
+    const bySession = new Map();
+    for (const a of all) {
+      const sid = a.session_id || a.webinar_id || "unknown";
+      const arr = bySession.get(sid) || [];
+      arr.push(a);
+      bySession.set(sid, arr);
+    }
+    const sessionMeta = (sid) => {
+      const s = (store.data.webinarSessions || []).find((x) => x.id === sid) || null;
+      const w = s ? (store.data.webinars || []).find((x) => x.id === s.webinar_id) : null;
+      return { title: s?.title || w?.title || "Webinar", webinar: w?.title || "" };
+    };
+    const sessions = [...bySession.entries()].map(([id, rows]) => {
+      const emails = new Set(rows.map((r) => String(r.email || "").toLowerCase()).filter(Boolean));
+      const firstJoin = rows.reduce((min, r) => {
+        const t = new Date(r.join_time || r.created_at || 0).getTime();
+        return t && (!min || t < min) ? t : min;
+      }, 0);
+      const meta = sessionMeta(id);
+      return { id, title: meta.title, webinar: meta.webinar, when: firstJoin ? new Date(firstJoin).toISOString() : null, attendees: emails.size };
+    }).sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
+
+    const selected = String(req.query.session || "") || (sessions[0]?.id || "");
+    const rows = bySession.get(selected) || [];
+
+    // Minute-by-minute concurrency curve.
+    const times = rows.map((r) => new Date(r.join_time || r.created_at || 0).getTime()).filter(Boolean);
+    const start = times.length ? Math.min(...times) : 0;
+    const now = Date.now();
+    const end = rows.reduce((max, r) => {
+      const t = r.leave_time ? new Date(r.leave_time).getTime() : now;
+      return t > max ? t : max;
+    }, start);
+    const totalMin = start ? Math.min(720, Math.max(1, Math.ceil((end - start) / 60000))) : 0;
+    const buckets = Array.from({ length: totalMin + 1 }, () => ({ concurrent: 0, joined: 0, left: 0 }));
+    for (const r of rows) {
+      const j = new Date(r.join_time || r.created_at || 0).getTime();
+      if (!j) continue;
+      const jm = Math.max(0, Math.min(totalMin, Math.floor((j - start) / 60000)));
+      const lm = r.leave_time ? Math.max(jm, Math.min(totalMin, Math.floor((new Date(r.leave_time).getTime() - start) / 60000))) : totalMin;
+      buckets[jm].joined += 1;
+      if (r.leave_time && lm < totalMin) buckets[lm].left += 1;
+      for (let m = jm; m < lm; m += 1) buckets[m].concurrent += 1;
+      buckets[lm].concurrent += r.leave_time ? 0 : 1;
+    }
+    let peak = 0, peakMinute = 0;
+    buckets.forEach((b, m) => { if (b.concurrent > peak) { peak = b.concurrent; peakMinute = m; } });
+    const at = (frac) => buckets[Math.min(totalMin, Math.round(totalMin * frac))]?.concurrent || 0;
+    const retention = peak ? {
+      at25: Math.round((at(0.25) / peak) * 100),
+      at50: Math.round((at(0.5) / peak) * 100),
+      at75: Math.round((at(0.75) / peak) * 100),
+      at100: Math.round((at(1) / peak) * 100),
+    } : { at25: 0, at50: 0, at75: 0, at100: 0 };
+    const durations = rows.map((r) => Number(r.duration_mins || 0)).filter((d) => d > 0);
+    const avgDuration = durations.length ? Math.round(durations.reduce((s, d) => s + d, 0) / durations.length) : 0;
+
+    // Conversion for this session's attendees.
+    const emails = new Set(rows.map((r) => String(r.email || "").toLowerCase()).filter(Boolean));
+    const [clients, invoices] = await Promise.all([cryptxSyncStore.list(), cryptxSyncStore.listInvoices()]);
+    const cxByEmail = new Map(clients.map((c) => [String(c.email || "").toLowerCase(), c]));
+    let signups = 0, paidCustomers = 0, deposited = 0, balanceUsd = 0, revenueInr = 0;
+    const paidEmails = new Set();
+    for (const inv of invoices) {
+      const em = String(inv.email || "").toLowerCase();
+      if (!emails.has(em)) continue;
+      if (String(inv.status || "").toLowerCase() === "paid") {
+        revenueInr += Number(inv.amount_inr || 0);
+        paidEmails.add(em);
+      }
+    }
+    for (const em of emails) {
+      const cx = cxByEmail.get(em);
+      if (cx) {
+        signups += 1;
+        if (cx.is_client) paidCustomers += 1;
+        if ((cx.balance_usd || 0) > 0) { deposited += 1; balanceUsd += Number(cx.balance_usd || 0); }
+      }
+    }
+    // Prefer invoice-derived paying count when present, else CryptX client flag.
+    const payers = Math.max(paidEmails.size, paidCustomers);
+    const attendees = emails.size;
+
+    res.json({
+      ok: true,
+      sessions,
+      selected,
+      timeline: {
+        start: start ? new Date(start).toISOString() : null,
+        total_minutes: totalMin,
+        minutes: buckets.map((b, m) => ({ m, concurrent: b.concurrent, joined: b.joined, left: b.left })),
+        peak, peak_minute: peakMinute,
+        total_attendees: attendees,
+        avg_duration_mins: avgDuration,
+        retention,
+      },
+      conversion: {
+        attendees,
+        signups,
+        paid: payers,
+        paid_pct: attendees ? Math.round((payers / attendees) * 1000) / 10 : 0,
+        revenue_inr: revenueInr,
+        arpu_inr: attendees ? Math.round(revenueInr / attendees) : 0,
+        aov_inr: payers ? Math.round(revenueInr / payers) : 0,
+        deposited,
+        total_balance_usd: Math.round(balanceUsd),
+      },
+    });
+  } catch (error) {
+    console.error("[funnel] webinar-timeline failed:", error?.message || error);
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
 // Live celebration feed for the WealthX hand-holding webinar ONLY. Returns
 // merged signup + broker-connection events (names only) so the room can pop a
 // confetti toast when someone opens a WealthX account or connects Delta on CryptX.

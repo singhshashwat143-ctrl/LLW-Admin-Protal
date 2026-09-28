@@ -59,6 +59,7 @@ const routePermissions: Partial<Record<string, AppPermission>> = {
   "/operations": "manage_operations",
   "/marketing": "manage_marketing",
   "/campaigns": "manage_marketing",
+  "/webinar-analytics": "manage_marketing",
 };
 const revenueRestrictedRoutes = new Set([
   "/live",

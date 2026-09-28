@@ -17,6 +17,7 @@ const routes = [
   "/payments/import",
   "/marketing",
   "/campaigns",
+  "/webinar-analytics",
   "/exports",
   "/operations",
   "/refunds",
