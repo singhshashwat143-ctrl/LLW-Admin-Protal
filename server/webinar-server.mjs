@@ -203,6 +203,13 @@ const roomPresence = new Map();
 const roomChats = new Map();
 const socketRoomMeta = new Map();
 const roomParticipantBroadcastTimers = new Map();
+// Presence deltas: a monotonic revision per room + a buffer of pending deltas.
+// Instead of broadcasting the whole participant array to every socket on every
+// change (O(N^2) data that saturated the event loop at ~150 attendees), we send
+// tiny join/update/leave deltas, batched on the same throttle, with a revision
+// so a client that misses one can ask for a fresh snapshot.
+const roomRevision = new Map();
+const roomDeltaBuffer = new Map();
 const liveRuntimeReloadMs = Math.max(Number(process.env.GOOGLE_SHEETS_RUNTIME_REFRESH_MS || 120000) || 120000, 30000);
 const liveEventStore = await createLiveEventStore();
 const liveBufferRooms = new Set();
@@ -1788,27 +1795,55 @@ function roomSnapshot(roomName, viewer = {}, limit = ROOM_SNAPSHOT_MESSAGE_WINDO
   return {
     participants: participantsForViewer(roomName, viewer),
     messages: getVisibleRoomMessages(roomName, viewer, limit),
+    rev: roomRevision.get(roomName) || 0,
   };
 }
 
-function emitRoomParticipants(roomName) {
-  const participants = roomPresence.get(roomName) || [];
-  io.to(roomRoleChannel(roomName, "HOST")).emit("room:participants", participants);
-  io.to(roomRoleChannel(roomName, "ATTENDEE")).emit("room:participants", participants.map(toPublicParticipant));
+function nextRevision(roomName) {
+  const rev = (roomRevision.get(roomName) || 0) + 1;
+  roomRevision.set(roomName, rev);
+  return rev;
 }
 
-function scheduleRoomParticipants(roomName, delayMs = presenceBroadcastDelayMs(roomName)) {
-  if (roomParticipantBroadcastTimers.has(roomName)) {
-    // Throttle, not debounce: let the already-scheduled broadcast fire on time
-    // and pick up this change too.
-    return;
-  }
+// Queue a presence delta and schedule a batched flush. Deltas coalesce over the
+// same size-scaled window the full broadcast used, so a join rush becomes a few
+// small batches instead of hundreds of full-array waves.
+function queuePresenceDelta(roomName, delta) {
+  const rev = nextRevision(roomName);
+  const buffer = roomDeltaBuffer.get(roomName) || [];
+  buffer.push({ ...delta, rev });
+  roomDeltaBuffer.set(roomName, buffer);
+  if (roomParticipantBroadcastTimers.has(roomName)) return; // throttle, not debounce
   const timer = setTimeout(() => {
     roomParticipantBroadcastTimers.delete(roomName);
-    emitRoomParticipants(roomName);
-  }, delayMs);
+    flushPresenceDeltas(roomName);
+  }, presenceBroadcastDelayMs(roomName));
   timer.unref?.();
   roomParticipantBroadcastTimers.set(roomName, timer);
+}
+
+// A "join" delta carries a full participant to hosts and a stripped one to
+// attendees; update/leave deltas are identical for both. headRev lets a client
+// confirm it applied everything up to the room's current revision.
+function flushPresenceDeltas(roomName) {
+  const buffer = roomDeltaBuffer.get(roomName) || [];
+  if (!buffer.length) return;
+  roomDeltaBuffer.set(roomName, []);
+  const headRev = buffer[buffer.length - 1].rev;
+  const hostDeltas = buffer;
+  const attendeeDeltas = buffer.map((delta) =>
+    delta.type === "join" && delta.participant
+      ? { ...delta, participant: toPublicParticipant(delta.participant) }
+      : delta,
+  );
+  io.to(roomRoleChannel(roomName, "HOST")).emit("presence:delta", { deltas: hostDeltas, headRev });
+  io.to(roomRoleChannel(roomName, "ATTENDEE")).emit("presence:delta", { deltas: attendeeDeltas, headRev });
+}
+
+// Compatibility shim: callers that just want "presence changed, re-sync" (the
+// mass clear on meeting end) push a reset delta so clients drop to an empty list.
+function scheduleRoomParticipants(roomName) {
+  queuePresenceDelta(roomName, { type: "reset" });
 }
 
 function emitRoomSnapshotToSocket(socket) {
@@ -4125,7 +4160,7 @@ io.on("connection", async (socket) => {
     participant,
   ]);
   emitRoomSnapshotToSocket(socket);
-  scheduleRoomParticipants(roomName);
+  queuePresenceDelta(roomName, { type: "join", participant });
 
   socket.on("chat:send", (payload) => {
     const messageType = normalizeRoomMessageType(payload?.messageType);
@@ -4179,7 +4214,15 @@ io.on("connection", async (socket) => {
       });
     }
 
-    scheduleRoomParticipants(roomName);
+    queuePresenceDelta(roomName, {
+      type: "update",
+      socketId: socket.id,
+      changes: {
+        isMicOn: Boolean(payload?.isMicOn),
+        isCameraOn: Boolean(payload?.isCameraOn),
+        isScreenSharing: Boolean(payload?.isScreenSharing),
+      },
+    });
   });
 
   socket.on("participant:hand-raise", (payload) => {
@@ -4192,7 +4235,7 @@ io.on("connection", async (socket) => {
       };
     });
     roomPresence.set(roomName, nextParticipants);
-    scheduleRoomParticipants(roomName);
+    queuePresenceDelta(roomName, { type: "update", socketId: socket.id, changes: { isHandRaised: Boolean(payload?.isHandRaised) } });
   });
 
   socket.on("participant:request-unmute", (payload) => {
@@ -4247,7 +4290,7 @@ io.on("connection", async (socket) => {
         roomPresence.set(roomName, participants.map((item) => (
           item.socketId === targetSocketId ? { ...item, isMicOn: false } : item
         )));
-        scheduleRoomParticipants(roomName);
+        queuePresenceDelta(roomName, { type: "update", socketId: targetSocketId, changes: { isMicOn: false } });
       })
       .catch((error) => {
         socket.emit("room:toast", {
@@ -4272,7 +4315,7 @@ io.on("connection", async (socket) => {
     }
     roomPresence.set(roomName, (roomPresence.get(roomName) || []).filter((item) => item.socketId !== targetSocketId));
     socketRoomMeta.delete(targetSocketId);
-    scheduleRoomParticipants(roomName);
+    queuePresenceDelta(roomName, { type: "leave", socketId: targetSocketId });
     targetSocket.disconnect(true);
   });
 
@@ -4376,8 +4419,12 @@ io.on("connection", async (socket) => {
         });
       }
     }
-    scheduleRoomParticipants(roomName);
+    queuePresenceDelta(roomName, { type: "leave", socketId: socket.id });
   });
+
+  // A client that detects a revision gap (missed a delta batch) asks for a
+  // fresh snapshot instead of drifting out of sync.
+  socket.on("presence:resync", () => emitRoomSnapshotToSocket(socket));
 });
 
 if (existsSync(distPath)) {

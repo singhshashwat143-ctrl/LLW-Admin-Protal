@@ -125,10 +125,21 @@ type LiveKitJoinInfo = {
 const LARGE_CLASS_CAMERA_MAX_BITRATE = 800_000;
 const LARGE_CLASS_SCREEN_MAX_BITRATE = 1_200_000;
 
+type RoomParticipant = { socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string };
 type RoomSnapshot = {
-  participants: Array<{ socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string }>;
+  participants: Array<RoomParticipant>;
   messages: Array<{ id: string; role: string; name: string; text: string; createdAt: string; target?: "ALL" | "HOST"; messageType?: RoomMessageType; highlight?: boolean; attendanceId?: string; attachment?: ChatAttachment | null }>;
+  rev?: number;
 };
+
+// Incremental presence updates (see the server's queuePresenceDelta): tiny
+// join/update/leave/reset events batched with a monotonic revision, replacing
+// the full-roster broadcast that saturated the event loop past ~150 attendees.
+type PresenceDelta =
+  | { type: "join"; rev: number; participant: RoomParticipant }
+  | { type: "update"; rev: number; socketId: string; changes: Partial<RoomParticipant> }
+  | { type: "leave"; rev: number; socketId: string }
+  | { type: "reset"; rev: number };
 
 type StageCandidate = {
   id: string;
@@ -898,6 +909,7 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
   const [joinError, setJoinError] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const attendanceIdRef = useRef("");
+  const revRef = useRef(0);
 
   useEffect(() => {
     api<{ webinar: Webinar; session: Session; room: RoomSnapshot }>(`/api/rooms/${roomName}`).then((response) => {
@@ -943,9 +955,37 @@ function useRoomConnection(role: "HOST" | "ATTENDEE", roomName: string, joinPayl
         },
       });
 
-      socket.on("room:snapshot", (snapshot: RoomSnapshot) => setRoom(snapshot));
-      socket.on("room:participants", (participants: RoomSnapshot["participants"]) => {
-        setRoom((current) => ({ ...current, participants }));
+      socket.on("room:snapshot", (snapshot: RoomSnapshot) => {
+        revRef.current = snapshot.rev ?? 0;
+        setRoom(snapshot);
+      });
+      // Apply presence deltas in revision order; on a detected gap, ask the
+      // server for a fresh snapshot rather than drifting out of sync.
+      socket.on("presence:delta", (batch: { deltas: PresenceDelta[]; headRev: number }) => {
+        const deltas = batch?.deltas;
+        const headRev = batch?.headRev;
+        if (!Array.isArray(deltas) || !deltas.length) return;
+        if (typeof headRev === "number" && headRev <= revRef.current) return; // already applied
+        const fresh = deltas.filter((d) => d.rev > revRef.current);
+        if (!fresh.length) { revRef.current = headRev; return; }
+        if (fresh[0].rev !== revRef.current + 1) { socket.emit("presence:resync"); return; }
+        setRoom((current) => {
+          let participants = current.participants.slice();
+          for (const d of fresh) {
+            if (d.type === "join" && d.participant) {
+              participants = participants.filter((p) => p.socketId !== d.participant.socketId);
+              participants.push(d.participant);
+            } else if (d.type === "update" && d.socketId) {
+              participants = participants.map((p) => (p.socketId === d.socketId ? { ...p, ...d.changes } : p));
+            } else if (d.type === "leave" && d.socketId) {
+              participants = participants.filter((p) => p.socketId !== d.socketId);
+            } else if (d.type === "reset") {
+              participants = [];
+            }
+          }
+          return { ...current, participants };
+        });
+        revRef.current = headRev;
       });
       socket.on("connect", () => setOwnSocketId(socket.id || ""));
       socket.on("webinar:update", (nextWebinar: Webinar) => setWebinar(nextWebinar));
