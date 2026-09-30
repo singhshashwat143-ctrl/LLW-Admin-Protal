@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader, SectionCard } from "../components/UI";
 import { api, useApi } from "../lib/api";
 import { formatCurrency, formatDateTime } from "../lib/format";
+import { MasterclassMark, MasterclassWordmark, DEFAULT_MASTERCLASS_LOGO } from "../components/MasterclassLogo";
 
 // The public registration + reminders page lives at /webinar/register/<room>,
 // where <room> is the same room name used in the attendee URL.
@@ -168,36 +169,162 @@ export function WebinarFormPage() {
   );
 }
 
+function useCountdown(target?: string) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const ms = target ? new Date(target).getTime() - now : 0;
+  const live = target ? ms <= 0 : false;
+  const clamp = Math.max(0, ms);
+  return {
+    live,
+    days: Math.floor(clamp / 86400000),
+    hours: Math.floor((clamp % 86400000) / 3600000),
+    mins: Math.floor((clamp % 3600000) / 60000),
+    secs: Math.floor((clamp % 60000) / 1000),
+  };
+}
+
 export function MasterclassLandingPage({ slug }: { slug: string }) {
   const { data } = useApi<any>("/api/webinars", { webinars: [] });
   const webinar = data.webinars.find((item: any) => item.slug === slug) || data.webinars[0];
 
+  const title = webinar?.title || "The CryptX Wealth Masterclass";
+  const description = webinar?.description
+    || "A live, no-fluff session on how disciplined crypto strategies compound — with real results, real numbers, and your questions answered on the spot.";
+  const host = webinar?.instructor?.name || "Livelong Wealth";
+  const when = webinar?.start_time ? formatDateTime(webinar.start_time) : "Announced soon";
+  const cd = useCountdown(webinar?.start_time);
+  const room = (webinar?.attendee_url || "").split("?")[0].split("/").filter(Boolean).pop() || "";
+  const registerUrl = room ? `/webinar/register/${room}` : "#register";
+  const priced = Boolean(webinar?.payment_required);
+  const priceLabel = priced ? formatCurrency((webinar?.price_inr || 0) / 100) : "Free to attend";
+  const cta = priced ? `Reserve your seat · ${priceLabel}` : "Reserve your free seat";
+
+  const ORANGE = "#F7931A";
+  const INK = "#161C2D";
+
+  const learn = [
+    { t: "The strategy, live", d: "Watch the exact playbook run in real time — not slides about theory, the actual method." },
+    { t: "Real numbers", d: "See the results, the risk, and the costs laid bare. No cherry-picked screenshots." },
+    { t: "Ask anything", d: "Live Q&A — bring your doubts and get them answered before you commit a rupee." },
+  ];
+
+  const box = { border: "1px solid #ECECF0", borderRadius: 18, background: "#fff" };
+
   return (
-    <div className="min-h-screen bg-[linear-gradient(180deg,_#0a0a0a,_#080808)] px-4 py-6 text-white md:px-8">
-      <div className="mx-auto max-w-6xl space-y-5">
-        <section className="glass-card rounded-[32px] overflow-hidden">
-          <img src={webinar?.banner_url} alt={webinar?.title} className="h-64 w-full object-cover opacity-80" />
-          <div className="p-6 md:p-8">
-            <p className="text-[0.72rem] uppercase tracking-[0.24em] text-[var(--accent)]">Masterclass</p>
-            <h1 className="font-display mt-2 text-4xl text-[var(--text-strong)]">{webinar?.title}</h1>
-            <p className="mt-3 text-sm leading-7 text-[var(--text-secondary)]">{webinar?.description}</p>
+    <div style={{ minHeight: "100vh", background: "#fff", color: INK, fontFamily: "system-ui,-apple-system,Segoe UI,Roboto,sans-serif" }}>
+      {/* Header */}
+      <header style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(255,255,255,0.9)", backdropFilter: "blur(10px)", borderBottom: "1px solid #F0F0F3" }}>
+        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "12px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <MasterclassWordmark variant={DEFAULT_MASTERCLASS_LOGO} size={40} />
+          <a href={registerUrl} style={{ background: ORANGE, color: "#fff", fontWeight: 700, fontSize: 14, padding: "10px 18px", borderRadius: 11, textDecoration: "none" }}>Reserve seat</a>
+        </div>
+      </header>
+
+      {/* Hero */}
+      <section style={{ maxWidth: 1120, margin: "0 auto", padding: "clamp(28px,6vw,64px) 20px", display: "grid", gap: 40, gridTemplateColumns: "1fr", alignItems: "center" }} className="mc-hero">
+        <div>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#FFF3E4", color: "#B4630B", fontWeight: 700, fontSize: 12, letterSpacing: "0.08em", padding: "7px 13px", borderRadius: 999 }}>
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: "#E5484D", display: "inline-block" }} />
+            {cd.live ? "LIVE NOW" : "LIVE MASTERCLASS"}
+          </span>
+          <h1 style={{ fontSize: "clamp(32px,5vw,52px)", lineHeight: 1.05, letterSpacing: "-0.02em", fontWeight: 800, margin: "18px 0 0", textWrap: "balance" as any }}>{title}</h1>
+          <p style={{ fontSize: "clamp(15px,2.2vw,18px)", lineHeight: 1.6, color: "#4B5563", margin: "16px 0 0", maxWidth: 560 }}>{description}</p>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, margin: "22px 0 0", alignItems: "center" }}>
+            <span style={{ ...box, padding: "10px 14px", fontSize: 14, fontWeight: 600, display: "inline-flex", gap: 8, alignItems: "center" }}>📅 {when}</span>
+            <span style={{ ...box, padding: "10px 14px", fontSize: 14, fontWeight: 600, display: "inline-flex", gap: 8, alignItems: "center" }}>🎙 {host}</span>
+            <span style={{ background: "#F0FDF4", color: "#15803D", border: "1px solid #DCFCE7", padding: "10px 14px", borderRadius: 18, fontSize: 14, fontWeight: 700 }}>{priceLabel}</span>
           </div>
-        </section>
-        <section className="grid gap-4 xl:grid-cols-[1.5fr_0.9fr]">
-          <SectionCard title="About the Session">
-            <p className="text-sm leading-7 text-[var(--text-secondary)]">{webinar?.description}</p>
-            <p className="mt-4 text-sm text-[var(--text-secondary)]">Date & time: {webinar?.start_time ? formatDateTime(webinar.start_time) : "-"}</p>
-          </SectionCard>
-          <SectionCard title="Register">
-            <div className="space-y-3">
-              <input className="input-dark" placeholder="Name" />
-              <input className="input-dark" placeholder="Phone" />
-              <input className="input-dark" placeholder="Email" />
-              <button className="btn-primary w-full" type="button">{webinar?.payment_required ? `Pay ${formatCurrency((webinar?.price_inr || 0) / 100)}` : "Register on WhatsApp"}</button>
+
+          {!cd.live && webinar?.start_time ? (
+            <div style={{ display: "flex", gap: 10, margin: "24px 0 0" }}>
+              {[["Days", cd.days], ["Hrs", cd.hours], ["Min", cd.mins], ["Sec", cd.secs]].map(([l, v]) => (
+                <div key={l as string} style={{ ...box, minWidth: 62, textAlign: "center", padding: "10px 6px" }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: INK }}>{String(v).padStart(2, "0")}</div>
+                  <div style={{ fontSize: 10, letterSpacing: "0.14em", color: "#9CA3AF", fontWeight: 700 }}>{(l as string).toUpperCase()}</div>
+                </div>
+              ))}
             </div>
-          </SectionCard>
-        </section>
-      </div>
+          ) : null}
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, margin: "28px 0 0" }}>
+            <a href={registerUrl} style={{ background: ORANGE, color: "#fff", fontWeight: 800, fontSize: 16, padding: "15px 26px", borderRadius: 13, textDecoration: "none", boxShadow: "0 10px 28px rgba(247,147,26,0.35)" }}>{cta} →</a>
+            <a href="#learn" style={{ color: INK, fontWeight: 700, fontSize: 16, padding: "15px 20px", borderRadius: 13, textDecoration: "none", border: "1px solid #E5E7EB" }}>What you'll learn</a>
+          </div>
+          <p style={{ fontSize: 13, color: "#9CA3AF", margin: "16px 0 0" }}>Joined by <strong style={{ color: INK }}>2,000+ traders</strong> across India · Replay & notes shared after</p>
+        </div>
+
+        {/* Poster card */}
+        <div style={{ background: "linear-gradient(160deg,#0F1420,#1C2436)", borderRadius: 28, padding: 28, color: "#fff", position: "relative", overflow: "hidden" }}>
+          <svg viewBox="0 0 400 200" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0.5 }} aria-hidden="true">
+            <path d="M0 150 C 90 150, 130 60, 200 60 S 320 20, 400 30" fill="none" stroke={ORANGE} strokeWidth="2.5" />
+            <path d="M0 175 C 90 175, 130 110, 200 110 S 320 90, 400 95" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2" />
+          </svg>
+          <div style={{ position: "relative" }}>
+            <MasterclassMark variant={DEFAULT_MASTERCLASS_LOGO} size={64} onDark />
+            <div style={{ marginTop: 20, fontSize: 12, letterSpacing: "0.2em", color: "#8A93A6", fontWeight: 700 }}>LIVE SESSION</div>
+            <div style={{ marginTop: 8, fontSize: 24, fontWeight: 800, lineHeight: 1.2 }}>{title}</div>
+            <div style={{ marginTop: 14, display: "flex", gap: 18, fontSize: 13, color: "#C7CDD9" }}>
+              <span>🎙 {host}</span><span>📅 {when}</span>
+            </div>
+            <div style={{ marginTop: 22, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 16, fontSize: 13, color: "#8A93A6" }}>
+              Streamed in HD · Live Q&A · No download needed
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* What you'll learn */}
+      <section id="learn" style={{ maxWidth: 1120, margin: "0 auto", padding: "8px 20px 8px" }}>
+        <h2 style={{ fontSize: "clamp(24px,3.5vw,34px)", fontWeight: 800, letterSpacing: "-0.02em", textWrap: "balance" as any }}>Why this hour is worth it</h2>
+        <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", marginTop: 22 }}>
+          {learn.map((c, i) => (
+            <div key={c.t} style={{ ...box, padding: 22 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: "#FFF3E4", color: "#B4630B", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800 }}>{i + 1}</div>
+              <h3 style={{ fontSize: 18, fontWeight: 800, margin: "14px 0 6px" }}>{c.t}</h3>
+              <p style={{ fontSize: 14, lineHeight: 1.6, color: "#6B7280", margin: 0 }}>{c.d}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* About */}
+      <section style={{ maxWidth: 1120, margin: "0 auto", padding: "40px 20px" }}>
+        <div style={{ ...box, padding: "clamp(24px,4vw,40px)", display: "grid", gap: 24, gridTemplateColumns: "1fr" }} className="mc-about">
+          <div>
+            <div style={{ fontSize: 12, letterSpacing: "0.2em", color: ORANGE, fontWeight: 700 }}>ABOUT THE SESSION</div>
+            <p style={{ fontSize: "clamp(16px,2.4vw,20px)", lineHeight: 1.6, color: "#374151", margin: "12px 0 0" }}>{description}</p>
+            <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <a href={registerUrl} style={{ background: INK, color: "#fff", fontWeight: 700, fontSize: 15, padding: "13px 22px", borderRadius: 12, textDecoration: "none" }}>{cta} →</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Register band */}
+      <section id="register" style={{ background: "linear-gradient(135deg,#F7931A,#E67C0E)", color: "#fff" }}>
+        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "clamp(36px,6vw,64px) 20px", textAlign: "center" }}>
+          <h2 style={{ fontSize: "clamp(26px,4vw,40px)", fontWeight: 800, letterSpacing: "-0.02em", margin: 0, textWrap: "balance" as any }}>Seats are limited. Save yours.</h2>
+          <p style={{ fontSize: 16, opacity: 0.92, margin: "12px auto 0", maxWidth: 520 }}>Register once — we'll send you the join link and reminders on WhatsApp before we go live.</p>
+          <a href={registerUrl} style={{ display: "inline-block", marginTop: 24, background: "#fff", color: "#B4630B", fontWeight: 800, fontSize: 17, padding: "16px 34px", borderRadius: 14, textDecoration: "none" }}>{cta} →</a>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer style={{ maxWidth: 1120, margin: "0 auto", padding: "28px 20px", display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
+        <MasterclassWordmark variant={DEFAULT_MASTERCLASS_LOGO} size={34} />
+        <p style={{ fontSize: 12, color: "#9CA3AF", margin: 0 }}>© {new Date().getFullYear()} Livelong Wealth · CryptX Masterclass</p>
+      </footer>
+
+      <style>{`
+        @media (min-width: 900px) {
+          .mc-hero { grid-template-columns: 1.15fr 0.85fr !important; }
+        }
+      `}</style>
     </div>
   );
 }
