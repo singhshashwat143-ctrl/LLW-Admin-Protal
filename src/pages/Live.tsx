@@ -2,7 +2,7 @@ import { Component, useCallback, useEffect, useMemo, useRef, useState } from "re
 import type { ReactNode, CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import PdfjsWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker";
-import { ConnectionState as LiveKitConnectionState, LocalVideoTrack, Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track as LiveKitTrack, VideoPresets } from "livekit-client";
+import { AudioPresets, ConnectionState as LiveKitConnectionState, LocalVideoTrack, Room as LiveKitRoom, RoomEvent, ScreenSharePresets, Track as LiveKitTrack, VideoPresets, VideoQuality } from "livekit-client";
 
 // Vite bundles the worker and hands us a real Worker instance. Assigning it as
 // workerPort avoids the module-worker bootstrap deadlock that the ?url approach
@@ -127,7 +127,7 @@ type LiveKitJoinInfo = {
 // ceiling with a LOW frame rate + a "detail" content hint: static slides encode
 // razor-sharp text while averaging far below the ceiling (little frame-to-frame
 // motion), and only busy/full-motion screens approach it.
-const LARGE_CLASS_CAMERA_MAX_BITRATE = 300_000;
+const LARGE_CLASS_CAMERA_MAX_BITRATE = 500_000;
 const LARGE_CLASS_SCREEN_MAX_BITRATE = 3_000_000;
 
 type RoomParticipant = { socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string };
@@ -2439,14 +2439,19 @@ function useLiveKitClassMedia({
       videoCaptureDefaults: { resolution: VideoPresets.h360.resolution },
       publishDefaults: {
         simulcast: true,
-        // Camera: one low PiP layer, low fps — compromised on purpose.
+        // Camera: small PiP tile — kept modest (you're OK compromising it).
         videoSimulcastLayers: [VideoPresets.h180],
-        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 15 },
-        // Screen: 1080p top layer, high ceiling, low fps -> finest slide/text
-        // clarity. One 720p fallback layer for weak links (used once
-        // adaptiveStream is on; harmless otherwise).
-        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 15 },
+        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 20 },
+        // Screen: 1080p top layer, high ceiling, 30 fps for smooth motion +
+        // "detail" content hint (set at capture) for crisp text. 720p fallback
+        // for weak links via congestion control.
+        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 30 },
         screenShareSimulcastLayers: [ScreenSharePresets.h720fps15],
+        // Voice: RED (packet-loss redundancy) + a music-grade bitrate so the
+        // host's audio stays clear even on lossy attendee links.
+        red: true,
+        dtx: true,
+        audioPreset: AudioPresets.music,
       },
     });
     roomRef.current = room;
@@ -2555,6 +2560,14 @@ function useLiveKitClassMedia({
     room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
       if (!active) return;
       updateRemoteTrack(participant.identity, publication.source, track.mediaStreamTrack);
+      // Request the TOP simulcast layer. Without this, a raw-srcObject subscriber
+      // (adaptiveStream off) is served a low layer by default -> blurry video at
+      // a fraction of the real bitrate. Congestion control still auto-downgrades
+      // a genuinely weak link, so good connections get full quality.
+      if ((publication.source === LiveKitTrack.Source.Camera || publication.source === LiveKitTrack.Source.ScreenShare)
+        && typeof publication.setVideoQuality === "function") {
+        try { publication.setVideoQuality(VideoQuality.HIGH); } catch { /* ignore */ }
+      }
       syncActiveSpeakers();
     });
     room.on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
@@ -2805,7 +2818,7 @@ function useLiveKitClassMedia({
         audio: false,
         // Capture at 1080p and tell the encoder to prioritise sharpness over
         // motion — this is what keeps shared text/slides crisp for everyone.
-        resolution: { width: 1920, height: 1080, frameRate: 15 },
+        resolution: { width: 1920, height: 1080, frameRate: 30 },
         contentHint: "detail",
       });
       setCanvasShareActive(false);
