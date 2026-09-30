@@ -122,8 +122,13 @@ type LiveKitJoinInfo = {
 
 // Host publish caps for large classes (bits per second). See the Room options
 // in the LiveKit connection effect for the reasoning.
-const LARGE_CLASS_CAMERA_MAX_BITRATE = 800_000;
-const LARGE_CLASS_SCREEN_MAX_BITRATE = 1_200_000;
+// Camera is only the small PiP tile in a webinar, so it's deliberately
+// sacrificed to keep the screen share pristine. Screen uses a HIGH bitrate
+// ceiling with a LOW frame rate + a "detail" content hint: static slides encode
+// razor-sharp text while averaging far below the ceiling (little frame-to-frame
+// motion), and only busy/full-motion screens approach it.
+const LARGE_CLASS_CAMERA_MAX_BITRATE = 300_000;
+const LARGE_CLASS_SCREEN_MAX_BITRATE = 3_000_000;
 
 type RoomParticipant = { socketId: string; attendanceId: string; role: string; name: string; joinedAt: string; isMicOn?: boolean; isCameraOn?: boolean; isScreenSharing?: boolean; isHandRaised?: boolean; phone?: string; email?: string };
 type RoomSnapshot = {
@@ -2431,13 +2436,17 @@ function useLiveKitClassMedia({
       // ~0.7 Gbps worst case instead of >1.5 Gbps with library defaults.
       // Simulcast + adaptiveStream let small tiles (e.g. camera PiP while
       // sharing) pull the low layers automatically.
-      videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
+      videoCaptureDefaults: { resolution: VideoPresets.h360.resolution },
       publishDefaults: {
         simulcast: true,
-        videoSimulcastLayers: [VideoPresets.h180, VideoPresets.h360],
-        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 24 },
-        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 12 },
-        screenShareSimulcastLayers: [ScreenSharePresets.h360fps3, ScreenSharePresets.h720fps5],
+        // Camera: one low PiP layer, low fps — compromised on purpose.
+        videoSimulcastLayers: [VideoPresets.h180],
+        videoEncoding: { maxBitrate: LARGE_CLASS_CAMERA_MAX_BITRATE, maxFramerate: 15 },
+        // Screen: 1080p top layer, high ceiling, low fps -> finest slide/text
+        // clarity. One 720p fallback layer for weak links (used once
+        // adaptiveStream is on; harmless otherwise).
+        screenShareEncoding: { maxBitrate: LARGE_CLASS_SCREEN_MAX_BITRATE, maxFramerate: 15 },
+        screenShareSimulcastLayers: [ScreenSharePresets.h720fps15],
       },
     });
     roomRef.current = room;
@@ -2794,6 +2803,10 @@ function useLiveKitClassMedia({
       setMediaError("");
       await room.localParticipant.setScreenShareEnabled(true, {
         audio: false,
+        // Capture at 1080p and tell the encoder to prioritise sharpness over
+        // motion — this is what keeps shared text/slides crisp for everyone.
+        resolution: { width: 1920, height: 1080, frameRate: 15 },
+        contentHint: "detail",
       });
       setCanvasShareActive(false);
       syncLocalStreams();
