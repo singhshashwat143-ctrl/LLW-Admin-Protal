@@ -2335,9 +2335,31 @@ app.post("/api/campaigns", async (req, res) => {
       whatsapp_group_url: req.body?.whatsapp_group_url,
       distribution: req.body?.distribution,
       webinar_id: req.body?.webinar_id,
+      event_at: req.body?.event_at || null,
+      session_hours: req.body?.session_hours,
+      room_name: req.body?.room_name,
     });
-    const adLink = withPublicAbsolute(req, `/go/${campaign.slug}`);
-    res.json({ ok: true, campaign, ad_link: adLink });
+    // "lp" campaigns use the designed capgain landing page; others use /go.
+    const link = campaign.lp === "capgain" ? `/lp/${campaign.slug}` : `/go/${campaign.slug}`;
+    res.json({ ok: true, campaign, ad_link: withPublicAbsolute(req, link), lp_link: withPublicAbsolute(req, `/lp/${campaign.slug}`) });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: String(error?.message || error) });
+  }
+});
+
+// Admin: edit a campaign — the WhatsApp community link and the session
+// date/time behind the LP are changed from here (dynamic per the request).
+app.patch("/api/campaigns/:id", async (req, res) => {
+  const user = requireAdminPermission(req, res, "Only admin users can edit campaigns.");
+  if (!user) return;
+  try {
+    const patch = {};
+    for (const f of ["name", "whatsapp_group_url", "event_at", "session_hours", "room_name", "distribution", "channel", "lp"]) {
+      if (req.body?.[f] !== undefined) patch[f] = req.body[f];
+    }
+    const campaign = await funnelStore.updateCampaign(req.params.id, patch);
+    if (!campaign) return res.status(404).json({ ok: false, message: "Campaign not found." });
+    res.json({ ok: true, campaign });
   } catch (error) {
     res.status(500).json({ ok: false, message: String(error?.message || error) });
   }
@@ -2346,8 +2368,14 @@ app.post("/api/campaigns", async (req, res) => {
 app.get("/api/campaigns", async (req, res) => {
   const user = requireAdminPermission(req, res, "Only admin users can view campaigns.");
   if (!user) return;
-  try { res.json({ ok: true, campaigns: await funnelStore.listCampaigns() }); }
-  catch (error) { res.status(500).json({ ok: false, message: String(error?.message || error) }); }
+  try {
+    const campaigns = (await funnelStore.listCampaigns()).map((c) => ({
+      ...c,
+      lp_link: withPublicAbsolute(req, `/lp/${c.slug}`),
+      go_link: withPublicAbsolute(req, `/go/${c.slug}`),
+    }));
+    res.json({ ok: true, campaigns });
+  } catch (error) { res.status(500).json({ ok: false, message: String(error?.message || error) }); }
 });
 
 // Public: capture a lead from a landing-page form (campaign slug ties it back).
@@ -2359,12 +2387,31 @@ app.post("/api/leads", async (req, res) => {
   if (!name && !email && !phone) return res.status(400).json({ ok: false, message: "Provide a name, email or phone." });
   try {
     const campaign = slug ? await funnelStore.getCampaignBySlug(slug) : null;
+    // Fold any notification opt-in / push subscription into the lead's extra so
+    // it is captured in the DB alongside the contact details.
+    const extra = (req.body?.extra && typeof req.body.extra === "object") ? { ...req.body.extra } : {};
+    if (req.body?.subscription) extra.push_subscription = req.body.subscription;
     await funnelStore.upsertLead({
       name, email, phone,
       campaign_id: campaign?.id || null,
       source: String(req.body?.source || "lp"),
       stage: "new",
+      extra,
     });
+    // If this campaign is tied to a live webinar room and the lead subscribed,
+    // register them in the existing reminder system so they actually get the
+    // 15/10/5-minute push before the session.
+    if (campaign?.room_name && req.body?.subscription) {
+      try {
+        const room = await getRoomByNameFresh(campaign.room_name, `lp-reminder:${campaign.room_name}`);
+        if (room?.webinar) {
+          await reminderStore.register({
+            webinarId: room.webinar.id, roomName: campaign.room_name,
+            name, email, phone, subscription: req.body.subscription,
+          });
+        }
+      } catch (err) { console.warn("[lp] reminder register failed:", err?.message || err); }
+    }
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, message: "Could not save lead." });
@@ -2393,6 +2440,33 @@ app.get("/api/leads", async (req, res) => {
   } catch (error) {
     res.status(500).json({ ok: false, message: String(error?.message || error) });
   }
+});
+
+// Public designed landing page (the "capgain" masterclass LP). The campaign
+// record drives the dynamic bits — WhatsApp community link + session date/time —
+// and the page's registration modal posts the lead to /api/leads.
+const LP_TEMPLATE_PATH = join(__dirname, "lp-templates", "capgain.html");
+let lpTemplateCache = "";
+function readLpTemplate() {
+  if (!lpTemplateCache) { try { lpTemplateCache = readFileSync(LP_TEMPLATE_PATH, "utf8"); } catch { lpTemplateCache = ""; } }
+  return lpTemplateCache;
+}
+app.get("/lp/:slug", async (req, res) => {
+  let campaign = null;
+  try { campaign = await funnelStore.getCampaignBySlug(req.params.slug); } catch { /* ignore */ }
+  if (!campaign) return res.status(404).type("html").send("<p style='font:16px system-ui;padding:40px'>Landing page not found.</p>");
+  const tpl = readLpTemplate();
+  if (!tpl) return res.status(500).type("html").send("Landing page template missing.");
+  const config = {
+    slug: campaign.slug,
+    waLink: String(campaign.whatsapp_group_url || ""),
+    sessionStart: campaign.event_at ? new Date(campaign.event_at).toISOString() : "",
+    sessionHours: Number(campaign.session_hours) || 2,
+    title: String(campaign.name || ""),
+    vapidKey: (isPushEnabled() ? getPublicKey() : "") || "",
+  };
+  const inject = `<script>window.__LP=${JSON.stringify(config).replace(/</g, "\\u003c")};</script>`;
+  res.type("html").send(tpl.replace("</head>", `${inject}\n</head>`));
 });
 
 // Public landing page for a campaign ad link. Captures the lead, then sends them

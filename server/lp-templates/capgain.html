@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Options Wealth Building Algo Masterclass</title>
+<meta name="description" content="A free, live masterclass on how rule-based, automated systems approach options trading — what they do, what they can't, and how to judge one. Education only: no tips, no trade calls, no promises. This Saturday, 6:00 PM IST.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="WealthX">
+<meta property="og:title" content="Options Wealth Building Algo Masterclass &mdash; This Saturday, 6 PM IST">
+<meta property="og:description" content="A free live session on how rule-based, automated options systems work. Education only — no tips, no trade calls, no promises. Join the group for the link.">
+<meta property="og:image" content="https://wealthx.tech/icon-512.png">
+<meta name="theme-color" content="">
+<link rel="icon" type="image/png" sizes="192x192" href="data:image/png;base64,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">
+<style>
+/* ══════════════════════════════════════════════════════════════════════════
+   TOKENS — the WealthX design system. White paper, light orange accent,
+   pine for good, clay for caution.
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --paper:#FBFBFD; --paper-2:#F4F3F1; --card:#FFFFFF; --raise:#FFFFFF;
+  --ink:#1D1D1F; --ink-2:#3C3C41; --grey:#6E6E73; --faint:#9A9AA0;
+  --hair:rgba(0,0,0,.085); --hair-2:rgba(0,0,0,.17);
+  --gold:#C08A2E; --orange:#E8833A; --orange-hi:#F0A05C; --orange-tint:#FFF3E9;
+  --pine:#0B7A5A; --pine-tint:#E9F7F1; --clay:#B3402F; --clay-tint:#FCF1EF;
+  --amber:#B7791F;
+  --orange-txt:#AF5514; --faint-txt:#72727A; --amber-txt:#9F691B;
+  --shadow:0 1px 2px rgba(0,0,0,.03),0 16px 40px -30px rgba(0,0,0,.3);
+  --ease:cubic-bezier(.16,1,.3,1);
+  --r:18px; --r-sm:12px; --r-xs:9px;
+  --brand-on:#241505;
+  color-scheme:light;
+}
+:root[data-theme=dark]{
+  --paper:#0C0D10; --paper-2:#16181D; --card:#15171C; --raise:#1B1E24;
+  --ink:#F3F2EF; --ink-2:#D6D5D1; --grey:#9BA0A9; --faint:#6E737C;
+  --hair:rgba(255,255,255,.095); --hair-2:rgba(255,255,255,.19);
+  --orange:#F09455; --orange-hi:#F7B27C; --orange-tint:#2A1C10;
+  --pine:#4FC79B; --pine-tint:#0F2A22; --clay:#E8776A; --clay-tint:#2B1512;
+  --amber:#E0A845; --gold:#D9A44E;
+  --orange-txt:var(--orange); --faint-txt:#828790; --amber-txt:var(--amber);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 18px 44px -30px rgba(0,0,0,.9);
+  color-scheme:dark;
+}
+
+/* ── shared system ────────────────────────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth;scroll-padding-top:78px}
+body{
+  background:var(--paper);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  font-size:15px;line-height:1.55;letter-spacing:-.005em;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  transition:background .3s var(--ease),color .3s var(--ease);
+}
+.mono{font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:-.012em;
+  font-variant-numeric:tabular-nums slashed-zero}
+h1,h2,h3,h4{font-weight:600;letter-spacing:-.024em;line-height:1.22;text-wrap:balance}
+h3{font-size:16px} h4{font-size:14px}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--orange);outline-offset:3px;border-radius:8px}
+::selection{background:color-mix(in srgb,var(--orange) 26%,transparent)}
+.wrap{max-width:1120px;margin:0 auto;padding:0 clamp(16px,3.4vw,32px)}
+.mut{color:var(--grey)} .fnt{color:var(--faint-txt)}
+.pine{color:var(--pine)} .clay{color:var(--clay)} .orange{color:var(--orange-txt)}
+.kick{font-size:11px;font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:var(--faint-txt)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;font-size:14.5px;
+  font-weight:600;cursor:pointer;border:0;border-radius:11px;padding:11px 20px;
+  color:var(--brand-on);background:linear-gradient(180deg,var(--orange-hi),var(--orange));
+  box-shadow:0 1px 0 rgba(255,255,255,.35) inset,0 10px 24px -12px color-mix(in srgb,var(--orange) 75%,transparent);
+  transition:transform .2s var(--ease),filter .2s var(--ease),box-shadow .2s var(--ease)}
+.btn:hover{transform:translateY(-1px);filter:brightness(1.03)}
+.btn:active{transform:scale(.975);filter:brightness(.95);transition-duration:70ms}
+.btn.full{width:100%}
+.btn.lg{font-size:15.5px;padding:14px 24px;border-radius:12px}
+.btn.ghost{background:var(--card);color:var(--ink);box-shadow:0 0 0 1px var(--hair-2)}
+.btn.ghost:hover{box-shadow:0 0 0 1px var(--orange);color:var(--orange-txt)}
+.btn.sm{padding:7px 14px;font-size:13px;border-radius:9px}
+.btn svg{flex:none}
+
+header{position:sticky;top:0;z-index:40;
+  background:color-mix(in srgb,var(--paper) 74%,transparent);
+  backdrop-filter:blur(22px) saturate(180%);-webkit-backdrop-filter:blur(22px) saturate(180%);
+  border-bottom:1px solid transparent;transition:border-color .3s var(--ease),background .3s var(--ease)}
+header.scrolled{border-bottom-color:var(--hair);background:color-mix(in srgb,var(--paper) 92%,transparent)}
+.nav{display:flex;align-items:center;justify-content:space-between;height:62px;gap:16px}
+.brand{display:flex;align-items:center;min-width:0}
+.brandimg{height:32px;width:auto;display:block;border-radius:8px}
+.navlinks{display:flex;gap:26px}
+.navlinks a{color:var(--grey);font-size:14px;font-weight:500;padding:3px 0;transition:color .2s var(--ease)}
+.navlinks a:hover{color:var(--ink)}
+.navr{display:flex;align-items:center;gap:12px}
+.navr>*{flex:none}
+.iconbtn{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;cursor:pointer;
+  background:transparent;border:1px solid transparent;color:var(--grey);transition:all .2s var(--ease)}
+.iconbtn:hover{background:var(--paper-2);color:var(--ink)}
+.iconbtn:active{transform:scale(.93)}
+.i-sun{display:none} .i-moon{display:block}
+:root[data-theme=dark] .i-sun{display:block}
+:root[data-theme=dark] .i-moon{display:none}
+
+.live{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:var(--pine)}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--pine);position:relative;font-style:normal}
+.live i::after{content:'';position:absolute;inset:-4px;border-radius:50%;background:var(--pine);
+  opacity:.4;animation:pulse 2.2s var(--ease) infinite}
+@keyframes pulse{0%{transform:scale(.5);opacity:.4}70%{transform:scale(2);opacity:0}100%{opacity:0}}
+
+.panel{background:var(--card);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow)}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px clamp(16px,2vw,24px);
+  border-bottom:1px solid var(--hair)}
+.pb{padding:clamp(16px,2vw,24px)}
+.grid{display:grid;gap:clamp(14px,1.8vw,22px)}
+.g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;font-size:12.5px;
+  font-weight:600;background:var(--pine-tint);color:var(--pine)}
+.chip.warm{background:var(--orange-tint);color:var(--orange-txt)}
+.chip.grey{background:var(--paper-2);color:var(--grey)}
+.rowline{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px 0;
+  border-top:1px solid var(--hair);font-size:14px}
+.rowline .k{color:var(--grey)}
+.rowline b{font-weight:600;text-align:right}
+
+.rise{transition:opacity .55s var(--ease),transform .55s var(--ease)}
+.js .rise{opacity:0;transform:translateY(14px)}
+.js .rise.in{opacity:1;transform:none}
+.d1{transition-delay:.04s}.d2{transition-delay:.1s}.d3{transition-delay:.16s}.d4{transition-delay:.22s}
+
+/* ── section rhythm ───────────────────────────────────────────────────────── */
+section.blk{position:relative;padding:clamp(52px,7vw,104px) 0}
+section.tint{background:var(--paper-2);border-top:1px solid var(--hair);border-bottom:1px solid var(--hair)}
+.secnum{display:flex;align-items:center;gap:9px}
+.secnum b{color:var(--orange-txt);font-weight:700}
+.secnum i{width:18px;height:1px;background:var(--hair-2);display:inline-block;font-style:normal}
+.ghostnum{position:absolute;right:clamp(8px,3vw,40px);bottom:clamp(2px,1.4vw,20px);
+  font-size:clamp(96px,17vw,260px);font-weight:600;letter-spacing:-.06em;line-height:.8;
+  color:var(--ink);opacity:.045;pointer-events:none;user-select:none;z-index:0}
+section.blk > .wrap{position:relative;z-index:1}
+.head2{max-width:64ch;margin-bottom:clamp(26px,3.4vw,44px)}
+.head2 h2{font-size:clamp(27px,3.8vw,46px);letter-spacing:-.036em;line-height:1.06;margin-top:14px}
+.head2 p{color:var(--grey);font-size:clamp(15px,1.3vw,17.5px);margin-top:16px;max-width:62ch}
+.head2 p b{color:var(--ink);font-weight:600}
+
+/* ── hero ─────────────────────────────────────────────────────────────────── */
+.herowrap{position:relative;overflow:hidden;padding:clamp(30px,4.6vw,66px) 0 clamp(30px,4vw,56px)}
+.herowrap::before{content:'';position:absolute;top:-320px;right:-220px;width:820px;height:820px;
+  border-radius:50%;pointer-events:none;z-index:0;
+  background:radial-gradient(circle,color-mix(in srgb,var(--orange) 16%,transparent),transparent 62%)}
+.herogrid{position:relative;z-index:1;display:grid;grid-template-columns:1.06fr .94fr;
+  gap:clamp(28px,4.4vw,56px);align-items:center}
+.whenkick{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap}
+.herogrid h1{font-size:clamp(33px,5.2vw,62px);letter-spacing:-.045em;line-height:1.03;margin-top:18px}
+.lede{color:var(--grey);font-size:clamp(15.5px,1.4vw,18px);max-width:48ch;margin:20px 0 26px;line-height:1.58}
+.lede b{color:var(--ink);font-weight:600}
+.ctas{display:flex;gap:12px;flex-wrap:wrap}
+.trust{display:flex;gap:20px;flex-wrap:wrap;margin-top:22px;color:var(--grey);font-size:13.5px}
+.trust span{display:inline-flex;align-items:center;gap:8px}
+.trust svg{color:var(--orange);flex:none}
+
+.strip{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(12px,1.8vw,26px);margin-top:clamp(24px,3vw,34px)}
+.strip .s{border-top:1px solid var(--hair-2);padding-top:13px}
+.strip .k{font-size:11.5px;color:var(--faint-txt)}
+.strip .v{font-size:clamp(16px,1.6vw,20px);font-weight:600;letter-spacing:-.025em;margin-top:5px;line-height:1.15}
+
+/* the session pass */
+.tile .plabel{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--faint-txt)}
+.tile .pbig{font-size:clamp(28px,3.4vw,38px);font-weight:600;letter-spacing:-.035em;color:var(--amber-txt);
+  line-height:1.12;margin-top:4px}
+.cdwrap{margin:18px 0 6px}
+.cd{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:9px}
+.cd .c{background:var(--paper-2);border:1px solid var(--hair);border-radius:var(--r-sm);padding:12px 4px 10px;text-align:center}
+.cd .n{display:block;font-size:clamp(24px,3vw,32px);font-weight:600;letter-spacing:-.035em;line-height:1.1}
+.cd .u{display:block;font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--faint-txt);margin-top:4px}
+.cdstate{margin:18px 0 6px;padding:13px 15px;border-radius:var(--r-sm);font-size:14px;font-weight:600;
+  background:var(--pine-tint);color:var(--pine)}
+.cdstate.over{background:var(--paper-2);color:var(--grey)}
+.tile .rows{margin-top:10px}
+.tile .btn{margin-top:16px}
+.tile .tnote{font-size:11.5px;margin-top:12px}
+
+/* ── agenda steps (a real sequence — the session runs in this order) ──────── */
+.step{display:flex;flex-direction:column;padding:clamp(20px,2.2vw,26px)}
+.step .n{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;margin-bottom:15px;
+  font-size:12.5px;font-weight:700;color:var(--orange-txt);
+  border:1px solid color-mix(in srgb,var(--orange) 30%,transparent);background:var(--orange-tint)}
+.step h3{font-size:16.5px;margin-bottom:7px}
+.step p{color:var(--grey);font-size:14px}
+
+/* ── principle cards ──────────────────────────────────────────────────────── */
+.feat{display:flex;flex-direction:column;gap:11px;padding:clamp(20px,2.2vw,26px)}
+.feat .ic{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;color:var(--orange);
+  background:var(--orange-tint);border:1px solid color-mix(in srgb,var(--orange) 26%,transparent)}
+.feat h3{font-size:17px}
+.feat p{color:var(--grey);font-size:14.5px}
+.feat p b{color:var(--ink);font-weight:600}
+.note{display:flex;gap:12px;align-items:flex-start;margin-top:clamp(18px,2.4vw,28px);padding:16px 18px;
+  border-radius:var(--r-sm);background:var(--card);border:1px solid var(--hair);color:var(--grey);font-size:14.5px}
+.note svg{flex:none;color:var(--orange-txt);margin-top:2px}
+.note b{color:var(--ink);font-weight:600}
+
+/* ── fit / not-a-fit lists ────────────────────────────────────────────────── */
+.fit{padding:clamp(22px,2.6vw,30px)}
+.fit h3{font-size:17px;display:flex;align-items:center;gap:10px}
+.fit h3 .dot{width:9px;height:9px;border-radius:50%;background:var(--pine);flex:none}
+.fit.no h3 .dot{background:var(--clay)}
+.plist{list-style:none;margin:18px 0 0;display:grid;gap:12px}
+.plist li{display:flex;gap:11px;align-items:flex-start;font-size:14.5px;color:var(--ink-2)}
+.plist svg{flex:none;margin-top:3px;color:var(--pine)}
+.fit.no .plist svg{color:var(--clay)}
+.fit .foot{margin-top:18px;padding-top:14px;border-top:1px solid var(--hair);font-size:13px;color:var(--grey)}
+
+/* ── faq ──────────────────────────────────────────────────────────────────── */
+.faq details{border-bottom:1px solid var(--hair)}
+.faq details:first-child{border-top:1px solid var(--hair)}
+.faq summary{list-style:none;cursor:pointer;padding:20px 2px;display:flex;justify-content:space-between;
+  align-items:center;gap:16px;font-size:16.5px;font-weight:600;letter-spacing:-.018em}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary:hover{color:var(--orange-txt)}
+.faq summary .plus{color:var(--orange-txt);font-size:22px;font-weight:400;line-height:1;flex:none;
+  transition:transform .25s var(--ease)}
+.faq details[open] summary .plus{transform:rotate(45deg)}
+.faq .a{color:var(--grey);font-size:15px;margin:0 0 22px;max-width:74ch;line-height:1.65}
+.faq .a b{color:var(--ink);font-weight:600}
+
+/* ── final call ───────────────────────────────────────────────────────────── */
+.final{display:grid;grid-template-columns:1.2fr .8fr;gap:clamp(22px,3.4vw,44px);align-items:center;
+  padding:clamp(26px,3.6vw,46px);
+  border-color:color-mix(in srgb,var(--orange) 34%,transparent);
+  background:linear-gradient(165deg,var(--orange-tint),var(--card) 58%)}
+.final h2{font-size:clamp(27px,3.8vw,44px);letter-spacing:-.036em;line-height:1.06;margin-top:12px}
+.final p{color:var(--grey);font-size:clamp(15px,1.3vw,17px);margin-top:14px;max-width:50ch}
+.final .side{display:flex;flex-direction:column;gap:12px}
+.final .when{font-size:13px;color:var(--grey);text-align:center}
+
+/* ── footer ───────────────────────────────────────────────────────────────── */
+footer{background:var(--paper-2);border-top:1px solid var(--hair);padding:clamp(38px,4.6vw,56px) 0 clamp(26px,3vw,40px)}
+.footgrid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:clamp(22px,3vw,34px)}
+.footgrid h4{font-size:11px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--faint-txt);margin-bottom:12px}
+.footgrid a.fl{display:flex;align-items:center;color:var(--grey);font-size:14px;padding:5px 0;transition:color .2s var(--ease)}
+.footgrid a.fl:hover{color:var(--ink)}
+.footmail{display:inline-flex;align-items:center}
+.footmail:hover{color:var(--ink)}
+.footnote{color:var(--faint-txt);font-size:12px;line-height:1.75;margin-top:clamp(26px,3.4vw,38px);
+  border-top:1px solid var(--hair);padding-top:20px}
+.footnote p+p{margin-top:8px}
+
+/* ── sticky join bar (phones) ─────────────────────────────────────────────── */
+.joinbar{display:none}
+@media(max-width:720px){
+  .js .joinbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:45;align-items:center;
+    justify-content:space-between;gap:12px;
+    padding:10px clamp(16px,3.4vw,32px) calc(10px + env(safe-area-inset-bottom,0px));
+    background:color-mix(in srgb,var(--paper) 90%,transparent);
+    backdrop-filter:blur(22px) saturate(180%);-webkit-backdrop-filter:blur(22px) saturate(180%);
+    border-top:1px solid var(--hair);
+    transform:translateY(110%);transition:transform .35s var(--ease)}
+  .js .joinbar.show{transform:none}
+  .joinbar .t{min-width:0;line-height:1.3}
+  .joinbar .t b{display:block;font-size:13.5px;font-weight:600;white-space:nowrap}
+  .joinbar .t span{display:block;font-size:12px;color:var(--grey);white-space:nowrap}
+  .joinbar .btn{flex:none;padding:12px 16px;font-size:14px}
+  .js footer{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+}
+
+/* ── responsive ───────────────────────────────────────────────────────────── */
+@media(max-width:900px){
+  .herogrid{grid-template-columns:1fr} .footgrid{grid-template-columns:1fr 1fr}
+  .final{grid-template-columns:1fr}
+  .navlinks{display:none}
+}
+@media(max-width:720px){
+  .g3,.g2{grid-template-columns:1fr}
+  .strip{gap:14px}
+  .footgrid{grid-template-columns:1fr}
+  .ctas .btn{flex:1 1 auto}
+}
+@media(max-width:420px){
+  .navr .btn.sm span.long{display:none}
+  .trust{gap:12px}
+  .strip{grid-template-columns:1fr}
+}
+@media (pointer:coarse),(max-width:1024px){
+  .iconbtn{width:44px;height:44px}
+  .btn.sm{padding:12px 16px}
+  .footgrid a.fl{min-height:44px;padding:0}
+  .footmail{min-height:44px}
+  .faq summary{padding:22px 2px;min-height:56px}
+  .brand{min-height:44px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{animation-duration:.01ms!important;transition-duration:.15s!important}
+  .js .rise{opacity:1;transform:none} .live i::after{animation:none;opacity:.3}
+  .btn:hover,.iconbtn:active{transform:none}
+}
+/* ── registration modal (self-contained, theme-independent) ───────────── */
+.lpmodal{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(8,10,20,.62);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+.lpmodal.open{display:flex}
+.lpmodal-card{width:100%;max-width:420px;background:#fff;color:#15202b;border-radius:20px;padding:26px 24px 22px;position:relative;box-shadow:0 24px 70px rgba(0,0,0,.45);max-height:92vh;overflow:auto;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.lpmodal-x{position:absolute;top:10px;right:14px;border:0;background:transparent;font-size:26px;line-height:1;color:#98a2b3;cursor:pointer}
+.lpmodal-h{margin:0;font-size:22px;font-weight:800;letter-spacing:-.01em;color:#15202b}
+.lpmodal-sub{margin:8px 0 14px;font-size:13.5px;line-height:1.5;color:#667085}
+.lpmodal-lab{display:block;font-size:12px;font-weight:600;color:#475467;margin:11px 0 5px}
+.lpmodal-in{width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid #e3e6eb;border-radius:11px;font-size:15px;outline:none;color:#15202b;background:#fff}
+.lpmodal-in:focus{border-color:#F7931A;box-shadow:0 0 0 3px rgba(247,147,26,.16)}
+.lpmodal-check{display:flex;gap:9px;align-items:flex-start;font-size:13px;color:#344054;margin:15px 0 2px;line-height:1.45;cursor:pointer}
+.lpmodal-check input{margin-top:2px;width:16px;height:16px;accent-color:#F7931A;flex:0 0 auto}
+.lpmodal-go{margin-top:16px;width:100%;display:block;text-align:center;box-sizing:border-box;background:#F7931A;color:#fff;font-weight:800;font-size:16px;padding:14px;border:0;border-radius:12px;cursor:pointer;text-decoration:none}
+.lpmodal-go:hover{background:#e67c0e}
+.lpmodal-go[disabled]{opacity:.6;cursor:default}
+.lpmodal-msg{font-size:12.5px;color:#667085;margin-top:10px;text-align:center;min-height:15px}
+.lpmodal-tick{width:54px;height:54px;border-radius:999px;background:#ecfdf3;color:#12b76a;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:800;margin:2px auto 12px}
+#lp-thanks-state{text-align:center}
+</style>
+<script>/* runs before first paint — sets the JS flag and the saved theme (shared with the site) */
+(function(){
+  var d = document.documentElement;
+  d.classList.add('js');
+  try { var t = localStorage.getItem('cx-theme'); if (t) d.setAttribute('data-theme', t); } catch(e){}
+  try {
+    var m = document.querySelector('meta[name=theme-color]');
+    var v = getComputedStyle(d).getPropertyValue('--paper').trim();
+    if (m && v) m.setAttribute('content', v);
+  } catch(e){}
+})();
+</script>
+<!-- Meta Pixel Code -->
+<script>
+!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version="2.0";
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window, document,"script",
+"https://connect.facebook.net/en_US/fbevents.js");
+fbq("init", "631448557746627");
+fbq("track", "PageView");
+</script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=631448557746627&ev=PageView&noscript=1"
+/></noscript>
+<!-- End Meta Pixel Code -->
+</head>
+<body>
+
+<!-- glyphs reused across the page -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="wa" viewBox="0 0 24 24"><path fill="currentColor" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"></path></symbol>
+  <symbol id="ok" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></symbol>
+  <symbol id="no" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"></path></symbol>
+</svg>
+
+<header id="hdr">
+  <div class="wrap nav">
+    <a class="brand" href="https://wealthx.tech" aria-label="WealthX home"><img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAApAKkDAREAAhEBAxEB/8QAHQAAAQUBAQEBAAAAAAAAAAAAAAYHCAkKCwUCA//EACoQAAEEAgEEAwACAgMBAAAAAAQCAwUGAQcIAAkREgoTFBUhFiIXGTEk/8QAHQEBAAEEAwEAAAAAAAAAAAAAAAgEBQYHAQMJAv/EACwRAAICAgICAgIBAwQDAAAAAAECAAMEBQYREiEHEwgxIhVBURQWMmEjM0L/2gAMAwEAAhEDEQA/AOf/ANIh0iHSIdIh0iOfqHS+1d+XaP11pyiz+wLnJIceYhYEVLq2BGcoS/ISZpDg8bDRQ6nGkEysuYDGjrdZQ8UhbzaVWTkPJNDxTWW7nke1w9PraWSt8rMtFatbafGqilAGtyMi09irHorsus6PhW3R6qsPCy9heMbBxrsq9ldxVShdvCtS9jkD0qVoCzuxCqoJYgRtiGHRSHxSEfW+M86w837JV6OsrU24j2RlSFeq0qT7JUpOfHlOc48Z6vKMroroe1dVZT7HasAQej0R2CD7AP8AmUxBBIPogkEf9j9z8evqcQ6RDpEk9xW4Y8n+bl2nNccVdP2Lc93rdaeuE3Xa0TBimx9aYkQIp6WcVOysSOthuQkwBlIZfdf9yUKw1ltK1oREtyO4z714jbVmdIcjtcTOqdrV4GEkpqlz78UTJx4NjiA56EIedhpCTAymQiJAM5pLZa3ENPoS8htzCkJRErF6b2hNaotm84ykzhWoaPcKtr+07AwOhquRV1ukbPzFbrOTHnG8mS8hFViakFiAIKWAIMy/I/kbkI7JaI8vFDgzyy5yT9sq3E/Sln3XYKNEgTtsi6wVAjEQsTJlvAgGk5npeIacaJLHeZQkZx5zCm1ZWhKfCsojdcheOm6+KO2bJozkNr6X1dtmoNQ71lpM69GEScS3YIUCww6iHYg6SAVg+FlAJBrDJjuUsktpdw25hSEojKdIh0iWt6x7Hfda3PrylbY1bwx2Pdtc7FrELcqVbIWZ1+5GWCtWEBiTh5UT77iwQ20YCSy9hkpgcpjKstEsMvIW2lEgBvXQ+3+M21bdpDfNCnNZbWohrMfbKVYkDJlIckkRg8XDqwiTAiGCwShjQywiyRCxCGSBn3WXELyiTb0T2aO59yZ1ZWN2aO4cbTvurbowSXVbeIqrRAM6EKU8G4eANYrFDyTse68w5kM/ISQ5Af0MAfJEdafWiQ55Ecbd2cT9ny+mOQdGJ1vtCAGjypynHy9el5OHblBWzQmpJdbl5kIMxwV1p5wB8pBw2HEpKHZczlGERjukQ6RJCSXEjlZDQp9kl+MvIKKrsXFkzcnPSWmdjAwsdDBirOMlzpQmttAiRgoTbhhJ5D7YrAqFkOupaSpeLBXyvi1uQmHVyXQWZdloorxa9zrnyHvLeApShck2taX/AIisKXLfxC9+p3HGyAvmaLggHZY1OFA/z5ePXX/ffUf3tmcKs88+V9U0fKSM5A0MeDsV22ZZq62E5MQFPr4jY7TwCZFt4TJMtapOtV1tbjBH5kzCzssONiOeNffOnyinxB8dbTl9dGNmbNb8PW6TAy2sWjN2mbafGu00lbProw6szNsCMhdMVkDKWBmUcG4rfzPkuBoaXNKZBstycgDv6MWhC9tn6I7/AOKIG6Bd1HfZAOzGq/EZ4F2uqwdia5IcmI5U9GtEoZW9rZ/8RDuFNLQrGKinL2BiMKxnGcJ+zCPGcY89QtxPzj5dbVi3XcU4+EsrosvFdmcT0VVrxV5ZPr/7WvzP9h2T+zmG8+MDp9rtNWMy3IbXZFtK2fUEFyoA1b9dkD7EZT12QCSO/Uyt8I+z7s7lvvzZWt5e81XXFF0tsmxUPYkgVOQhuyTyKlINsTodO17gzE2T9DZUWKXa5SPHq8UdNAJw5LEtlRbcrPl78g9L8XcO1fIq9TsN9n8h19OXpKMbHvTUqcqpXx7dntjWcfFqYsWrx1dsvJFVi1pWv/mXHeEcDzeabt9RTl4uAuOx/wBVdkWJ9oRH6sXHxvIWX2hQzEKAidduw7AOkDmhr/j52he2btuF4+1MSt3jZ8SNo+GtpWBTL9cLJsQOVFsVgscy4lMmb+KlMXFwP8OWwoCRerYobQrDILaYG/Fe95x+THz1xzL5rnWZel4xdZyu7UUB6NLrMXVXVPrcPGxVJr+y7aWYBe3I+y/Loxso2O58yJGc30vHPib47zMXR1L/AFff+OrbZXBrM7JWxAc2xbh/6K1qXwFKeNY+49J/JjI79vP4mRu1tBxvJnuLchjeLFQssEHaI6kxn+NQ9jrEFJ/ndjpfZNtvmHK5Xn5BBjKVQahWigH3GmipFwh/IzPrwAAOgOgPQA/QH+JDeOZzK+IfT2OPk1vbtqcqy+ShddhZieapVkOo9iD2KxC5Xk6J1/eNeoYhMWBpApzIseek5qRlW2YpRUa44p9CJQL2V+2NrzuZcsNg6G3ht+X4/wBN1lqKx7Ps9qDagRjR3q/cqdU3YYk204VDRPu7Z3VKfNbX/wDQO20nH+ysKRNTr3w9eAO3aZYc8W+4jcLndItjLLEo1L6f2ZUoyTcS5gZFkAoTA0k0y442ryw1KgPrw2tLbmM484RGd+NFwi3V28+9vy54u73jxR7lSOKswQHMReXXIC3VmX2BraQr1rr5LqEZfjJeOfaewjPl4ErBMcX6FiPtpRIT9+Dhfujn98kPYPGLRUI/J2+9VTj3mTl8hkFQ1HqAWlNeqst6szg/rgWBroTuHnlOOsZONdAiBXf3yQbbiJqQ5VfHbouwe0nqbtkcXb9XtQuUrbNH3DbNo3CuEWU/Y1ogqvcoW1T1gGhz4h52asUjb2jB3GyPwREdHjw4YyBGhUNIlcHxyeBFl7Z/dy7iHD+27ChtoTmvOPGgpYu5QEIZXouRTexmLwOyxFHnyRLKo5iwIj3nFluYfeGceQltDmG0okhubXxmovuR9y7lJy55I71mtQ6kvZWr67qir65agSrpYVVHUtEqklOTsjZRDYuNFLnIiYFjIEQF6SfGEYknDkoL/GwiZ/O9f8X4rtzcfZXlnxs3Badx6coxUILtSv7AjoUW51MGwSzEFH2sCQr40dGycHibkIiJMBzHYkA3ZFkxRLwv3YHRMiHSJ0u/hv8APX/l/ifsjhBdJhL9z4xT+bLrtkslOS5DUGxTz5LAgqHXFEl4qV1RPCEuIx+aNiZyrgIw2n6k5RJmdzr47+t+433LeO/LO0SgEBqCMpio3lFWQMZGse0ZOgGAY1lHBvNNf6s2KGNerVtl3H0ERtYpscDHtKNl2zQET676nei1P2f+O8Pxv43DVcnlPbKWzAarosQwH/j+jqSyAmLj9g2iMG8MCuBjtoRQKsttP8sYOmXkW0QYbbEyicqS+325bRudm2HsKyS9vu1ymT7DZ7NPGvyEvNTMmQ4UcecYQtbrzz77i1qypXhOM4SnGE4xjCIkekQ6ROuf24eTFL5k9r/jhY9j4TamNp8emda7aSd9ec2GXiYqQ1XtRl9GMY8NSkzE2Jr0ylPll5OU4UlSVZ8U/mWm/wCO/mvlVGC1uJdrOS177VkWdlFzHp3eC6knrx6vQeBBHQZSGBPcgOKcfyOSccpur8bA1L4rsa/QtrHh4k9ewvrsgn9fsH0KQex92zp3iUxzAuF7jnU3GY5AW/T9SkXAFjinax09MyUYJZ66S+22Q5EXWzSM057pwoSSja5XZAZxxtbbmc9/LX5ax/ker441OmvD6mnjODyvOrS0P1uN/ioacXJVCUGRrMBO+iA9T5+RWwBBAy74O0lnG8zf7PPpNWSbn09H2qFdasa4nL7RgGTzuSoAg9N9fsHoGXyaQ5LVG3j7QolWlXTjNC7PmdPXRxSUtsA3UCEr9vlYZjOXMqcchxLfGhHqylv6pFBQuMZyPnOYwbfQbbjOs4tk7Sr6a+TaEcg1Skt5Waq7Y5+FjXupHStecJ7q17Plj2UufbdDZLf0vlu+3mRrXW5sDLow8wj2pyVwsdrGQj0ydsay3fuyqzsAdE1d9v7gN/x7zr7m/L+dhVDEbn31MwmrHiBXB8s0Sy4jdsXORiF5QhgiGsFqs8NAO4bxn8klrd9hLi0+Vq358v8Ayr/uv4i+FOEYmSLRq+O07DkKq4YNsteLtBrKreiSLqacXPy2Vv8AlXnUOFBPU1lwrizcX5vyjNyq3rONe2Jry6g+SZQXKsurZv5+q2qRWAAZXYd9joVw9w3YlT5P99PttcCznhZPXOmtw69tmyot1IxcdMX21mRGwToA1P8AuObGZpFWpUEeASlTgkifZRVYQt9xGJZfg98f/wBB4Lt+cZlHhncyzxThMwIddHpXuxsYgMO1/wBRn2bHIDL6tx3xm7IAmuvmnlD7zkdWuSzyxtNT9HQ8gDlWn7MhmHfiWUkVhuu/FQP896i++PwCqfcI1JprSF65ww/DfXEFZLHZ5mDlJysQQe25EaOiI6AZexY5eIScNRmCZZ38gyiWcOWdt0tpCmw19TgmmoyHZe4Z8ee0ZW9y0FHc51PvbXGzZCrz9fp9g2hrSKjaBZolqXDsUvCNN2x5tC7YA/Xx5BptDSMLro73hTjq1ZRM2Wt+wNdO5x3Me5BuHXO5xtDcLK/y63FUmb3r1xMgZsZ5y1KsMxWdcqjiWq69WoV2SB95x9ctBIMGxHMBOkhuujIlvXaa4BdozhRz/rUTxL7pWwNxckoyHulVm9Drt0FKVbYgjkSS7PCyX+OVoWvTK6+qJVZR0xM484wRDNlY+xhpaVolpMgEKL8kSBIHYbaekezw6Qa42hKVEvMcuJ0Rp15WMYy4tAzLTKVKznOGm0Ix4SnGMImG/wCTJtDY+pu/Dviw6wvNpoE8bROOUMXM1GaOgZN+Kf1LrE96PdMj3mH1iOGR4BS2FLy2t4QdxSc5bT4RNXvyudn7E1b2h9b2nXF5tFFspfJHR8WTO1WbOg5UqPL1rtQ4oB44B5gh0UksAMt8fK8tuviMOrTlTSc4RKSvhl7AvGzuaXNe4bEtlgu1qP0TrIc6w2eULmZgtiNssnHgNEHnOvEOthgjDiDpW5nDQ7LbSPCEJxhEgj8rHmLyKle7TsjTIe1bnXdb8fKvqmP1tV6zPycBHxRds1tUL7YZx9qKJFwbNSVgniVKkCftIQALHAoUlgNpOETYBySv1p3d8XSW2dsyTetN12F23NV3e3zkj4dKmrTJ1GkTh8yXlWM4WWTLZyetfj+iM+6fGcY8InJQ6RNnfxCeAXK2w8rW+fkQfI614z0mAuetpk04NxON9kzgeBy6dX23sIS9A1KwhQtimrEjCx2J2BDghFul5lcAInR/2srYCNX7GXqduEd2kmi2xWtmrLh7NcdvqYI/NQasGB1IfzCO2DEeiVwypLv4VP8ApnCvHSJwyeVm1N57n5D7d2FyTnp+w7tm7zYMbBMsn3tyQtgDkSAzYr8ZGEqjBYpxjIAcYhtpoAZhsZtpCW8JwiR76RDpEOkTcX8Y/ckxsPi5s/j4MTIyE9qbbrB0KGhTrrMfUttgILhQxmkZVlLWbnA36ULzhKUIyYpxSv8AdWceVf548TfD59w7lGMgVOVaWzT3FB/J9lpMperXP6ZmwdliVqp9lMQ9dhT4y2/Hbf4NWj5JrdhbSiaq0bdRaUBGJZSwyShYg/xfHUADsedyD9sAdc/Ji0UviHxi2rvS5NjYqejdXz1vOZNd/CzPnwMUtUPXv1KTjDJtzsio6thLx5VmQmh8YwpWcYzGbiHDM3mXKNDxXBS5rNvsMPW/alb2HGxWdK8nMYd9hMXFFuQ3ZAUVkd+/dr23OTXTtdqHRbrmycqqpXRSltzs1Y6HYJQsOgQfLx6P77mNb45HIe778tvPAC4Thc9db1tepbywE846+bNWfahFsi7lLoGRhSUehNdqg55CEp9smhIc8obb9ZafnPwzF0mu+IcjVYq04uDhbLiFa1qQiVYia27U4w6H6AfOKKT30rFR6adn4571EzeXY+dYiV20U7m7ItsRCoxzeMg9Oy+R8HDjxB8fEg9eQ72r7PMp3GbQly2ffnFCUjTGtrBd7cZhTbDpEdU4QudmGA3Xsttqk5d0Z4OKZUvGS5M0QVvy68hOYgcc4pncj3mk4zrK3bK2mdg6rHbxZ1rORalD5Fg/f10hmybfYHijex36+t3zVbrtvuXtUNbZkZFSBlJVfa4tXgG9hEWpGAHoKSJyNhObWxxu4BG8/TsomNjR3JiP5FkBKW4GFKHgX1m4PV7OGlewcRICtOQax2c4QxGvqYbThCcJ692uL6DC4tx3Scc11YqwdJrMLW4yD9/ViUJSpY/3dgnk7H2WJJJPuRfy8izLyb8m0lrL7Xtck9+3Yn99n9fr9n9fudMvk3o3gl8nbhPqOw6p5Aoq99pjRlxpExXTwF3/AFTY7NGCR9wpOyqC8X/IIjCZCFjR5ZP1toKfr4xVdmXBnVEPX6U8pr138L6Pp9gbsvJHuFvkarh/sPsCaZUl0aQ/CLnD6/12W32SaiIwLLLbiTSVjNuNtZU4y+wtOF4RLBPjvcjeI1u4j8le1qBtSKrV11dubk/rSFBevMePdL9qrZ9suJ0Ff6LYUkIxY5IQCdko3J8IUeeEZBMzC20BlCOqREZ2z/i0Wvt5dxPX/M7HLSC2PQ9Yn7DMgaI7rw+KtskNdKlZKiG1NWVyfKi8vxYdhUaaSJEsYOJGwhpI7Ti8dIkq998yePOivko6GG2LtKlwcXs/tkyWjgJx2xw6oiE2mrkpbrpE1W0yCTfy1s2UhIuQ/K3LuiLWY/FD5Rj+RYXlEq++Uf2Xgrq3vzvGVjdLUamg6808q46kMr7kpi2SUZaKHqSDkK5ZBTx2YgH+Ak4kw5koOQyQWAS6w8y0WlLaJeZyV0fxy+Qr2pKvRtTbnjIuFuQmu9h1C5ReBJ87W2yKxDPMoh7zWRy0lDGhBzUzCTsG+8EajBn6QyMIwOQ4iUy/HY4By/bP7vHcT4hTGwg9rH6447ce5M69RdfKrcdIvX4Jm8NjsxRR0k8LgJE4oFOXTXVEKEceThOM5SlEzL/KYSpPe65beycp8xWhs484zjzjOgda5xnHn/3GcZxnGf8AzOM4zj+s9Im268NOr+JxAoS24pf/AFYaeX6JQpSvRGuaS4tfrjGc+qW0qcUrx4ShOVZzhOM56RMM3Yr7K2xu61voWUtcdPVXiNrOXCK3BsJhp8BVlebV+lnWtMklISh2dmUowmaPDWpyuQ7jhPuzIkxvlE3493Hua8dexRwpqeo9GQFMidySNMTSeMOjYYURmOrsTFjKi8X+fhB8Y/PTqy6jKm1mox/ldjRmPTk1DM44MiLz47Pcdm+4928ahctl2XNk37qSfltTbpMJcTmSlZuH+qQrlpLRleX3VWenyUFIGHKbQO/O/wA0MxnOQ3UoRMO3yweBGeJ/cakt6VGCVHao5jxZO1QHxhvqjAtqBkNgbZhkO+2fsPNmXAr0SlKUNMMXUUdrHqznCUTLn0iHSIdIi7oe0dj6tOMk9b3q10WQkGGxTzKrOyMG+YOy5l1lolyPIYy8hlxSltYc9stZW56ZT9i/a3bHUavbLSm012FsFx7DbQuZjVZApsZSher7VbwYqSpZeiR6M7qsi+j7Pousq+1Prs+t2TzTyDeD+JHkvkoJU9gkA9eosbbyT5BX2vm1S7bq2da6zJLHXIQM/dJ+UiTlCO4fGyWCWc6ORhh9KXmsOtqwh1CHMYwtCc4psPjfH9fkJl4Ol1mJlVhlTIx8LHquRXADhbEQMAwAB6Psepw19zqVe2xlPRKsxIPX69ExD0bY9/1lKvTmu7nZaTMEDZDfkqxMnQprwuXW3vzukAPMuLaw8027hClZwlaEqT4zjz1V7DVazbV107TAw9hVTaL6q8zHqyEruVWUW1rarBLArMA69MASO5zTkX45c0XW0mxDW5qdkL1t15I3iR5Keh2p7BjgWXk9yLuUDJVe2bx2nY65MMoHlYOZu9gkIuRYbdbfQyYGSe4wQ0l5ptz63UKT7oTnOM+MdUWNxnjuHfXlYmk1eNkUkmq+nBx67ayQQSjrWGUkEjsHvow2Re6lWtsZT+wXYg/39gmMX1fJ0xZU3Yt/10dmToN2tdLPUtC1l1awSsE+4prz9eXVxpQ2Xvr859MO++E+c+MY6RF/aeTXIq7h/wAfb957YsQGUONqClr9ZixVtupwh1twdySy06hxGMJWhxCkqT/WcZx56RGih5yar0ixMQExKQcsMpSh5SIkC42RHUvGUrUyaG8yS1lac5SrKHU5VjOcZ84znpEfJ/ltyiJi8Qr/ACG3K7FYYwNgFWxrVlj8+E4Rhr1/lMZ9MJxhOMef6x0iMhJ2CfmpL+ZmJuXlpjLiHf5WSkjDpL7W1/Yhz9xTzpX2Ic/3Qv7fZK/9k5wr++kRzprkTvuyU93X1h3Ls2do77LA79UmLrYJKBfYGIaLHZfjTD3hnm2CmGCGkOoUlt5ltxOMKQnOETyKDurb+qvuxrXZ99oaCMrU+zU7XNQQ7y3PT3cdHjjGGFuLw2jCnFN5czhCcZV4xjpE9mP5Gb8ibTPXiM3LssC5WgYIOx2kS5zzE9OCRyEtx40pKNnJMNYCbQhsRoh1aB0JwhpKU/10iIC43a4bDsBtsvdmnLhZ5FArZ8/Y5MuYlzGwRWQQ0EnnOvEvJFDHYFYStxWGmGW2keEITjCI4LnI7frtNxrxzcuy10RMGPWcU9Vync1vFeEZaHGhMQ/7fw4jGB2GWWgsM/QhppDeEYSnGOkT8aZyH3vrmCZrFB2/sal10d8kpmEq9umoOMQSY5l4ojAccYOzl8hzPs66pGXF+MYyrwlOMIiRveyNgbQl2Z/Y91tF6mxwmY1iWtc3Izp7EeOpa2AmSpIgh1oVpbrq0MIUlvDjji/X3WrOUT16BujbmqWJMbWey7xQR5p0Z+WYqNml4BqSeDS6gV01uNKHSQ4Oh95DS3MKUhLik4z4z46RPu/7r29tYWLB2Zsy8X4SEfMKhx7dZZWfaiyJFsVo94BEmUTgVwxsENBKmfTLyRmML84bT4RGw6RDpEOkQ6RDpEOkQ6RDpEOkQ6RDpEOkQ6RDpEOkQ6RDpEOkQ6RDpEOkQ6RDpEOkT//Z" alt="WealthX" class="brandimg"></a>
+    <nav class="navlinks" aria-label="Sections">
+      <a href="#learn">What you&rsquo;ll learn</a>
+      <a href="#why">Why algorithmic</a>
+      <a href="#fit">Who it&rsquo;s for</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="navr">
+      <button class="iconbtn" id="themebtn" type="button" title="Light / dark" aria-label="Switch between light and dark">
+        <svg class="i-moon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>
+        <svg class="i-sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      </button>
+      <a class="btn sm" data-wa data-cta="header" target="_blank" rel="noopener" href="https://chat.whatsapp.com/DuqUqL8flxaARG7wpIjWzl">
+        <svg width="15" height="15" aria-hidden="true"><use href="#wa"></use></svg><span>Join<span class="long"> the group</span></span></a>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- ══════════════════ HERO ══════════════════ -->
+<div class="herowrap"><div class="wrap herogrid">
+  <div>
+    <div class="whenkick rise d1">
+      <span class="chip warm">Free live masterclass</span>
+      <span class="kick">This Saturday &middot; 6:00 PM IST</span>
+    </div>
+    <h1 class="rise d1">Options Wealth Building<br>Algo Masterclass.<br><span class="orange">This Saturday, 6 PM.</span></h1>
+    <p class="lede rise d2">A live session on how rule-based, automated systems approach options &mdash; what
+      they do, what they can&rsquo;t, and how to judge one before you put money behind it.
+      <b>Education only:</b> no tips, no trade calls, no promises.</p>
+    <div class="ctas rise d3" id="heroctas">
+      <a class="btn lg" data-wa data-cta="hero" target="_blank" rel="noopener" href="https://chat.whatsapp.com/DuqUqL8flxaARG7wpIjWzl">
+        <svg width="18" height="18" aria-hidden="true"><use href="#wa"></use></svg>Join the group</a>
+      <a class="btn lg ghost" href="#learn">What you&rsquo;ll learn</a>
+    </div>
+    <div class="trust rise d4">
+      <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v13.5"></path><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M9 8h6M9 12h4"></path></svg> Education, not advice</span>
+      <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.1 1.1"></path><path d="M14 10a5 5 0 0 0-7.1 0l-3 3A5 5 0 0 0 11 20.1l1.1-1.1"></path></svg> Link shared in the group</span>
+      <span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"></path></svg> Open Q&amp;A</span>
+    </div>
+
+    <div class="strip rise d4">
+      <div class="s"><div class="k">Format</div><div class="v">Live, online</div></div>
+      <div class="s"><div class="k">Level</div><div class="v">Beginner-friendly</div></div>
+      <div class="s"><div class="k">Cost</div><div class="v pine">Free</div></div>
+    </div>
+  </div>
+
+  <!-- the session pass -->
+  <div class="panel tile rise d3">
+    <div class="ph">
+      <span class="live"><i></i>LIVE MASTERCLASS</span>
+      <span class="chip grey">online</span>
+    </div>
+    <div class="pb">
+      <div class="plabel">This Saturday</div>
+      <div class="pbig mono">6:00 PM IST</div>
+
+      <div class="cdwrap" data-cd-cells hidden>
+        <div class="plabel">Starts in</div>
+        <div class="cd mono" role="timer" aria-label="Time until the masterclass starts">
+          <div class="c"><span class="n" data-cd="d">00</span><span class="u">days</span></div>
+          <div class="c"><span class="n" data-cd="h">00</span><span class="u">hrs</span></div>
+          <div class="c"><span class="n" data-cd="m">00</span><span class="u">min</span></div>
+          <div class="c"><span class="n" data-cd="s">00</span><span class="u">sec</span></div>
+        </div>
+      </div>
+      <div class="cdstate" data-cd-live hidden>We&rsquo;re live right now &mdash; the link is in the group.</div>
+      <div class="cdstate over" data-cd-over hidden>This session has wrapped. Join the group to hear about the next one.</div>
+
+      <div class="rows">
+        <div class="rowline"><span class="k">Where</span><b>Online &middot; link in the group</b></div>
+        <div class="rowline"><span class="k">Format</span><b>Live session + Q&amp;A</b></div>
+        <div class="rowline"><span class="k">Cost</span><b class="pine">Free</b></div>
+      </div>
+      <a class="btn full" data-wa data-cta="pass" target="_blank" rel="noopener" href="https://chat.whatsapp.com/DuqUqL8flxaARG7wpIjWzl">
+        <svg width="17" height="17" aria-hidden="true"><use href="#wa"></use></svg>Join the group</a>
+      <div class="fnt tnote">One tap to join. Leave whenever you like.</div>
+    </div>
+  </div>
+</div></div>
+
+<!-- ══════════════════ 01 · WHAT YOU'LL LEARN ══════════════════ -->
+<section class="blk tint" id="learn">
+  <div class="ghostnum" aria-hidden="true">01</div>
+  <div class="wrap">
+    <div class="head2 rise d1">
+      <div class="kick secnum"><b>01</b><i></i>What you&rsquo;ll learn</div>
+      <h2>Six things you&rsquo;ll understand by the end</h2>
+      <p>The session runs in this order. We teach the <b>why</b> behind each idea, not a set of trades to copy.</p>
+    </div>
+
+    <div class="grid g3">
+      <div class="panel step rise d1"><div class="n mono">01</div><h3>Options, in plain language</h3>
+        <p>Calls, puts, premium, expiry, and why time matters. The vocabulary without the jargon.</p></div>
+      <div class="panel step rise d2"><div class="n mono">02</div><h3>What &ldquo;algo&rdquo; actually means</h3>
+        <p>Rules written down in advance, tested on past data, executed by a machine. Where the discipline
+          comes from &mdash; and where it doesn&rsquo;t.</p></div>
+      <div class="panel step rise d3"><div class="n mono">03</div><h3>Risk before return</h3>
+        <p>Position sizing, a maximum loss set per position, and what a drawdown feels like. Why a stop-loss
+          is an order, not a guarantee.</p></div>
+      <div class="panel step rise d1"><div class="n mono">04</div><h3>Reading a track record honestly</h3>
+        <p>Backtest vs live. Gross vs net of charges. Sample size. The questions to ask before you believe
+          any number.</p></div>
+      <div class="panel step rise d2"><div class="n mono">05</div><h3>Wealth building vs quick money</h3>
+        <p>Why consistency beats intensity, what realistic expectations look like, and the patience the
+          approach demands.</p></div>
+      <div class="panel step rise d3"><div class="n mono">06</div><h3>Open Q&amp;A</h3>
+        <p>Bring the hard questions. We&rsquo;d rather answer them live.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 02 · WHY ALGORITHMIC ══════════════════ -->
+<section class="blk" id="why">
+  <div class="ghostnum" aria-hidden="true">02</div>
+  <div class="wrap">
+    <div class="head2 rise d1">
+      <div class="kick secnum"><b>02</b><i></i>Why algorithmic</div>
+      <h2>Three principles, not a strategy</h2>
+      <p>What separates a rule-based approach from discretionary trading &mdash; whichever rules it runs.</p>
+    </div>
+
+    <div class="grid g3">
+      <div class="panel feat rise d1">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"></path></svg></div>
+        <h3>Rules, not opinions</h3>
+        <p>Every entry and exit is decided before the market opens. No FOMO, no revenge trades, no
+          second-guessing at 3:15.</p>
+      </div>
+      <div class="panel feat rise d2">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v6c0 5-3 7-7 9-4-2-7-4-7-9V6z"></path></svg></div>
+        <h3>Risk set in advance</h3>
+        <p>A maximum loss is fixed for each position <b>before</b> it is placed &mdash; not decided after
+          the market has moved.</p>
+      </div>
+      <div class="panel feat rise d3">
+        <div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h14v16H5z"></path><path d="M9 9h6M9 13h6M9 17h3"></path></svg></div>
+        <h3>A record you can audit</h3>
+        <p>Every action is logged. You can see what was done, when, and why &mdash; and check it against its own rules.</p>
+      </div>
+    </div>
+
+    <div class="note rise d4">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v4M12 16h.01"></path></svg>
+      <div><b>We won&rsquo;t teach a specific strategy or share trade setups.</b> The aim is that you leave
+        able to evaluate any automated options approach on its own merits &mdash; and to know which
+        questions to ask.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 03 · WHO IT'S FOR ══════════════════ -->
+<section class="blk tint" id="fit">
+  <div class="ghostnum" aria-hidden="true">03</div>
+  <div class="wrap">
+    <div class="head2 rise d1">
+      <div class="kick secnum"><b>03</b><i></i>Who it&rsquo;s for</div>
+      <h2>Worth an hour of your Saturday if&hellip;</h2>
+    </div>
+
+    <div class="grid g2">
+      <div class="panel fit rise d1">
+        <h3><span class="dot"></span>A good fit if you want to</h3>
+        <ul class="plist">
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#ok"></use></svg> Understand how automated options systems work before ever using one</li>
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#ok"></use></svg> Replace tips and hunches with written rules you can check</li>
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#ok"></use></svg> See a realistic picture of the risk, effort and time involved</li>
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#ok"></use></svg> Ask your questions to the people who build these systems</li>
+        </ul>
+      </div>
+      <div class="panel fit no rise d2">
+        <h3><span class="dot"></span>Not a fit if you&rsquo;re looking for</h3>
+        <ul class="plist">
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#no"></use></svg> Trade calls, tips or &ldquo;sure-shot&rdquo; setups</li>
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#no"></use></svg> A promise about what you&rsquo;ll earn &mdash; nobody can honestly make one</li>
+          <li><svg width="16" height="16" aria-hidden="true"><use href="#no"></use></svg> A shortcut to quick money</li>
+        </ul>
+        <div class="foot">We don&rsquo;t offer any of these &mdash; in the session or afterwards.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ 04 · FAQ ══════════════════ -->
+<section class="blk" id="faq">
+  <div class="ghostnum" aria-hidden="true">04</div>
+  <div class="wrap" style="max-width:840px">
+    <div class="head2 rise d1" style="margin-bottom:26px">
+      <div class="kick secnum"><b>04</b><i></i>FAQ</div>
+      <h2>Questions, answered</h2>
+    </div>
+
+    <div class="faq rise d2">
+      <details open>
+        <summary>How do I get the session link?<span class="plus" aria-hidden="true">+</span></summary>
+        <p class="a">Join the group. We post the joining link there before we go live at
+          <b>6:00 PM IST this Saturday</b>.</p>
+      </details>
+      <details>
+        <summary>Is it really free?<span class="plus" aria-hidden="true">+</span></summary>
+        <p class="a">Yes. Nothing to pay and nothing to buy to attend.</p>
+      </details>
+      <details>
+        <summary>Do I need to know options already?<span class="plus" aria-hidden="true">+</span></summary>
+        <p class="a">No. We start from the basics and build up.</p>
+      </details>
+      <details>
+        <summary>Will you recommend trades?<span class="plus" aria-hidden="true">+</span></summary>
+        <p class="a">No. This is education only. We don&rsquo;t give buy or sell calls, and nothing in the
+          session is a recommendation to trade any security or derivative.</p>
+      </details>
+      <details>
+        <summary>I can&rsquo;t make it on Saturday.<span class="plus" aria-hidden="true">+</span></summary>
+        <p class="a">Join the group anyway &mdash; it&rsquo;s where the next session is announced.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════ FINAL CALL ══════════════════ -->
+<section class="blk tint" id="join" style="padding-top:clamp(40px,5vw,72px);padding-bottom:clamp(40px,5vw,72px)">
+  <div class="wrap">
+    <div class="panel final rise d1" id="finalcta">
+      <div>
+        <div class="kick">This Saturday &middot; 6:00 PM IST &middot; online &middot; free</div>
+        <h2>One tap, and the link finds you.</h2>
+        <p>We post the joining link in the group before we go live.</p>
+      </div>
+      <div class="side">
+        <a class="btn lg full" data-wa data-cta="final" target="_blank" rel="noopener" href="https://chat.whatsapp.com/DuqUqL8flxaARG7wpIjWzl">
+          <svg width="18" height="18" aria-hidden="true"><use href="#wa"></use></svg>Join the group</a>
+        <div class="when mono" data-cd-text>This Saturday &middot; 6:00 PM IST</div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ══════════════════ FOOTER ══════════════════ -->
+<footer><div class="wrap">
+  <div class="footgrid">
+    <div>
+      <div class="brand"><img src="data:image/jpeg;base64,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" alt="WealthX" class="brandimg"></div>
+      <p class="mut" style="font-size:13.5px;max-width:38ch;margin-top:14px">Research, education, and technology
+        for better investing.</p>
+      <p class="fnt" style="font-size:13px;margin-top:14px"><a class="footmail" href="https://wealthx.tech" target="_blank" rel="noopener">wealthx.tech</a><br><a class="footmail" href="https://wa.me/919187946508" target="_blank" rel="noopener">+91 91879 46508</a></p>
+    </div>
+    <div>
+      <h4>WealthX</h4>
+      <a class="fl" href="https://wealthx.tech/about" target="_blank" rel="noopener">About</a>
+      <a class="fl" href="https://wealthx.tech/contact" target="_blank" rel="noopener">Contact</a>
+    </div>
+    <div>
+      <h4>Legal</h4>
+      <a class="fl" href="https://wealthx.tech/terms" target="_blank" rel="noopener">Terms</a>
+      <a class="fl" href="https://wealthx.tech/privacy" target="_blank" rel="noopener">Privacy policy</a>
+    </div>
+  </div>
+  <div class="footnote">
+    <p>&copy; 2026 WealthX. This masterclass is for education only. Nothing in it is investment advice, a
+      recommendation, or an offer to buy or sell any security or derivative, and nothing in it promises or
+      implies any level of return. Trading in options and other derivatives involves substantial risk of
+      loss and is not suitable for every investor.</p>
+  </div>
+</div></footer>
+
+<!-- sticky join bar: phones only, appears once the hero button has scrolled away -->
+<div class="joinbar" id="joinbar">
+  <div class="t"><b>Free masterclass &middot; Sat 6 PM IST</b><span class="mono" data-cd-short>Link shared in the group</span></div>
+  <a class="btn" data-wa data-cta="sticky" target="_blank" rel="noopener" href="https://chat.whatsapp.com/DuqUqL8flxaARG7wpIjWzl">
+    <svg width="16" height="16" aria-hidden="true"><use href="#wa"></use></svg>Join group</a>
+</div>
+
+<!-- Registration modal: name/phone/email + notification opt-in → thank-you → WhatsApp community.
+     Placed ABOVE the script so getElementById finds it when the IIFE runs. -->
+<div id="lpmodal" class="lpmodal" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Reserve your seat">
+  <div class="lpmodal-card">
+    <button class="lpmodal-x" data-lp-close aria-label="Close">&times;</button>
+    <div id="lp-form-state">
+      <h3 class="lpmodal-h">Reserve your free seat</h3>
+      <p class="lpmodal-sub">Enter your details &mdash; we&rsquo;ll send the join link and reminders before we go live.</p>
+      <label class="lpmodal-lab" for="lp-name">Your name</label>
+      <input id="lp-name" class="lpmodal-in" autocomplete="name" placeholder="Full name">
+      <label class="lpmodal-lab" for="lp-phone">WhatsApp number</label>
+      <input id="lp-phone" class="lpmodal-in" type="tel" autocomplete="tel" placeholder="+91…">
+      <label class="lpmodal-lab" for="lp-email">Email</label>
+      <input id="lp-email" class="lpmodal-in" type="email" autocomplete="email" placeholder="you@example.com">
+      <label class="lpmodal-check"><input id="lp-notify" type="checkbox" checked> <span>🔔 Notify me &mdash; send a browser reminder before the webinar starts.</span></label>
+      <button id="lp-submit" type="button" class="lpmodal-go">Reserve my seat →</button>
+      <div id="lp-msg" class="lpmodal-msg"></div>
+    </div>
+    <div id="lp-thanks-state" hidden>
+      <div class="lpmodal-tick">✓</div>
+      <h3 class="lpmodal-h">You&rsquo;re in! 🎉</h3>
+      <p class="lpmodal-sub">Your seat is reserved. Join the WhatsApp community now &mdash; that&rsquo;s where the join link and reminders land.</p>
+      <a id="lp-wa-btn" class="lpmodal-go" target="_blank" rel="noopener">Join the WhatsApp community →</a>
+    </div>
+  </div>
+</div>
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   CAMPAIGN SETTINGS — the only things to edit per session.
+   ══════════════════════════════════════════════════════════════════════════ */
+/* Injected per-campaign by the server (window.__LP). Falls back to sane
+   defaults so the file still opens standalone. The admin sets these from the
+   portal — the WhatsApp community link and the session date/time are dynamic. */
+var LP = (typeof window !== 'undefined' && window.__LP) ? window.__LP : {};
+var WA_GROUP_LINK = LP.waLink || 'https://chat.whatsapp.com/DuqUqL8flxaARG7wpIjWzl';
+var SESSION_START = LP.sessionStart || '2026-09-26T18:00:00+05:30';
+var SESSION_HOURS = LP.sessionHours || 2;
+var LP_SLUG       = LP.slug || '';
+var LP_PUSH       = LP.vapidKey || '';
+
+(function(){
+  'use strict';
+  var root = document.documentElement;
+  var motionMQ = matchMedia('(prefers-reduced-motion:reduce)');
+  function reduced(){ return motionMQ.matches; }
+  function all(sel){ return [].slice.call(document.querySelectorAll(sel)); }
+
+  /* ── join buttons → registration modal (capture the lead, then WhatsApp) ── */
+  var modal = document.getElementById('lpmodal');
+  var fName = document.getElementById('lp-name'), fPhone = document.getElementById('lp-phone'), fEmail = document.getElementById('lp-email');
+  var fNotify = document.getElementById('lp-notify');
+  var formState = document.getElementById('lp-form-state'), thanksState = document.getElementById('lp-thanks-state');
+  var submitBtn = document.getElementById('lp-submit'), msgEl = document.getElementById('lp-msg'), waBtn = document.getElementById('lp-wa-btn');
+  var lastFocus = null;
+
+  function openModal(){ if (!modal) { location.href = WA_GROUP_LINK; return; } lastFocus = document.activeElement; modal.classList.add('open'); modal.setAttribute('aria-hidden','false'); document.body.style.overflow='hidden'; setTimeout(function(){ if (fName) fName.focus(); }, 60); }
+  function closeModal(){ if (!modal) return; modal.classList.remove('open'); modal.setAttribute('aria-hidden','true'); document.body.style.overflow=''; if (lastFocus && lastFocus.focus) lastFocus.focus(); }
+
+  all('a[data-wa]').forEach(function(a){ a.setAttribute('href', WA_GROUP_LINK); a.addEventListener('click', function(e){ e.preventDefault(); openModal(); }); });
+  all('[data-lp-close]').forEach(function(el){ el.addEventListener('click', closeModal); });
+  if (modal) modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });
+  addEventListener('keydown', function(e){ if (e.key === 'Escape') closeModal(); });
+  if (waBtn) waBtn.setAttribute('href', WA_GROUP_LINK);
+
+  function postLead(body){ return fetch('/api/leads', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
+
+  async function tryNotify(){
+    try {
+      if (!('Notification' in window)) return { permission:'unsupported' };
+      var perm = await Notification.requestPermission();                 /* ask: "we'll notify you about the webinar" */
+      if (perm !== 'granted') return { permission: perm };
+      if (!LP_PUSH || !('serviceWorker' in navigator) || !('PushManager' in window)) return { permission:'granted' };
+      var reg = await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready;
+      var sub = await reg.pushManager.getSubscription();
+      if (!sub) { var raw = atob(LP_PUSH.replace(/-/g,'+').replace(/_/g,'/')); var arr = new Uint8Array(raw.length); for (var i=0;i<raw.length;i++) arr[i]=raw.charCodeAt(i); sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: arr }); }
+      return { permission:'granted', subscription: sub.toJSON() };
+    } catch(e){ return { permission:'error' }; }
+  }
+
+  if (submitBtn) submitBtn.addEventListener('click', async function(){
+    var name = (fName.value||'').trim(), phone = (fPhone.value||'').trim(), email = (fEmail.value||'').trim();
+    if (!name || (!phone && !email)) { msgEl.textContent = 'Please add your name and a phone or email.'; return; }
+    submitBtn.disabled = true; msgEl.textContent = 'Reserving your seat…';
+    var wantNotify = fNotify ? fNotify.checked : false;
+    /* 1 — capture the lead FIRST so it is never lost, even if notifications fail */
+    try { await postLead({ name:name, phone:phone, email:email, campaign:LP_SLUG, source:'lp', extra:{ notify_opt_in: wantNotify } }); } catch(e){}
+    /* 2 — best-effort: ask for notification permission + subscribe for reminders */
+    if (wantNotify) {
+      var n = await tryNotify();
+      if (n && n.subscription) { try { await postLead({ name:name, phone:phone, email:email, campaign:LP_SLUG, source:'lp', subscription:n.subscription, extra:{ notify_permission:n.permission } }); } catch(e){} }
+      else if (n) { try { await postLead({ name:name, phone:phone, email:email, campaign:LP_SLUG, source:'lp', extra:{ notify_permission:n.permission } }); } catch(e){} }
+    }
+    /* 3 — thank-you + WhatsApp community */
+    formState.hidden = true; thanksState.hidden = false; submitBtn.disabled = false;
+  });
+
+  /* ── theme: same contract as the site — localStorage['cx-theme'] ──────── */
+  function paintMeta(){
+    var m = document.querySelector('meta[name=theme-color]');
+    var v = getComputedStyle(root).getPropertyValue('--paper').trim();
+    if (m && v) m.setAttribute('content', v);
+  }
+  document.getElementById('themebtn').addEventListener('click', function(){
+    var t = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', t);
+    try { localStorage.setItem('cx-theme', t); } catch(e){}
+    paintMeta();
+  });
+  paintMeta();
+
+  /* ── header hairline on scroll ────────────────────────────────────────── */
+  var hdr = document.getElementById('hdr'), tick = false;
+  addEventListener('scroll', function(){
+    if (tick) return; tick = true;
+    requestAnimationFrame(function(){ hdr.classList.toggle('scrolled', scrollY > 4); tick = false; });
+  }, {passive:true});
+
+  /* ── countdown ────────────────────────────────────────────────────────── */
+  var start = new Date(SESSION_START).getTime();
+  var end = start + SESSION_HOURS * 3600000;
+  var cells = all('[data-cd-cells]'), liveEl = all('[data-cd-live]'), overEl = all('[data-cd-over]');
+  var shortEl = all('[data-cd-short]'), textEl = all('[data-cd-text]');
+  function pad(n){ return (n < 10 ? '0' : '') + n; }
+  function put(key, val){ all('[data-cd="' + key + '"]').forEach(function(el){ el.textContent = val; }); }
+  function show(list, on){ list.forEach(function(el){ el.hidden = !on; }); }
+  var cdTimer = null;
+  function count(){
+    if (isNaN(start)) return;
+    var now = Date.now(), left = start - now;
+    if (left > 0) {
+      var s = Math.floor(left / 1000);
+      var d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+      put('d', pad(d)); put('h', pad(h)); put('m', pad(m)); put('s', pad(s % 60));
+      show(cells, true); show(liveEl, false); show(overEl, false);
+      var brief = 'Starts in ' + (d ? d + 'd ' : '') + h + 'h ' + pad(m) + 'm';
+      shortEl.forEach(function(el){ el.textContent = brief; });
+      textEl.forEach(function(el){ el.textContent = brief + ' · 6:00 PM IST'; });
+      return;
+    }
+    var live = now < end;
+    show(cells, false); show(liveEl, live); show(overEl, !live);
+    var msg = live ? 'Live now · link in the group' : 'Next session announced in the group';
+    shortEl.forEach(function(el){ el.textContent = msg; });
+    textEl.forEach(function(el){ el.textContent = msg; });
+    if (!live && cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+  }
+  count();
+  cdTimer = setInterval(count, 1000);
+
+  /* ── sticky join bar: on once the hero buttons leave, off at the final call ── */
+  var bar = document.getElementById('joinbar');
+  var heroCtas = document.getElementById('heroctas'), finalCta = document.getElementById('finalcta');
+  function onScreen(el){
+    if (!el) return false;
+    var r = el.getBoundingClientRect();
+    return r.bottom > 0 && r.top < (innerHeight || root.clientHeight);
+  }
+  function placeBar(){ bar.classList.toggle('show', !onScreen(heroCtas) && !onScreen(finalCta)); }
+  placeBar();
+  addEventListener('scroll', placeBar, {passive:true});
+  addEventListener('resize', placeBar, {passive:true});
+
+  /* ── reveal-on-view. An IntersectionObserver alone can strand elements at
+       opacity 0, so everything is driven by a plain sweep as well. ──────── */
+  var reveals = all('.rise');
+  function near(el, edge){
+    var r = el.getBoundingClientRect();
+    if (!r.width && !r.height) return false;
+    return r.bottom > 0 && r.top < (innerHeight || root.clientHeight) * edge;
+  }
+  function sweep(){ reveals.forEach(function(el){ if (near(el, .96)) el.classList.add('in'); }); }
+  function revealAll(){ reveals.forEach(function(el){ el.classList.add('in'); }); }
+  if (reduced()) revealAll();
+  if (motionMQ.addEventListener) motionMQ.addEventListener('change', function(){ if (reduced()) revealAll(); });
+
+  var rafAlive = false;
+  sweep();
+  requestAnimationFrame(function(){ rafAlive = true; sweep(); placeBar(); });
+  addEventListener('load', sweep);
+  addEventListener('scroll', sweep, {passive:true});
+  addEventListener('resize', sweep, {passive:true});
+  addEventListener('hashchange', function(){ setTimeout(sweep, 60); });
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) sweep(); });
+  var n = 0, iv = setInterval(function(){ sweep(); if (++n > 20) clearInterval(iv); }, 400);
+
+  /* if rAF never fired at all, show everything outright — invisible content is worse
+     than a lost animation */
+  setTimeout(function(){
+    if (rafAlive) return;
+    reveals.forEach(function(el){
+      el.style.transition = 'none'; el.classList.add('in');
+      el.style.opacity = '1'; el.style.transform = 'none';
+    });
+  }, 2500);
+})();
+</script>
+</body>
+</html>

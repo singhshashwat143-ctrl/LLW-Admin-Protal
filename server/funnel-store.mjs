@@ -62,8 +62,16 @@ function createMemoryStore() {
       const id = uid();
       const row = { id, name: c.name || "Untitled", channel: c.channel || "meta", lp: c.lp || "webinar",
         whatsapp_group_url: c.whatsapp_group_url || "", distribution: c.distribution || "webinar",
-        webinar_id: c.webinar_id || null, slug: `${slugify(c.name)}-${id.slice(0, 6)}`, created_at: new Date().toISOString() };
+        webinar_id: c.webinar_id || null, event_at: c.event_at || null, session_hours: Number(c.session_hours) || 2,
+        room_name: c.room_name || "", slug: `${slugify(c.name)}-${id.slice(0, 6)}`, created_at: new Date().toISOString() };
       campaigns.set(id, row); return row;
+    },
+    async updateCampaign(id, patch) {
+      const cur = campaigns.get(id); if (!cur) return null;
+      const fields = ["name", "whatsapp_group_url", "event_at", "session_hours", "room_name", "distribution", "channel", "lp"];
+      const next = { ...cur };
+      for (const f of fields) if (patch[f] !== undefined) next[f] = f === "session_hours" ? (Number(patch[f]) || 2) : patch[f];
+      campaigns.set(id, next); return next;
     },
     async listCampaigns() {
       const arr = [...campaigns.values()];
@@ -124,15 +132,34 @@ async function createPostgresStore() {
         );`);
       await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS leads_email_idx ON leads (email) WHERE email IS NOT NULL AND email <> '';`);
       await pool.query(`CREATE INDEX IF NOT EXISTS leads_campaign_idx ON leads (campaign_id);`);
+      // Dynamic LP fields (added after the first release).
+      await pool.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS event_at TIMESTAMPTZ;`);
+      await pool.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS session_hours INT DEFAULT 2;`);
+      await pool.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS room_name TEXT DEFAULT '';`);
       return this;
     },
     async createCampaign(c) {
       const id = uid(); const slug = `${slugify(c.name)}-${id.slice(0, 6)}`;
       const r = await pool.query(
-        `INSERT INTO campaigns (id,name,channel,lp,whatsapp_group_url,distribution,webinar_id,slug)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [id, c.name || "Untitled", c.channel || "meta", c.lp || "webinar", c.whatsapp_group_url || "", c.distribution || "webinar", c.webinar_id || null, slug]);
+        `INSERT INTO campaigns (id,name,channel,lp,whatsapp_group_url,distribution,webinar_id,slug,event_at,session_hours,room_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [id, c.name || "Untitled", c.channel || "meta", c.lp || "webinar", c.whatsapp_group_url || "", c.distribution || "webinar", c.webinar_id || null, slug,
+          c.event_at || null, Number(c.session_hours) || 2, c.room_name || ""]);
       return r.rows[0];
+    },
+    async updateCampaign(id, patch) {
+      const map = { name: "name", whatsapp_group_url: "whatsapp_group_url", event_at: "event_at",
+        session_hours: "session_hours", room_name: "room_name", distribution: "distribution", channel: "channel", lp: "lp" };
+      const sets = [], vals = []; let i = 1;
+      for (const [k, col] of Object.entries(map)) {
+        if (patch[k] === undefined) continue;
+        sets.push(`${col}=$${i++}`);
+        vals.push(k === "session_hours" ? (Number(patch[k]) || 2) : (patch[k] === "" && k === "event_at" ? null : patch[k]));
+      }
+      if (!sets.length) return (await pool.query(`SELECT * FROM campaigns WHERE id=$1`, [id])).rows[0] || null;
+      vals.push(id);
+      const r = await pool.query(`UPDATE campaigns SET ${sets.join(",")} WHERE id=$${i} RETURNING *`, vals);
+      return r.rows[0] || null;
     },
     async listCampaigns() {
       const r = await pool.query(`

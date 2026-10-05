@@ -6,7 +6,23 @@ import { api, useApi } from "../lib/api";
 type Campaign = {
   id: string; name: string; channel: string; lp: string;
   whatsapp_group_url: string; distribution: string; slug: string; lead_count: number;
+  event_at?: string | null; session_hours?: number; room_name?: string;
+  lp_link?: string; go_link?: string;
 };
+
+// Session date/time is entered + shown in IST (the audience is India); we store
+// it with an explicit +05:30 offset so the LP countdown is correct everywhere.
+function toISTInput(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(d);
+  const g = (t: string) => p.find((x) => x.type === t)?.value || "";
+  return `${g("year")}-${g("month")}-${g("day")}T${g("hour")}:${g("minute")}`;
+}
+function fromISTInput(local: string): string | null {
+  return local ? `${local}:00+05:30` : null;
+}
 type Lead = {
   id: string; name: string; email: string | null; phone: string | null;
   campaign_id: string | null; source: string; stage: string; group_joined: boolean; created_at: string;
@@ -49,11 +65,14 @@ export function CampaignsPage() {
   const leads = leadsData.leads || [];
   const stats = leadsData.stats;
 
-  const [form, setForm] = useState({ name: "", channel: "meta", lp: "webinar", whatsapp_group_url: "", distribution: "webinar" });
+  const [form, setForm] = useState({ name: "", channel: "meta", lp: "capgain", whatsapp_group_url: "", distribution: "webinar", event_at: "", session_hours: 2, room_name: "" });
   const [adLink, setAdLink] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [creating, setCreating] = useState(false);
   const [importMsg, setImportMsg] = useState("");
+  const [editId, setEditId] = useState("");
+  const [editForm, setEditForm] = useState({ whatsapp_group_url: "", event_at: "", session_hours: 2 });
+  const [savingEdit, setSavingEdit] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
@@ -62,14 +81,35 @@ export function CampaignsPage() {
     if (!form.name.trim()) return;
     setCreating(true);
     try {
-      const res = await api<{ ok: boolean; ad_link: string }>("/api/campaigns", { method: "POST", body: JSON.stringify(form) });
+      const payload = { ...form, event_at: fromISTInput(form.event_at), session_hours: Number(form.session_hours) || 2 };
+      const res = await api<{ ok: boolean; ad_link: string }>("/api/campaigns", { method: "POST", body: JSON.stringify(payload) });
       setAdLink(res.ad_link);
-      setForm({ ...form, name: "", whatsapp_group_url: "" });
+      setForm({ ...form, name: "", whatsapp_group_url: "", event_at: "", room_name: "" });
       refreshCampaigns();
     } catch (error) {
       setImportMsg(error instanceof Error ? error.message : "Could not create campaign.");
     } finally {
       setCreating(false);
+    }
+  }
+
+  function startEdit(c: Campaign) {
+    setEditId(c.id);
+    setEditForm({ whatsapp_group_url: c.whatsapp_group_url || "", event_at: toISTInput(c.event_at), session_hours: Number(c.session_hours) || 2 });
+  }
+  async function saveEdit(id: string) {
+    setSavingEdit(true);
+    try {
+      await api(`/api/campaigns/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ whatsapp_group_url: editForm.whatsapp_group_url, event_at: fromISTInput(editForm.event_at), session_hours: Number(editForm.session_hours) || 2 }),
+      });
+      setEditId("");
+      refreshCampaigns();
+    } catch (error) {
+      setImportMsg(error instanceof Error ? error.message : "Could not save campaign.");
+    } finally {
+      setSavingEdit(false);
     }
   }
 
@@ -123,6 +163,7 @@ export function CampaignsPage() {
             <option value="other">Other</option>
           </select>
           <select className="input-dark" value={form.lp} onChange={(e) => setForm({ ...form, lp: e.target.value })}>
+            <option value="capgain">LP: Masterclass landing page</option>
             <option value="webinar">LP: Webinar register</option>
             <option value="group">LP: Straight to group</option>
           </select>
@@ -130,9 +171,16 @@ export function CampaignsPage() {
             <option value="webinar">Distribution: Webinar</option>
             <option value="calling">Distribution: BDA / BDM calling</option>
           </select>
-          <input className="input-dark md:col-span-2" placeholder="WhatsApp group invite link (behind the LP)" value={form.whatsapp_group_url} onChange={(e) => setForm({ ...form, whatsapp_group_url: e.target.value })} />
+          <label className="text-xs font-semibold text-[var(--text-secondary)] md:col-span-1">Session date &amp; time (IST)
+            <input className="input-dark mt-1" type="datetime-local" value={form.event_at} onChange={(e) => setForm({ ...form, event_at: e.target.value })} />
+          </label>
+          <label className="text-xs font-semibold text-[var(--text-secondary)] md:col-span-1">Live window (hours)
+            <input className="input-dark mt-1" type="number" min="1" max="12" value={form.session_hours} onChange={(e) => setForm({ ...form, session_hours: Number(e.target.value) })} />
+          </label>
+          <input className="input-dark md:col-span-2" placeholder="WhatsApp community invite link (behind the LP)" value={form.whatsapp_group_url} onChange={(e) => setForm({ ...form, whatsapp_group_url: e.target.value })} />
+          <input className="input-dark md:col-span-2" placeholder="Optional: webinar room name (for push reminders, e.g. cryptx-automation-jymurucy)" value={form.room_name} onChange={(e) => setForm({ ...form, room_name: e.target.value })} />
           <button className="btn-primary md:col-span-2" type="submit" disabled={creating}>
-            {creating ? "Creating…" : "Create campaign & get ad link"}
+            {creating ? "Creating…" : "Create campaign & get the LP link"}
           </button>
         </form>
         {adLink ? (
@@ -152,22 +200,47 @@ export function CampaignsPage() {
         ) : null}
       </SectionCard>
 
-      <SectionCard title="Campaigns" subtitle="Live campaigns with their ad links and lead counts.">
+      <SectionCard title="Campaigns" subtitle="Each campaign's LP link, session time, and WhatsApp community — all editable here.">
         <div className="table-shell">
           <table>
             <thead>
-              <tr><th>Campaign</th><th>Channel</th><th>Distribution</th><th>Leads</th><th>Ad link</th></tr>
+              <tr><th>Campaign</th><th>Leads</th><th>Session (IST)</th><th>LP link</th><th>Community &amp; date</th></tr>
             </thead>
             <tbody>
-              {campaigns.map((c) => (
-                <tr key={c.id}>
-                  <td className="font-medium text-[var(--text-strong)]">{c.name}</td>
-                  <td className="capitalize">{c.channel}</td>
-                  <td className="capitalize">{c.distribution}</td>
-                  <td className="font-mono">{c.lead_count}</td>
-                  <td className="break-all font-mono text-xs">{origin}/go/{c.slug}</td>
-                </tr>
-              ))}
+              {campaigns.map((c) => {
+                const lpUrl = c.lp === "capgain" ? `${origin}/lp/${c.slug}` : `${origin}/go/${c.slug}`;
+                const when = c.event_at ? new Date(c.event_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) : "—";
+                return (
+                  <tr key={c.id}>
+                    <td className="font-medium text-[var(--text-strong)]">{c.name}<div className="text-xs font-normal capitalize text-[var(--text-secondary)]">{c.channel} · {c.distribution}</div></td>
+                    <td className="font-mono">{c.lead_count}</td>
+                    <td className="text-xs">{when}</td>
+                    <td className="break-all">
+                      <div className="flex items-center gap-2">
+                        <code className="font-mono text-xs">{lpUrl}</code>
+                        <button type="button" className="btn-secondary btn-compact" onClick={() => navigator.clipboard?.writeText(lpUrl)}>Copy</button>
+                      </div>
+                    </td>
+                    <td>
+                      {editId === c.id ? (
+                        <div className="space-y-2">
+                          <input className="input-dark text-xs" placeholder="WhatsApp community link" value={editForm.whatsapp_group_url} onChange={(e) => setEditForm({ ...editForm, whatsapp_group_url: e.target.value })} />
+                          <input className="input-dark text-xs" type="datetime-local" value={editForm.event_at} onChange={(e) => setEditForm({ ...editForm, event_at: e.target.value })} />
+                          <div className="flex gap-2">
+                            <button type="button" className="btn-primary btn-compact" disabled={savingEdit} onClick={() => saveEdit(c.id)}>{savingEdit ? "Saving…" : "Save"}</button>
+                            <button type="button" className="btn-secondary btn-compact" onClick={() => setEditId("")}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-xs text-[var(--text-secondary)]" style={{ maxWidth: 180 }}>{c.whatsapp_group_url || "No community link set"}</span>
+                          <button type="button" className="btn-secondary btn-compact" onClick={() => startEdit(c)}>Edit</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {campaigns.length === 0 ? (
                 <tr><td colSpan={5} className="py-10 text-center text-sm text-[var(--text-secondary)]">No campaigns yet — create one above.</td></tr>
               ) : null}
