@@ -2378,13 +2378,36 @@ app.get("/api/campaigns", async (req, res) => {
   } catch (error) { res.status(500).json({ ok: false, message: String(error?.message || error) }); }
 });
 
+// Lead contact validators (shared by the public LP + any lead capture). Phone
+// accepts an Indian mobile (10 digits, 6-9 start, optional 0/91/+91 prefix)
+// normalised to +91XXXXXXXXXX, or an explicit +international number.
+const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isValidLeadEmail(email) { return LEAD_EMAIL_RE.test(String(email || "").trim()); }
+function normalizeLeadPhone(value) {
+  const raw = String(value || "").trim();
+  const digits = raw.replace(/[^\d]/g, "");
+  if (/^(?:0|91)?[6-9]\d{9}$/.test(digits)) return "+91" + digits.replace(/^(?:0|91)/, "");
+  if (raw.startsWith("+") && /^\d{8,15}$/.test(digits)) return "+" + digits;
+  return null;
+}
+
 // Public: capture a lead from a landing-page form (campaign slug ties it back).
 app.post("/api/leads", async (req, res) => {
   const name = String(req.body?.name || "").trim().slice(0, 120);
-  const email = String(req.body?.email || "").trim().slice(0, 160);
-  const phone = String(req.body?.phone || "").trim().slice(0, 40);
+  const emailRaw = String(req.body?.email || "").trim().toLowerCase().slice(0, 160);
+  const phoneRaw = String(req.body?.phone || "").trim().slice(0, 40);
   const slug = String(req.body?.campaign || req.body?.slug || "").trim();
-  if (!name && !email && !phone) return res.status(400).json({ ok: false, message: "Provide a name, email or phone." });
+  if (!name && !emailRaw && !phoneRaw) return res.status(400).json({ ok: false, message: "Provide a name, email or phone." });
+  // Enforce proper formats. A value that is provided must be valid; a normalised
+  // phone is stored so every lead lands in the DB as +91XXXXXXXXXX.
+  let phone = phoneRaw;
+  if (phoneRaw) {
+    const norm = normalizeLeadPhone(phoneRaw);
+    if (!norm) return res.status(400).json({ ok: false, message: "Enter a valid 10-digit mobile number." });
+    phone = norm;
+  }
+  const email = emailRaw;
+  if (emailRaw && !isValidLeadEmail(emailRaw)) return res.status(400).json({ ok: false, message: "Enter a valid email address." });
   try {
     const campaign = slug ? await funnelStore.getCampaignBySlug(slug) : null;
     // Fold any notification opt-in / push subscription into the lead's extra so

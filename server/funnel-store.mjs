@@ -175,7 +175,7 @@ async function createPostgresStore() {
         const r = await pool.query(
           `INSERT INTO leads (id,name,email,phone,campaign_id,source,stage,group_joined,extra)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (email) DO UPDATE SET
+           ON CONFLICT (email) WHERE email IS NOT NULL AND email <> '' DO UPDATE SET
              name=COALESCE(NULLIF(EXCLUDED.name,''),leads.name),
              phone=COALESCE(NULLIF(EXCLUDED.phone,''),leads.phone),
              campaign_id=COALESCE(EXCLUDED.campaign_id,leads.campaign_id),

@@ -710,9 +710,24 @@ var LP_PUSH       = LP.vapidKey || '';
     } catch(e){ return { permission:'error' }; }
   }
 
+  /* Accept an Indian mobile (10 digits, starts 6-9, optional 0/91/+91 prefix)
+     normalised to +91XXXXXXXXXX, or an explicit +international number. */
+  function normPhone(v){
+    var raw = (v||'').trim(), d = raw.replace(/[^\d]/g,'');
+    if (/^(?:0|91)?[6-9]\d{9}$/.test(d)) return '+91' + d.replace(/^(?:0|91)/,'');
+    if (raw.charAt(0) === '+' && /^\d{8,15}$/.test(d)) return '+' + d;
+    return null;
+  }
+  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  function markBad(el, bad){ if (el) el.style.borderColor = bad ? '#e5484d' : ''; }
+
   if (submitBtn) submitBtn.addEventListener('click', async function(){
-    var name = (fName.value||'').trim(), phone = (fPhone.value||'').trim(), email = (fEmail.value||'').trim();
-    if (!name || (!phone && !email)) { msgEl.textContent = 'Please add your name and a phone or email.'; return; }
+    var name = (fName.value||'').trim(), phoneRaw = (fPhone.value||'').trim(), email = (fEmail.value||'').trim().toLowerCase();
+    var phone = normPhone(phoneRaw), emailOk = EMAIL_RE.test(email);
+    markBad(fName, !name); markBad(fPhone, !phone); markBad(fEmail, !emailOk);
+    if (!name) { msgEl.textContent = 'Please enter your name.'; fName.focus(); return; }
+    if (!phone) { msgEl.textContent = 'Enter a valid 10-digit mobile number.'; fPhone.focus(); return; }
+    if (!emailOk) { msgEl.textContent = 'Enter a valid email address (you@example.com).'; fEmail.focus(); return; }
     submitBtn.disabled = true; msgEl.textContent = 'Reserving your seat…';
     var wantNotify = fNotify ? fNotify.checked : false;
     /* 1 — capture the lead FIRST so it is never lost, even if notifications fail */
