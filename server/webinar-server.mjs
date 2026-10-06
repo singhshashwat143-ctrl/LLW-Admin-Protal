@@ -2469,11 +2469,35 @@ app.get("/api/leads", async (req, res) => {
 // record drives the dynamic bits — WhatsApp community link + session date/time —
 // and the page's registration modal posts the lead to /api/leads.
 const LP_TEMPLATE_PATH = join(__dirname, "lp-templates", "capgain.html");
+const LP_THANKS_PATH = join(__dirname, "lp-templates", "capgain-thanks.html");
 let lpTemplateCache = "";
+let lpThanksCache = "";
 function readLpTemplate() {
   if (!lpTemplateCache) { try { lpTemplateCache = readFileSync(LP_TEMPLATE_PATH, "utf8"); } catch { lpTemplateCache = ""; } }
   return lpTemplateCache;
 }
+function readLpThanks() {
+  if (!lpThanksCache) { try { lpThanksCache = readFileSync(LP_THANKS_PATH, "utf8"); } catch { lpThanksCache = ""; } }
+  return lpThanksCache;
+}
+
+// Separate thank-you + WhatsApp-community page (the LP form redirects here after
+// a successful submit — not a modal). Shows the campaign's community link.
+app.get("/lp/:slug/thanks", async (req, res) => {
+  let campaign = null;
+  try { campaign = await funnelStore.getCampaignBySlug(req.params.slug); } catch { /* ignore */ }
+  if (!campaign) return res.status(404).type("html").send("<p style='font:16px system-ui;padding:40px'>Page not found.</p>");
+  const tpl = readLpThanks();
+  if (!tpl) return res.status(500).type("html").send("Thank-you template missing.");
+  const config = {
+    waLink: String(campaign.whatsapp_group_url || ""),
+    title: String(campaign.name || ""),
+    sessionStart: campaign.event_at ? new Date(campaign.event_at).toISOString() : "",
+  };
+  const inject = `<script>window.__THANKS=${JSON.stringify(config).replace(/</g, "\\u003c")};</script>`;
+  res.type("html").send(tpl.replace("</head>", `${inject}\n</head>`));
+});
+
 app.get("/lp/:slug", async (req, res) => {
   let campaign = null;
   try { campaign = await funnelStore.getCampaignBySlug(req.params.slug); } catch { /* ignore */ }

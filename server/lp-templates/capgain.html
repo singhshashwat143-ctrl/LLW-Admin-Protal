@@ -649,12 +649,6 @@ src="https://www.facebook.com/tr?id=631448557746627&ev=PageView&noscript=1"
       <button id="lp-submit" type="button" class="lpmodal-go">Reserve my seat →</button>
       <div id="lp-msg" class="lpmodal-msg"></div>
     </div>
-    <div id="lp-thanks-state" hidden>
-      <div class="lpmodal-tick">✓</div>
-      <h3 class="lpmodal-h">You&rsquo;re in! 🎉</h3>
-      <p class="lpmodal-sub">Your seat is reserved. Join the WhatsApp community now &mdash; that&rsquo;s where the join link and reminders land.</p>
-      <a id="lp-wa-btn" class="lpmodal-go" target="_blank" rel="noopener">Join the WhatsApp community →</a>
-    </div>
   </div>
 </div>
 <script>
@@ -682,8 +676,7 @@ var LP_PUSH       = LP.vapidKey || '';
   var modal = document.getElementById('lpmodal');
   var fName = document.getElementById('lp-name'), fPhone = document.getElementById('lp-phone'), fEmail = document.getElementById('lp-email');
   var fNotify = document.getElementById('lp-notify');
-  var formState = document.getElementById('lp-form-state'), thanksState = document.getElementById('lp-thanks-state');
-  var submitBtn = document.getElementById('lp-submit'), msgEl = document.getElementById('lp-msg'), waBtn = document.getElementById('lp-wa-btn');
+  var submitBtn = document.getElementById('lp-submit'), msgEl = document.getElementById('lp-msg');
   var lastFocus = null;
 
   function openModal(){ if (!modal) { location.href = WA_GROUP_LINK; return; } lastFocus = document.activeElement; modal.classList.add('open'); modal.setAttribute('aria-hidden','false'); document.body.style.overflow='hidden'; setTimeout(function(){ if (fName) fName.focus(); }, 60); }
@@ -693,7 +686,6 @@ var LP_PUSH       = LP.vapidKey || '';
   all('[data-lp-close]').forEach(function(el){ el.addEventListener('click', closeModal); });
   if (modal) modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });
   addEventListener('keydown', function(e){ if (e.key === 'Escape') closeModal(); });
-  if (waBtn) waBtn.setAttribute('href', WA_GROUP_LINK);
 
   function postLead(body){ return fetch('/api/leads', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
 
@@ -738,8 +730,8 @@ var LP_PUSH       = LP.vapidKey || '';
       if (n && n.subscription) { try { await postLead({ name:name, phone:phone, email:email, campaign:LP_SLUG, source:'lp', subscription:n.subscription, extra:{ notify_permission:n.permission } }); } catch(e){} }
       else if (n) { try { await postLead({ name:name, phone:phone, email:email, campaign:LP_SLUG, source:'lp', extra:{ notify_permission:n.permission } }); } catch(e){} }
     }
-    /* 3 — thank-you + WhatsApp community */
-    formState.hidden = true; thanksState.hidden = false; submitBtn.disabled = false;
+    /* 3 — go to the SEPARATE thank-you + WhatsApp community page (not a popup) */
+    window.location.href = location.pathname.replace(/\/+$/, '') + '/thanks';
   });
 
   /* ── theme: same contract as the site — localStorage['cx-theme'] ──────── */
